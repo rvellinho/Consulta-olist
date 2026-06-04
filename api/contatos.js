@@ -169,8 +169,15 @@ module.exports = async (req, res) => {
     }
 
     // ── PUT salvar ────────────────────────────────────────────────────────
+   // ── PUT salvar ────────────────────────────────────────────────────────
     if (req.method === "PUT") {
       const body = await parseBody(req);
+      
+      // Log para diagnóstico
+      if (!body || !body.id) {
+        return res.status(200).json({ debug: "body vazio ou sem id", body });
+      }
+
       const { id, nome, limiteCredito, dataAnalise, anotacoes, ultimoUsuario } = body;
 
       if (!id || limiteCredito === undefined) return res.status(400).json({ erro: "id e limiteCredito obrigatórios." });
@@ -179,19 +186,22 @@ module.exports = async (req, res) => {
       const xml = `<contatos><contato><id>${id}</id><nome>${nome}</nome><limite_credito>${limiteFormatado}</limite_credito></contato></contatos>`;
       const params = new URLSearchParams({ token: TOKEN, contato: xml, formato: "JSON" });
 
-      const dataOlist = await olistPost("contato.alterar.php", params);
+      let dataOlist;
+      try {
+        dataOlist = await olistPost("contato.alterar.php", params);
+      } catch(e) {
+        return res.status(200).json({ debug: "erro no olistPost", erro: e.message });
+      }
+
       if (dataOlist.retorno?.status === "Erro") {
         throw new Error(dataOlist.retorno?.erros?.[0]?.erro || "Erro Olist");
       }
 
-      await salvarAnalise(id, dataAnalise, anotacoes, ultimoUsuario);
+      try {
+        await salvarAnalise(id, dataAnalise, anotacoes, ultimoUsuario);
+      } catch(e) {
+        return res.status(200).json({ debug: "erro no salvarAnalise", erro: e.message });
+      }
 
       return res.status(200).json({ ok: true });
     }
-
-    return res.status(405).json({ erro: "Método não permitido." });
-
-  } catch (e) {
-    return res.status(500).json({ erro: e.message, stack: e.stack });
-  }
-};
