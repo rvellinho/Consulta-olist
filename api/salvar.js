@@ -69,8 +69,10 @@ module.exports = async (req, res) => {
 
     const ro = await httpsPost("api.tiny.com.br", "/api2/contato.alterar.php", olistBody, {
       "Content-Type": "application/x-www-form-urlencoded",
-      "Content-Length": Buffer.byteLength(olistBody),
+      "Content-Length": Buffer.byteLength(olistBody, "utf8"),
+      "Connection": "keep-alive",
     });
+    return res.status(200).json({ debug: true, olistResposta: ro.text, xmlEnviado: xml, bodyLength: olistBody.length, bufferLength: Buffer.byteLength(olistBody, "utf8") });
 
     return res.status(200).json({ debug: true, olistResposta: ro.text, xmlEnviado: xml });
 
