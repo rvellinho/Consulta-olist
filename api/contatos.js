@@ -136,6 +136,7 @@ module.exports = async (req, res) => {
 
       const limiteFormatado = parseFloat(limiteCredito).toFixed(2);
 
+      // Atualiza limite no Olist
       const xml = `<contatos><contato><id>${id}</id><nome>${nome}</nome><limite_credito>${limiteFormatado}</limite_credito></contato></contatos>`;
       const params = new URLSearchParams({ token: TOKEN, contato: xml, formato: "JSON" });
       const apiRes = await fetch(`${API}/contato.alterar.php`, {
@@ -143,15 +144,21 @@ module.exports = async (req, res) => {
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: params.toString(),
       });
-      if (!apiRes.ok) throw new Error(`Olist HTTP ${apiRes.status}`);
-      const texto = await apiRes.text();
-      let dataOlist = {};
-      try { dataOlist = JSON.parse(texto); } catch {}
-      if (dataOlist.retorno?.status === "Erro") throw new Error(dataOlist.retorno?.erros?.[0]?.erro || "Erro Olist");
 
+      // Captura resposta bruta para diagnóstico
+      const textoOlist = await apiRes.text();
+
+      // Tenta parsear mas não bloqueia se falhar
+      let dataOlist = {};
+      try { dataOlist = JSON.parse(textoOlist); } catch {}
+      if (dataOlist.retorno?.status === "Erro") {
+        throw new Error(dataOlist.retorno?.erros?.[0]?.erro || "Erro Olist");
+      }
+
+      // Salva análise no Supabase
       await salvarAnalise(id, dataAnalise, anotacoes, ultimoUsuario);
 
-      return res.status(200).json({ ok: true });
+      return res.status(200).json({ ok: true, olistResposta: textoOlist });
     }
 
     return res.status(405).json({ erro: "Método não permitido." });
