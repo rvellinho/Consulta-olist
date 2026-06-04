@@ -1,0 +1,93 @@
+const https = require("https");
+
+const TOKEN = process.env.OLIST_TOKEN;
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_KEY = process.env.SUPABASE_KEY;
+
+function httpsPost(hostname, path, body, headers) {
+  return new Promise((resolve, reject) => {
+    const req = https.request({ hostname, path, method: "POST", headers }, (res) => {
+      let d = "";
+      res.on("data", c => d += c);
+      res.on("end", () => resolve({ status: res.statusCode, text: d, headers: res.headers }));
+    });
+    req.on("error", reject);
+    req.write(body);
+    req.end();
+  });
+}
+
+function httpsPatch(hostname, path, body, headers) {
+  return new Promise((resolve, reject) => {
+    const req = https.request({ hostname, path, method: "PATCH", headers }, (res) => {
+      let d = "";
+      res.on("data", c => d += c);
+      res.on("end", () => resolve({ status: res.statusCode, text: d, headers: res.headers }));
+    });
+    req.on("error", reject);
+    req.write(body);
+    req.end();
+  });
+}
+
+function parseJSON(text) {
+  try { return JSON.parse(text); } catch { return {}; }
+}
+
+module.exports = async (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  if (req.method === "OPTIONS") return res.status(200).end();
+  if (req.method !== "POST") return res.status(405).json({ erro: "Método não permitido" });
+
+  try {
+    const { id, nome, limiteCredito, dataAnalise, anotacoes, ultimoUsuario } = req.body;
+
+    if (!id) return res.status(400).json({ erro: "id obrigatorio", recebido: req.body });
+
+    // Atualiza limite no Olist
+    const limiteFormatado = parseFloat(limiteCredito).toFixed(2);
+    const xml = "<contatos><contato><id>" + id + "</id><nome>" + nome + "</nome><limite_credito>" + limiteFormatado + "</limite_credito></contato></contatos>";
+    const olistBody = new URLSearchParams({ token: TOKEN, contato: xml, formato: "JSON" }).toString();
+    const ro = await httpsPost("api.tiny.com.br", "/api2/contato.alterar.php", olistBody, { "Content-Type": "application/x-www-form-urlencoded" });
+    const dolist = parseJSON(ro.text);
+    if (dolist.retorno && dolist.retorno.status === "Erro") throw new Error(dolist.retorno.erros[0].erro || "Erro Olist");
+
+    // Salva análise no Supabase
+    const supaHost = SUPABASE_URL.replace("https://", "");
+    const payload = JSON.stringify({
+      cliente_id: String(id),
+      data_analise: dataAnalise || null,
+      anotacoes: anotacoes || "",
+      ultimo_usuario: ultimoUsuario,
+      ultima_alteracao: new Date().toISOString(),
+    });
+
+    const ru = await httpsPatch(supaHost, "/rest/v1/analises_credito?cliente_id=eq." + id, payload, {
+      apikey: SUPABASE_KEY,
+      Authorization: "Bearer " + SUPABASE_KEY,
+      "Content-Type": "application/json",
+      "Content-Length": Buffer.byteLength(payload),
+      Prefer: "return=minimal,count=exact",
+    });
+
+    const countHeader = ru.headers["content-range"];
+    const naoAtualizou = !countHeader || countHeader === "*/0";
+
+    if (naoAtualizou) {
+      await httpsPost(supaHost, "/rest/v1/analises_credito", payload, {
+        apikey: SUPABASE_KEY,
+        Authorization: "Bearer " + SUPABASE_KEY,
+        "Content-Type": "application/json",
+        "Content-Length": Buffer.byteLength(payload),
+        Prefer: "return=minimal",
+      });
+    }
+
+    return res.status(200).json({ ok: true });
+
+  } catch (e) {
+    return res.status(500).json({ erro: e.message, stack: e.stack });
+  }
+};
