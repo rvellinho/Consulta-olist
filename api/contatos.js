@@ -5,17 +5,6 @@ const API = "https://api.tiny.com.br/api2";
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
 
-async function lerAnalise(clienteId) {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/analises_credito?cliente_id=eq.${clienteId}`, {
-    headers: {
-      apikey: SUPABASE_KEY,
-      Authorization: `Bearer ${SUPABASE_KEY}`,
-    },
-  });
-  const data = await res.json();
-  return data[0] || null;
-}
-
 async function salvarAnalise(clienteId, dataAnalise, anotacoes, ultimoUsuario) {
   const payload = {
     cliente_id: String(clienteId),
@@ -102,25 +91,21 @@ module.exports = async (req, res) => {
       const { id, nome, limiteCredito, dataAnalise, anotacoes, ultimoUsuario } = req.body;
       if (!id || limiteCredito === undefined) return res.status(400).json({ erro: "id e limiteCredito obrigatórios." });
 
-      // Atualiza limite no Olist
-      const xml = `<contatos><contato><id>${id}</id><nome>${nome}</nome><limite_credito>${limiteCredito}</limite_credito></contato></contatos>`;
-      const params = new URLSearchParams({ token: TOKEN, contato: xml, formato: "JSON" });
+      // Formata limite sempre com ponto decimal
+      const limiteFormatado = parseFloat(limiteCredito).toFixed(2);
 
-      const apiRes = await fetch(`${API}/contato.alterar.php`, {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: params.toString(),
-      });
+      // Tenta atualizar limite no Olist (não bloqueia se falhar)
+      try {
+        const xml = `<contatos><contato><id>${id}</id><nome>${nome}</nome><limite_credito>${limiteFormatado}</limite_credito></contato></contatos>`;
+        const params = new URLSearchParams({ token: TOKEN, contato: xml, formato: "JSON" });
+        await fetch(`${API}/contato.alterar.php`, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: params.toString(),
+        });
+      } catch {}
 
-      if (!apiRes.ok) throw new Error(`HTTP ${apiRes.status}`);
-
-      // Lê resposta como texto para evitar erro de JSON inválido
-      const texto = await apiRes.text();
-      let data = {};
-      try { data = JSON.parse(texto); } catch {}
-      if (data.retorno?.status === "Erro") throw new Error(data.retorno?.erros?.[0]?.erro || "Erro ao salvar");
-
-      // Salva análise no Supabase
+      // Salva análise no Supabase — esse é o dado crítico
       await salvarAnalise(id, dataAnalise, anotacoes, ultimoUsuario);
 
       return res.status(200).json({ ok: true });
