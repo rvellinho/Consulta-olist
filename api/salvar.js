@@ -1,4 +1,4 @@
-// v7 - API V3 com OAuth2
+// v8 - API V3 com OAuth2 + Supabase
 const https = require("https");
 
 const CLIENT_ID = process.env.OLIST_CLIENT_ID;
@@ -101,28 +101,19 @@ module.exports = async (req, res) => {
     const parsed = parseBody(req.body);
     const { id, nome, cpfCnpj, limiteCredito, dataAnalise, anotacoes, ultimoUsuario } = parsed;
 
-if (!id) return res.status(400).json({ erro: "id obrigatorio", recebido: parsed });
-    // Log temporário para diagnóstico
-    console.log("campos recebidos:", { id, nome, cpfCnpj, limiteCredito, dataAnalise, anotacoes, ultimoUsuario });
-    
-   // Converte valor monetário brasileiro (ex: "1.234,56" ou "0,01") para número
+    if (!id) return res.status(400).json({ erro: "id obrigatorio", recebido: parsed });
+
+    // Converte valor monetário brasileiro para número inteiro
     const limiteStr = String(limiteCredito || "0");
-    const limiteNumero = parseFloat(
-      limiteStr.indexOf(",") > limiteStr.indexOf(".") 
-        ? limiteStr.replace(/\./g, "").replace(",", ".")  // formato BR: 1.234,56
-        : limiteStr.replace(",", "")                       // formato simples: 1234.56
-    );
-    // Regra de negócio: limite zero = cliente sem análise ou negado = mínimo R$ 1,00
-    const limiteFormatado = (isNaN(limiteNumero) || limiteNumero <= 0) ? 1 : limiteNumero;
+    const limiteNumero = parseInt(limiteStr.replace(/\./g, "").replace(/,/g, "")) || 0;
+    // Regra de negócio: limite zero = mínimo R$ 1,00
+    const limiteFormatado = limiteNumero <= 0 ? 1 : limiteNumero;
 
     // Obtém access token via refresh token
     const accessToken = await getAccessToken();
 
     // Atualiza limite no Olist via API V3
-    const v3Body = JSON.stringify({
-      nome: nome,
-      limiteCredito: limiteFormatado
-    });
+    const v3Body = JSON.stringify({ nome, limiteCredito: limiteFormatado });
     const ro = await httpsRequest(
       "PUT",
       "api.tiny.com.br",
@@ -138,13 +129,12 @@ if (!id) return res.status(400).json({ erro: "id obrigatorio", recebido: parsed 
     if (ro.status >= 400) {
       throw new Error("Olist V3 erro " + ro.status + ": " + ro.text);
     }
-    return res.status(200).json({ ok: true, v3Status: ro.status, v3Resposta: ro.text, v3Body, limiteEnviado: limiteFormatado });
 
-    // Salva análise no Supabase
+    // Salva análise no Supabase usando CNPJ/CPF como chave
     const chave = String(cpfCnpj || id).replace(/[.\-\/]/g, "");
     await salvarAnalise(chave, dataAnalise, anotacoes, ultimoUsuario);
 
-    return res.status(200).json({ ok: true, chave, dataAnalise, anotacoes, ultimoUsuario });
+    return res.status(200).json({ ok: true });
 
   } catch (e) {
     return res.status(500).json({ erro: e.message, stack: e.stack });
