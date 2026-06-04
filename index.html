@@ -228,12 +228,11 @@ let usuarioAtual=null, paginaAtual=1, buscaAtual="", temProxima=false, clienteSe
 let analisesBD={};
 
 const fmtBRL=v=>new Intl.NumberFormat("pt-BR",{style:"currency",currency:"BRL",maximumFractionDigits:0}).format(v||0);
-const fmtLimiteInput=v=>new Intl.NumberFormat("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:2}).format(v||0);
+const fmtLimiteInput=v=>new Intl.NumberFormat("pt-BR",{minimumFractionDigits:0,maximumFractionDigits:0}).format(v||0);
 function mascaraLimite(el){
   let v=el.value.replace(/\D/g,"");
   if(!v){el.value="";return;}
-  v=(parseInt(v)/100).toFixed(2);
-  el.value=new Intl.NumberFormat("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:2}).format(v);
+  el.value=new Intl.NumberFormat("pt-BR",{minimumFractionDigits:0,maximumFractionDigits:0}).format(parseInt(v));
 }
 const fmtData=iso=>{if(!iso)return"—";const[y,m,d]=iso.split("-");return`${d}/${m}/${y}`};
 const ini=n=>{if(!n)return"?";const p=n.trim().split(" ").filter(Boolean);return((p[0]?.[0]||"")+(p[1]?.[0]||"")).toUpperCase()};
@@ -382,7 +381,7 @@ async function salvarCliente(){
   try{
     const limiteInput=el("m-limite");
     if(!limiteInput)throw new Error("Campo de limite não encontrado.");
-    const limiteNum=parseFloat(limiteInput.value.replace(/\./g,"").replace(",","."));
+    const limiteNum=parseInt(limiteInput.value.replace(/\./g,"").replace(/,/g,""))||0;
     if(isNaN(limiteNum))throw new Error("Valor de limite inválido.");
     const dataAnalise=el("m-data")?.value||"";
     const anotacoes=el("m-anotacoes")?.value||"";
