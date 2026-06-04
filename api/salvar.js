@@ -1,4 +1,4 @@
-// v2
+// v3
 const https = require("https");
 
 const TOKEN = process.env.OLIST_TOKEN;
@@ -35,6 +35,13 @@ function parseJSON(text) {
   try { return JSON.parse(text); } catch { return {}; }
 }
 
+function parseBody(reqBody) {
+  if (!reqBody) return {};
+  if (typeof reqBody === "object") return reqBody;
+  if (typeof reqBody === "string") return parseJSON(reqBody);
+  return {};
+}
+
 module.exports = async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
@@ -43,19 +50,21 @@ module.exports = async (req, res) => {
   if (req.method !== "POST") return res.status(405).json({ erro: "Método não permitido" });
 
   try {
-    const rawBody = await new Promise((resolve) => {     let d = "";     req.on("data", c => d += c);     req.on("end", () => resolve(d));   });      let parsed = {};   try { parsed = JSON.parse(rawBody); } catch {}   if (!parsed.id && req.body && typeof req.body === "object") parsed = req.body;      const { id, nome, limiteCredito, dataAnalise, anotacoes, ultimoUsuario } = parsed;      // Diagnóstico temporário   return res.status(200).json({      debug: true,      id,      nome,     limiteCredito,     tipoLimite: typeof limiteCredito,     rawBody: rawBody.substring(0, 200)   });
+    const parsed = parseBody(req.body);
+    const { id, nome, limiteCredito, dataAnalise, anotacoes, ultimoUsuario } = parsed;
 
-    if (!id) return res.status(400).json({ erro: "id obrigatorio", recebido: req.body });
+    // Diagnóstico
+    if (!id) return res.status(200).json({ debug: true, parsed, bodyTipo: typeof req.body, body: req.body });
 
-    // Atualiza limite no Olist
-    const limiteNumero = parseFloat(String(limiteCredito).replace(/\./g, "").replace(",", ".")); const limiteFormatado = limiteNumero.toFixed(2);
+    const limiteNumero = parseFloat(String(limiteCredito).replace(/\./g, "").replace(",", "."));
+    const limiteFormatado = isNaN(limiteNumero) ? "0.00" : limiteNumero.toFixed(2);
+
     const xml = "<contatos><contato><id>" + id + "</id><nome>" + nome + "</nome><limite_credito>" + limiteFormatado + "</limite_credito></contato></contatos>";
     const olistBody = new URLSearchParams({ token: TOKEN, contato: xml, formato: "JSON" }).toString();
     const ro = await httpsPost("api.tiny.com.br", "/api2/contato.alterar.php", olistBody, { "Content-Type": "application/x-www-form-urlencoded" });
     const dolist = parseJSON(ro.text);
     if (dolist.retorno && dolist.retorno.status === "Erro") throw new Error(dolist.retorno.erros[0].erro || "Erro Olist");
 
-    // Salva análise no Supabase
     const supaHost = SUPABASE_URL.replace("https://", "");
     const payload = JSON.stringify({
       cliente_id: String(id),
