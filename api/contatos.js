@@ -13,7 +13,6 @@ async function salvarAnalise(clienteId, dataAnalise, anotacoes, ultimoUsuario) {
     ultimo_usuario: ultimoUsuario,
     ultima_alteracao: new Date().toISOString(),
   };
-
   const res = await fetch(`${SUPABASE_URL}/rest/v1/analises_credito`, {
     method: "POST",
     headers: {
@@ -24,7 +23,6 @@ async function salvarAnalise(clienteId, dataAnalise, anotacoes, ultimoUsuario) {
     },
     body: JSON.stringify(payload),
   });
-
   if (!res.ok) {
     const err = await res.text();
     throw new Error(`Supabase erro: ${err}`);
@@ -39,8 +37,8 @@ module.exports = async (req, res) => {
   if (req.method === "OPTIONS") return res.status(200).end();
 
   try {
-    // ── GET — listar clientes ─────────────────────────────────────────────
-    if (req.method === "GET") {
+    // ── GET /api/contatos?pagina=1&pesquisa=xxx — listar clientes ──────────
+    if (req.method === "GET" && !req.query.id) {
       const pagina = req.query.pagina || 1;
       const pesquisa = req.query.pesquisa || " ";
 
@@ -86,15 +84,36 @@ module.exports = async (req, res) => {
       return res.status(200).json({ itens: lista, analises });
     }
 
-    // ── PUT — salvar limite + análise ─────────────────────────────────────
+    // ── GET /api/contatos?id=xxx — buscar cliente individual com limite ────
+    if (req.method === "GET" && req.query.id) {
+      const params = new URLSearchParams({
+        token: TOKEN,
+        id: req.query.id,
+        formato: "JSON",
+      });
+
+      const apiRes = await fetch(`${API}/contato.obter.php`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: params.toString(),
+      });
+
+      if (!apiRes.ok) throw new Error(`HTTP ${apiRes.status}`);
+      const data = await apiRes.json();
+      if (data.retorno?.status === "Erro") throw new Error(data.retorno?.erros?.[0]?.erro || "Erro API");
+
+      const contato = data.retorno?.contato || {};
+      return res.status(200).json({ contato });
+    }
+
+    // ── PUT — salvar limite + análise ──────────────────────────────────────
     if (req.method === "PUT") {
       const { id, nome, limiteCredito, dataAnalise, anotacoes, ultimoUsuario } = req.body;
       if (!id || limiteCredito === undefined) return res.status(400).json({ erro: "id e limiteCredito obrigatórios." });
 
-      // Formata limite sempre com ponto decimal
       const limiteFormatado = parseFloat(limiteCredito).toFixed(2);
 
-      // Tenta atualizar limite no Olist (não bloqueia se falhar)
+      // Atualiza limite no Olist
       try {
         const xml = `<contatos><contato><id>${id}</id><nome>${nome}</nome><limite_credito>${limiteFormatado}</limite_credito></contato></contatos>`;
         const params = new URLSearchParams({ token: TOKEN, contato: xml, formato: "JSON" });
@@ -105,7 +124,7 @@ module.exports = async (req, res) => {
         });
       } catch {}
 
-      // Salva análise no Supabase — esse é o dado crítico
+      // Salva análise no Supabase
       await salvarAnalise(id, dataAnalise, anotacoes, ultimoUsuario);
 
       return res.status(200).json({ ok: true });
