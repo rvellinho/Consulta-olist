@@ -347,8 +347,8 @@ async function salvarCliente(){
     const anotacoes=el("m-anotacoes")?.value||"";
 
     if(!modoDemo){
-      const res=await fetch("/api/contatos",{
-        method:"PUT",
+      const res=await fetch("/api/salvar",{
+        method:"POST",
         headers:{"Content-Type":"application/json"},
         body:JSON.stringify({
           id:clienteSel.id,
