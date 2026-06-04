@@ -144,7 +144,7 @@ if (!id) return res.status(400).json({ erro: "id obrigatorio", recebido: parsed 
     const chave = String(cpfCnpj || id).replace(/[.\-\/]/g, "");
     await salvarAnalise(chave, dataAnalise, anotacoes, ultimoUsuario);
 
-    return res.status(200).json({ ok: true });
+    return res.status(200).json({ ok: true, chave, dataAnalise, anotacoes, ultimoUsuario });
 
   } catch (e) {
     return res.status(500).json({ erro: e.message, stack: e.stack });
