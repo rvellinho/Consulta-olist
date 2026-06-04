@@ -48,13 +48,15 @@ function parseJSON(text) {
 
 function getBody(req) {
   return new Promise((resolve) => {
-    if (req.body && typeof req.body === "object") return resolve(req.body);
     let d = "";
     req.on("data", c => d += c);
-    req.on("end", () => resolve(parseJSON(d)));
+    req.on("end", () => {
+      if (d) return resolve(parseJSON(d));
+      if (req.body && typeof req.body === "object") return resolve(req.body);
+      resolve({});
+    });
   });
 }
-
 module.exports = async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, PUT, OPTIONS");
