@@ -1,6 +1,9 @@
 {
   "version": 2,
   "functions": {
+    "api/salvar.js": {
+      "memory": 256
+    },
     "api/contatos.js": {
       "memory": 256
     }
