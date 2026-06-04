@@ -101,10 +101,19 @@ module.exports = async (req, res) => {
     const parsed = parseBody(req.body);
     const { id, nome, cpfCnpj, limiteCredito, dataAnalise, anotacoes, ultimoUsuario } = parsed;
 
-    if (!id) return res.status(400).json({ erro: "id obrigatorio", recebido: parsed });
-
-    const limiteNumero = parseFloat(String(limiteCredito).replace(/\./g, "").replace(",", "."));
-    const limiteFormatado = isNaN(limiteNumero) ? 0 : limiteNumero;
+if (!id) return res.status(400).json({ erro: "id obrigatorio", recebido: parsed });
+    // Log temporário para diagnóstico
+    console.log("campos recebidos:", { id, nome, cpfCnpj, limiteCredito, dataAnalise, anotacoes, ultimoUsuario });
+    
+   // Converte valor monetário brasileiro (ex: "1.234,56" ou "0,01") para número
+    const limiteStr = String(limiteCredito || "0");
+    const limiteNumero = parseFloat(
+      limiteStr.indexOf(",") > limiteStr.indexOf(".") 
+        ? limiteStr.replace(/\./g, "").replace(",", ".")  // formato BR: 1.234,56
+        : limiteStr.replace(",", "")                       // formato simples: 1234.56
+    );
+    // Regra de negócio: limite zero = cliente sem análise ou negado = mínimo 0,01
+    const limiteFormatado = (isNaN(limiteNumero) || limiteNumero <= 0) ? 0.01 : limiteNumero;
 
     // Obtém access token via refresh token
     const accessToken = await getAccessToken();
