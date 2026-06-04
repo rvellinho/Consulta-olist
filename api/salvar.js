@@ -1,4 +1,4 @@
-// v5
+// v6
 const https = require("https");
 
 const TOKEN = process.env.OLIST_TOKEN;
@@ -55,7 +55,6 @@ module.exports = async (req, res) => {
 
     if (!id) return res.status(400).json({ erro: "id obrigatorio", recebido: parsed });
 
-    // Atualiza limite no Olist
     const limiteNumero = parseFloat(String(limiteCredito).replace(/\./g, "").replace(",", "."));
     const limiteFormatado = isNaN(limiteNumero) ? "0.00" : limiteNumero.toFixed(2);
     const nomeEscapado = String(nome)
@@ -65,18 +64,18 @@ module.exports = async (req, res) => {
       .replace(/"/g, "&quot;");
 
     const xml = "<contatos><contato><sequencia>1</sequencia><id>" + id + "</id><nome>" + nomeEscapado + "</nome><limite_credito>" + limiteFormatado + "</limite_credito></contato></contatos>";
-    // Teste sem encode no XML     const olistBody = "token=" + TOKEN + "&contato=" + encodeURIComponent(xml) + "&formato=JSON";     // Debug: mostra o body exato     return res.status(200).json({ debug: true, olistBody: olistBody.substring(0, 500) });
+    const olistBody = "token=" + TOKEN + "&contato=" + encodeURIComponent(xml) + "&formato=JSON";
 
     const ro = await httpsPost("api.tiny.com.br", "/api2/contato.alterar.php", olistBody, {
       "Content-Type": "application/x-www-form-urlencoded",
       "Content-Length": Buffer.byteLength(olistBody, "utf8"),
-      "Connection": "keep-alive",
     });
-    return res.status(200).json({ debug: true, olistResposta: ro.text, xmlEnviado: xml, bodyLength: olistBody.length, bufferLength: Buffer.byteLength(olistBody, "utf8") });
 
-    return res.status(200).json({ debug: true, olistResposta: ro.text, xmlEnviado: xml });
+    const dolist = parseJSON(ro.text);
+    if (dolist.retorno && dolist.retorno.status === "Erro") {
+      throw new Error(dolist.retorno.erros[0].erro || "Erro Olist");
+    }
 
-    // Salva análise no Supabase usando CNPJ/CPF como chave
     const chave = String(cpfCnpj || id).replace(/[.\-\/]/g, "");
     const supaHost = SUPABASE_URL.replace("https://", "");
     const payload = JSON.stringify({
