@@ -43,7 +43,9 @@ async function salvarAnalise(clienteId, dataAnalise, anotacoes, ultimoUsuario) {
 // Parser manual do body para Vercel
 async function parseBody(req) {
   return new Promise((resolve, reject) => {
-    if (req.body) return resolve(req.body);
+    // Vercel já parseia o body automaticamente
+    if (req.body && typeof req.body === "object") return resolve(req.body);
+    // Fallback para leitura manual
     let data = "";
     req.on("data", chunk => { data += chunk; });
     req.on("end", () => {
