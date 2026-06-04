@@ -126,6 +126,7 @@ module.exports = async (req, res) => {
     if (ro.status >= 400) {
       throw new Error("Olist V3 erro " + ro.status + ": " + ro.text);
     }
+    return res.status(200).json({ ok: true, v3Status: ro.status, v3Resposta: ro.text, v3Body, limiteEnviado: limiteFormatado });
 
     // Salva análise no Supabase
     const chave = String(cpfCnpj || id).replace(/[.\-\/]/g, "");
