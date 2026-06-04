@@ -131,15 +131,20 @@ module.exports = async (req, res) => {
       const xml = `<contatos><contato><id>${id}</id><nome>${nome}</nome><limite_credito>${limiteFormatado}</limite_credito></contato></contatos>`;
       const params = new URLSearchParams({ token: TOKEN, contato: xml, formato: "JSON" });
 
-      const { data: dataOlist } = await axios.post(
-        `${API}/contato.alterar.php`,
-        params.toString(),
-        { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
-      );
-
-      if (dataOlist.retorno?.status === "Erro") {
-        throw new Error(dataOlist.retorno?.erros?.[0]?.erro || "Erro Olist");
-      }
+      const resOlist = await axios.post(
+  `${API}/contato.alterar.php`,
+  params.toString(),
+  {
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    responseType: "text",
+    transformResponse: [data => data],
+  }
+);
+let dataOlist = {};
+try { dataOlist = JSON.parse(resOlist.data); } catch {}
+if (dataOlist.retorno?.status === "Erro") {
+  throw new Error(dataOlist.retorno?.erros?.[0]?.erro || "Erro Olist");
+}
 
       await salvarAnalise(id, dataAnalise, anotacoes, ultimoUsuario);
 
