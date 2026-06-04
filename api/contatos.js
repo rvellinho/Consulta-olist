@@ -113,7 +113,11 @@ module.exports = async (req, res) => {
       });
 
       if (!apiRes.ok) throw new Error(`HTTP ${apiRes.status}`);
-      const data = await apiRes.json();
+
+      // Lê resposta como texto para evitar erro de JSON inválido
+      const texto = await apiRes.text();
+      let data = {};
+      try { data = JSON.parse(texto); } catch {}
       if (data.retorno?.status === "Erro") throw new Error(data.retorno?.erros?.[0]?.erro || "Erro ao salvar");
 
       // Salva análise no Supabase
