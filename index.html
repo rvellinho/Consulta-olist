@@ -329,6 +329,8 @@ async function abrirModal(c){
 
   // Busca limite do cliente
   let limite=0;
+    // Garante que limite é número inteiro sem decimais
+    const parseLimite = v => Math.round(parseFloat(v)||0);
   if(!modoDemo){
     try{
       const res=await fetch(`/api/contatos?id=${id}`);
@@ -344,7 +346,7 @@ async function abrirModal(c){
     <div class="modal-row">
       <div class="fg-sm">
         <label>Limite de Crédito (R$)</label>
-        <input id="m-limite" value="${fmtLimiteInput(limite)}" placeholder="0,00" oninput="mascaraLimite(this)" />
+        <input id="m-limite" value="${fmtLimiteInput(parseLimite(limite))}" placeholder="0" oninput="mascaraLimite(this)" />
       </div>
       <div class="fg-sm">
         <label>Data da Última Análise</label>
