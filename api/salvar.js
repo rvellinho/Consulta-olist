@@ -47,7 +47,7 @@ module.exports = async (req, res) => {
     if (!id) return res.status(400).json({ erro: "id obrigatorio", recebido: req.body });
 
     // Atualiza limite no Olist
-    const limiteFormatado = parseFloat(limiteCredito).toFixed(2);
+    const limiteNumero = parseFloat(String(limiteCredito).replace(/\./g, "").replace(",", ".")); const limiteFormatado = limiteNumero.toFixed(2);
     const xml = "<contatos><contato><id>" + id + "</id><nome>" + nome + "</nome><limite_credito>" + limiteFormatado + "</limite_credito></contato></contatos>";
     const olistBody = new URLSearchParams({ token: TOKEN, contato: xml, formato: "JSON" }).toString();
     const ro = await httpsPost("api.tiny.com.br", "/api2/contato.alterar.php", olistBody, { "Content-Type": "application/x-www-form-urlencoded" });
