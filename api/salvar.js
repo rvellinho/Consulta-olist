@@ -62,8 +62,9 @@ module.exports = async (req, res) => {
     const xml = "<contatos><contato><id>" + id + "</id><nome>" + nome + "</nome><limite_credito>" + limiteFormatado + "</limite_credito></contato></contatos>";
     const olistBody = new URLSearchParams({ token: TOKEN, contato: xml, formato: "JSON" }).toString();
     const ro = await httpsPost("api.tiny.com.br", "/api2/contato.alterar.php", olistBody, { "Content-Type": "application/x-www-form-urlencoded" });
-    const dolist = parseJSON(ro.text);
-    if (dolist.retorno && dolist.retorno.status === "Erro") throw new Error(dolist.retorno.erros[0].erro || "Erro Olist");
+    
+    // Retorna resposta bruta do Olist para diagnóstico
+    return res.status(200).json({ debug: true, olistStatus: ro.status, olistResposta: ro.text, xml, limiteFormatado });
 
     const supaHost = SUPABASE_URL.replace("https://", "");
     const payload = JSON.stringify({
