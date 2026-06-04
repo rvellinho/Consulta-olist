@@ -20,7 +20,6 @@ async function salvarAnalise(clienteId, dataAnalise, anotacoes, ultimoUsuario) {
     ultima_alteracao: new Date().toISOString(),
   };
 
-  // Tenta atualizar registro existente
   const resUpdate = await axios.patch(
     `${SUPABASE_URL}/rest/v1/analises_credito?cliente_id=eq.${clienteId}`,
     payload,
@@ -30,7 +29,6 @@ async function salvarAnalise(clienteId, dataAnalise, anotacoes, ultimoUsuario) {
   const countHeader = resUpdate.headers["content-range"];
   const naoAtualizou = !countHeader || countHeader === "*/0";
 
-  // Se não existia, insere
   if (naoAtualizou) {
     await axios.post(
       `${SUPABASE_URL}/rest/v1/analises_credito`,
@@ -40,6 +38,20 @@ async function salvarAnalise(clienteId, dataAnalise, anotacoes, ultimoUsuario) {
   }
 
   return true;
+}
+
+// Parser manual do body para Vercel
+async function parseBody(req) {
+  return new Promise((resolve, reject) => {
+    if (req.body) return resolve(req.body);
+    let data = "";
+    req.on("data", chunk => { data += chunk; });
+    req.on("end", () => {
+      try { resolve(JSON.parse(data)); }
+      catch { resolve({}); }
+    });
+    req.on("error", reject);
+  });
 }
 
 module.exports = async (req, res) => {
@@ -108,12 +120,13 @@ module.exports = async (req, res) => {
 
     // ── PUT salvar limite + análise ───────────────────────────────────────
     if (req.method === "PUT") {
-      const { id, nome, limiteCredito, dataAnalise, anotacoes, ultimoUsuario } = req.body;
+      const body = await parseBody(req);
+      const { id, nome, limiteCredito, dataAnalise, anotacoes, ultimoUsuario } = body;
+
       if (!id || limiteCredito === undefined) return res.status(400).json({ erro: "id e limiteCredito obrigatórios." });
 
       const limiteFormatado = parseFloat(limiteCredito).toFixed(2);
       const xml = `<contatos><contato><id>${id}</id><nome>${nome}</nome><limite_credito>${limiteFormatado}</limite_credito></contato></contatos>`;
-
       const params = new URLSearchParams({ token: TOKEN, contato: xml, formato: "JSON" });
 
       const { data: dataOlist } = await axios.post(
@@ -137,6 +150,7 @@ module.exports = async (req, res) => {
     return res.status(500).json({
       erro: e.message,
       detalhe: e.response?.data || null,
+      stack: e.stack,
     });
   }
 };
