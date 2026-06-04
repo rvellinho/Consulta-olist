@@ -72,10 +72,6 @@ module.exports = async (req, res) => {
       "Content-Length": Buffer.byteLength(olistBody),
     });
 
-    const dolist = parseJSON(ro.text);
-    if (dolist.retorno && dolist.retorno.status === "Erro") {
-      throw new Error(dolist.retorno.erros[0].erro || "Erro Olist");
-    }
     return res.status(200).json({ debug: true, olistResposta: ro.text, xmlEnviado: xml });
 
     // Salva análise no Supabase usando CNPJ/CPF como chave
