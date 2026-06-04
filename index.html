@@ -92,6 +92,8 @@
     .sec-title { font-family: 'Syne', sans-serif; font-size: 12px; font-weight: 700; color: var(--tx2); margin-bottom: 10px; text-transform: uppercase; letter-spacing: .5px; }
     .input-limite { font-size: 20px; font-family: 'Syne', sans-serif; font-weight: 700; color: var(--ac); }
     .field-ro { font-size: 20px; font-family: 'Syne', sans-serif; font-weight: 700; padding: 10px 14px; background: var(--s2); border-radius: 8px; color: var(--ac); }
+    .modal-loading { display: flex; align-items: center; gap: 10px; padding: 20px 0; color: var(--mt); font-size: 14px; }
+    .spinner-sm { width: 18px; height: 18px; border: 2px solid var(--br); border-top-color: var(--ac); border-radius: 50%; animation: spin .7s linear infinite; flex-shrink: 0; }
     .ro-block { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
     .ro-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; color: var(--mt); }
     .anot-txt { font-size: 14px; color: var(--tx2); line-height: 1.6; white-space: pre-wrap; background: var(--s2); border-radius: 8px; padding: 10px 14px; }
@@ -169,33 +171,14 @@
       </div>
       <button class="close-btn" onclick="document.getElementById('modal-overlay').classList.add('hidden')">✕</button>
     </div>
-    <div class="modal-body">
-      <div>
-        <div class="sec-title">💳 Limite de Crédito</div>
-        <div class="fg">
-          <label>Valor (R$)</label>
-          <input id="m-limite" class="input-limite" placeholder="0,00" />
-          <div id="m-limite-ro" class="field-ro hidden"></div>
-        </div>
-      </div>
-      <div id="sec-analise">
-        <div class="sec-title">📋 Análise de Crédito</div>
-        <div id="analise-form">
-          <div class="fg"><label>Data da Última Análise</label><input type="date" id="m-data" /></div>
-          <div class="fg"><label>Anotações da Análise</label><textarea id="m-anotacoes" rows="5" placeholder="Descreva a análise realizada, documentos consultados, score, observações..."></textarea></div>
-        </div>
-        <div id="analise-ro" class="hidden">
-          <div class="ro-block"><span class="ro-label">Data da análise</span><span id="ro-data"></span></div>
-          <div class="ro-block"><span class="ro-label">Anotações</span><p id="ro-anotacoes" class="anot-txt"></p></div>
-        </div>
-        <div id="analise-vazia" class="sem-analise hidden">Nenhuma análise registrada.</div>
-      </div>
+    <div class="modal-body" id="modal-body">
+      <div class="modal-loading"><div class="spinner-sm"></div> Carregando dados do cliente...</div>
     </div>
     <div id="m-audit" class="audit-row hidden"></div>
     <div id="m-msg" class="modal-msg hidden"></div>
     <div class="modal-ftr">
       <button class="btn-sec" onclick="document.getElementById('modal-overlay').classList.add('hidden')">Fechar</button>
-      <button id="btn-salvar" class="btn-primary" onclick="salvarCliente()">Salvar Alterações</button>
+      <button id="btn-salvar" class="btn-primary hidden" onclick="salvarCliente()">Salvar Alterações</button>
     </div>
   </div>
 </div>
@@ -208,7 +191,7 @@ const USUARIOS = [
 ];
 
 let usuarioAtual=null, paginaAtual=1, buscaAtual="", temProxima=false, clienteSel=null, modoDemo=false;
-let analisesBD = {}; // análises vindas do banco de dados
+let analisesBD={};
 
 const fmtBRL=v=>new Intl.NumberFormat("pt-BR",{style:"currency",currency:"BRL",maximumFractionDigits:0}).format(v||0);
 const fmtData=iso=>{if(!iso)return"—";const[y,m,d]=iso.split("-");return`${d}/${m}/${y}`};
@@ -241,7 +224,7 @@ async function carregarClientes(pagina,pesquisa){
     if(!res.ok)throw new Error(`Erro ${res.status}`);
     const data=await res.json();
     const lista=data.itens||[];
-    analisesBD = data.analises || {};
+    analisesBD=data.analises||{};
     modoDemo=false;
     renderTabela(lista);
     temProxima=lista.length===100;
@@ -261,10 +244,10 @@ function renderTabela(lista){
   tbody.innerHTML="";
   if(!lista.length){el("tabela").classList.add("hidden");el("estado").innerHTML="<p>🔎 Nenhum cliente encontrado.</p>";el("estado").classList.remove("hidden");return;}
   lista.forEach(c=>{
-    const id=c.id,nome=c.nome||c.razaoSocial||"",fantasia=c.fantasia||c.nomeFantasia||"",limite=c.limiteCredito??c.limite_credito??0;
+    const id=c.id,nome=c.nome||c.razaoSocial||"",fantasia=c.fantasia||c.nomeFantasia||"";
     const an=analisesBD[String(id)];
     const tr=document.createElement("tr");
-    tr.innerHTML=`<td class="td-cod">${c.codigo||id}</td><td><div class="td-cli"><span class="av">${ini(fantasia||nome)}</span><span>${fantasia||"—"}</span></div></td><td class="td-rz">${nome}</td><td class="td-lim">${fmtBRL(limite)}</td>${podeVer?`<td>${an?`<span class="ba">✓ ${fmtData(an.data_analise)}</span>`:`<span class="bp2">Pendente</span>`}</td>`:""}<td><span class="arr">→</span></td>`;
+    tr.innerHTML=`<td class="td-cod">${c.codigo||id}</td><td><div class="td-cli"><span class="av">${ini(fantasia||nome)}</span><span>${fantasia||"—"}</span></div></td><td class="td-rz">${nome}</td><td class="td-lim" id="lim-${id}">—</td>${podeVer?`<td>${an?`<span class="ba">✓ ${fmtData(an.data_analise)}</span>`:`<span class="bp2">Pendente</span>`}</td>`:""}<td><span class="arr">→</span></td>`;
     tr.onclick=()=>abrirModal(c);tbody.appendChild(tr);
   });
 }
@@ -272,36 +255,97 @@ function renderTabela(lista){
 function buscar(){carregarClientes(1,el("inp-busca").value.trim());}
 function mudarPagina(d){carregarClientes(paginaAtual+d,buscaAtual);}
 
-function abrirModal(c){
+async function abrirModal(c){
   clienteSel=c;
-  const id=c.id,nome=c.nome||c.razaoSocial||"",fantasia=c.fantasia||c.nomeFantasia||"",limite=c.limiteCredito??c.limite_credito??0;
+  const id=c.id,nome=c.nome||c.razaoSocial||"",fantasia=c.fantasia||c.nomeFantasia||"";
   const an=analisesBD[String(id)];
   const podeEditar=usuarioAtual.perfil!=="visualizador";
-  el("m-av").textContent=ini(fantasia||nome);el("m-titulo").textContent=fantasia||nome;
-  el("m-razao").textContent=nome;el("m-cod").textContent=`#${c.codigo||id}`;
-  if(podeEditar){el("m-limite").value=String(limite).replace(".",",");el("m-limite").classList.remove("hidden");el("m-limite-ro").classList.add("hidden");}
-  else{el("m-limite-ro").textContent=fmtBRL(limite);el("m-limite-ro").classList.remove("hidden");el("m-limite").classList.add("hidden");}
+
+  // Mostra modal com loading
+  el("m-av").textContent=ini(fantasia||nome);
+  el("m-titulo").textContent=fantasia||nome;
+  el("m-razao").textContent=nome;
+  el("m-cod").textContent=`#${c.codigo||id}`;
+  el("m-audit").classList.add("hidden");
+  el("m-msg").classList.add("hidden");
+  el("btn-salvar").classList.add("hidden");
+  el("modal-body").innerHTML='<div class="modal-loading"><div class="spinner-sm"></div> Carregando dados do cliente...</div>';
+  el("modal-overlay").classList.remove("hidden");
+
+  // Busca dados completos do cliente (com limite_credito)
+  let limite = 0;
+  if(!modoDemo){
+    try{
+      const res=await fetch(`/api/contatos?id=${id}`);
+      if(res.ok){
+        const data=await res.json();
+        const ct=data.contato||{};
+        limite=parseFloat(ct.limite_credito)||0;
+        // Atualiza o limite na tabela também
+        const tdLim=document.getElementById(`lim-${id}`);
+        if(tdLim) tdLim.textContent=fmtBRL(limite);
+      }
+    }catch{}
+  } else {
+    limite=c.limiteCredito||0;
+  }
+
+  // Monta conteúdo do modal
+  let html=`
+    <div>
+      <div class="sec-title">💳 Limite de Crédito</div>
+      <div class="fg">
+        <label>Valor (R$)</label>
+        ${podeEditar
+          ? `<input id="m-limite" class="input-limite fg input" value="${String(limite).replace('.',',')}" placeholder="0,00" />`
+          : `<div class="field-ro">${fmtBRL(limite)}</div>`}
+      </div>
+    </div>`;
+
   if(podeEditar){
-    el("sec-analise").classList.remove("hidden");el("analise-form").classList.remove("hidden");
-    el("analise-ro").classList.add("hidden");el("analise-vazia").classList.add("hidden");
-    el("m-data").value=an?.data_analise||"";el("m-anotacoes").value=an?.anotacoes||"";
-  }else if(an){
-    el("sec-analise").classList.remove("hidden");el("analise-form").classList.add("hidden");
-    el("analise-ro").classList.remove("hidden");el("analise-vazia").classList.add("hidden");
-    el("ro-data").textContent=fmtData(an.data_analise);el("ro-anotacoes").textContent=an.anotacoes||"—";
-  }else{el("sec-analise").classList.remove("hidden");el("analise-form").classList.add("hidden");el("analise-ro").classList.add("hidden");el("analise-vazia").classList.remove("hidden");}
-  if(an?.ultimo_usuario){el("m-audit").innerHTML=`<span>👤 Última alteração por <strong>${an.ultimo_usuario}</strong></span><span>${new Date(an.ultima_alteracao).toLocaleString("pt-BR")}</span>`;el("m-audit").classList.remove("hidden");}
-  else el("m-audit").classList.add("hidden");
-  el("btn-salvar").style.display=podeEditar?"":"none";
-  el("m-msg").classList.add("hidden");el("modal-overlay").classList.remove("hidden");
+    html+=`
+    <div>
+      <div class="sec-title">📋 Análise de Crédito</div>
+      <div class="fg"><label>Data da Última Análise</label><input type="date" id="m-data" value="${an?.data_analise||''}" /></div>
+      <div class="fg"><label>Anotações da Análise</label><textarea id="m-anotacoes" rows="5" placeholder="Descreva a análise realizada, documentos consultados, score, observações...">${an?.anotacoes||''}</textarea></div>
+    </div>`;
+  } else if(an){
+    html+=`
+    <div>
+      <div class="sec-title">📋 Análise de Crédito</div>
+      <div class="ro-block"><span class="ro-label">Data da análise</span><span>${fmtData(an.data_analise)}</span></div>
+      <div class="ro-block"><span class="ro-label">Anotações</span><p class="anot-txt">${an.anotacoes||'—'}</p></div>
+    </div>`;
+  } else {
+    html+=`
+    <div>
+      <div class="sec-title">📋 Análise de Crédito</div>
+      <p class="sem-analise">Nenhuma análise registrada para este cliente.</p>
+    </div>`;
+  }
+
+  el("modal-body").innerHTML=html;
+
+  if(an?.ultimo_usuario){
+    el("m-audit").innerHTML=`<span>👤 Última alteração por <strong>${an.ultimo_usuario}</strong></span><span>${new Date(an.ultima_alteracao).toLocaleString("pt-BR")}</span>`;
+    el("m-audit").classList.remove("hidden");
+  }
+
+  if(podeEditar) el("btn-salvar").classList.remove("hidden");
 }
+
 function fecharModal(e){if(e.target===el("modal-overlay"))el("modal-overlay").classList.add("hidden");}
 
 async function salvarCliente(){
   const btn=el("btn-salvar");btn.disabled=true;btn.textContent="Salvando...";el("m-msg").classList.add("hidden");
   try{
-    const limiteNum=parseFloat(el("m-limite").value.replace(/\./g,"").replace(",","."));
+    const limiteInput=el("m-limite");
+    if(!limiteInput)throw new Error("Campo de limite não encontrado.");
+    const limiteNum=parseFloat(limiteInput.value.replace(/\./g,"").replace(",","."));
     if(isNaN(limiteNum))throw new Error("Valor de limite inválido.");
+    const dataAnalise=el("m-data")?.value||"";
+    const anotacoes=el("m-anotacoes")?.value||"";
+
     if(!modoDemo){
       const res=await fetch("/api/contatos",{
         method:"PUT",
@@ -310,25 +354,35 @@ async function salvarCliente(){
           id:clienteSel.id,
           nome:clienteSel.nome||clienteSel.razaoSocial,
           limiteCredito:limiteNum,
-          dataAnalise:el("m-data").value,
-          anotacoes:el("m-anotacoes").value,
+          dataAnalise,
+          anotacoes,
           ultimoUsuario:usuarioAtual.nome
         })
       });
       if(!res.ok){const err=await res.json();throw new Error(err.erro||`Erro ${res.status}`);}
     }
+
     // Atualiza cache local
     analisesBD[String(clienteSel.id)]={
-      data_analise:el("m-data").value,
-      anotacoes:el("m-anotacoes").value,
+      data_analise:dataAnalise,
+      anotacoes,
       ultimo_usuario:usuarioAtual.nome,
       ultima_alteracao:new Date().toISOString()
     };
-    const d=el("m-msg");d.textContent=modoDemo?"✓ Análise salva (modo demo).":"✓ Salvo com sucesso no Olist ERP e banco de dados!";d.className="modal-msg msg-ok";d.classList.remove("hidden");
-    setTimeout(()=>{el("modal-overlay").classList.add("hidden");carregarClientes(paginaAtual,buscaAtual);},1500);
-  }catch(e){const d=el("m-msg");d.textContent=`Erro: ${e.message}`;d.className="modal-msg msg-err";d.classList.remove("hidden");}
-  finally{btn.disabled=false;btn.textContent="Salvar Alterações";}
+
+    // Atualiza limite na tabela
+    const tdLim=document.getElementById(`lim-${clienteSel.id}`);
+    if(tdLim) tdLim.textContent=fmtBRL(limiteNum);
+
+    const d=el("m-msg");
+    d.textContent=modoDemo?"✓ Análise salva (modo demo).":"✓ Salvo com sucesso no Olist ERP e banco de dados!";
+    d.className="modal-msg msg-ok";d.classList.remove("hidden");
+    setTimeout(()=>{el("modal-overlay").classList.add("hidden");carregarClientes(paginaAtual,buscaAtual);},1800);
+  }catch(e){
+    const d=el("m-msg");d.textContent=`Erro: ${e.message}`;d.className="modal-msg msg-err";d.classList.remove("hidden");
+  }finally{btn.disabled=false;btn.textContent="Salvar Alterações";}
 }
+
 (function(){try{const s=JSON.parse(sessionStorage.getItem("sessao"));if(s){el("inp-login").value=s.login;el("inp-senha").value=s.senha;fazerLogin();}}catch{}})();
 </script>
 </body>
