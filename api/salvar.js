@@ -110,7 +110,10 @@ module.exports = async (req, res) => {
     const accessToken = await getAccessToken();
 
     // Atualiza limite no Olist via API V3
-    const v3Body = JSON.stringify({       nome: nome,       dadosAdicionais: { limiteCredito: limiteFormatado }     });
+    const v3Body = JSON.stringify({
+      nome: nome,
+      limiteCredito: limiteFormatado
+    });
     const ro = await httpsRequest(
       "PUT",
       "api.tiny.com.br",
