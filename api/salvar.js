@@ -1,9 +1,8 @@
-// v8 - API V3 com OAuth2 + Supabase
+// v9 - Refresh token automático via Supabase
 const https = require("https");
 
 const CLIENT_ID = process.env.OLIST_CLIENT_ID;
 const CLIENT_SECRET = process.env.OLIST_CLIENT_SECRET;
-const REFRESH_TOKEN = process.env.OLIST_REFRESH_TOKEN;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
 
@@ -20,25 +19,6 @@ function httpsRequest(method, hostname, path, body, headers) {
   });
 }
 
-async function getAccessToken() {
-  const body = "grant_type=refresh_token"
-    + "&client_id=" + encodeURIComponent(CLIENT_ID)
-    + "&client_secret=" + encodeURIComponent(CLIENT_SECRET)
-    + "&refresh_token=" + encodeURIComponent(REFRESH_TOKEN);
-
-  const r = await httpsRequest(
-    "POST",
-    "accounts.tiny.com.br",
-    "/realms/tiny/protocol/openid-connect/token",
-    body,
-    { "Content-Type": "application/x-www-form-urlencoded", "Content-Length": Buffer.byteLength(body) }
-  );
-
-  const data = JSON.parse(r.text);
-  if (!data.access_token) throw new Error("Falha ao obter access token: " + r.text);
-  return data.access_token;
-}
-
 function parseJSON(text) {
   try { return JSON.parse(text); } catch { return {}; }
 }
@@ -48,6 +28,61 @@ function parseBody(reqBody) {
   if (typeof reqBody === "object") return reqBody;
   if (typeof reqBody === "string") return parseJSON(reqBody);
   return {};
+}
+
+const supabaseHeaders = {
+  apikey: SUPABASE_KEY,
+  Authorization: "Bearer " + SUPABASE_KEY,
+  "Content-Type": "application/json",
+};
+
+async function getRefreshToken() {
+  const supaHost = SUPABASE_URL.replace("https://", "");
+  const r = await httpsRequest("GET", supaHost,
+    "/rest/v1/tokens_oauth?id=eq.olist_refresh_token&select=token",
+    null,
+    supabaseHeaders
+  );
+  const data = parseJSON(r.text);
+  if (!Array.isArray(data) || !data[0]) throw new Error("Refresh token não encontrado no Supabase");
+  return data[0].token;
+}
+
+async function saveRefreshToken(newToken) {
+  const supaHost = SUPABASE_URL.replace("https://", "");
+  const payload = JSON.stringify({ token: newToken, atualizado: new Date().toISOString() });
+  await httpsRequest("PATCH", supaHost,
+    "/rest/v1/tokens_oauth?id=eq.olist_refresh_token",
+    payload,
+    { ...supabaseHeaders, "Content-Length": Buffer.byteLength(payload), Prefer: "return=minimal" }
+  );
+}
+
+async function getAccessToken() {
+  const refreshToken = await getRefreshToken();
+
+  const body = "grant_type=refresh_token"
+    + "&client_id=" + encodeURIComponent(CLIENT_ID)
+    + "&client_secret=" + encodeURIComponent(CLIENT_SECRET)
+    + "&refresh_token=" + encodeURIComponent(refreshToken);
+
+  const r = await httpsRequest(
+    "POST",
+    "accounts.tiny.com.br",
+    "/realms/tiny/protocol/openid-connect/token",
+    body,
+    { "Content-Type": "application/x-www-form-urlencoded", "Content-Length": Buffer.byteLength(body) }
+  );
+
+  const data = parseJSON(r.text);
+  if (!data.access_token) throw new Error("Falha ao obter access token: " + r.text);
+
+  // Salva novo refresh token se foi renovado
+  if (data.refresh_token && data.refresh_token !== refreshToken) {
+    await saveRefreshToken(data.refresh_token);
+  }
+
+  return data.access_token;
 }
 
 async function salvarAnalise(chave, dataAnalise, anotacoes, ultimoUsuario) {
@@ -63,13 +98,7 @@ async function salvarAnalise(chave, dataAnalise, anotacoes, ultimoUsuario) {
   const ru = await httpsRequest("PATCH", supaHost,
     "/rest/v1/analises_credito?cliente_id=eq." + chave,
     payload,
-    {
-      apikey: SUPABASE_KEY,
-      Authorization: "Bearer " + SUPABASE_KEY,
-      "Content-Type": "application/json",
-      "Content-Length": Buffer.byteLength(payload),
-      Prefer: "return=minimal,count=exact",
-    }
+    { ...supabaseHeaders, "Content-Length": Buffer.byteLength(payload), Prefer: "return=minimal,count=exact" }
   );
 
   const countHeader = ru.headers["content-range"];
@@ -79,13 +108,7 @@ async function salvarAnalise(chave, dataAnalise, anotacoes, ultimoUsuario) {
     await httpsRequest("POST", supaHost,
       "/rest/v1/analises_credito",
       payload,
-      {
-        apikey: SUPABASE_KEY,
-        Authorization: "Bearer " + SUPABASE_KEY,
-        "Content-Type": "application/json",
-        "Content-Length": Buffer.byteLength(payload),
-        Prefer: "return=minimal",
-      }
+      { ...supabaseHeaders, "Content-Length": Buffer.byteLength(payload), Prefer: "return=minimal" }
     );
   }
 }
@@ -101,15 +124,15 @@ module.exports = async (req, res) => {
     const parsed = parseBody(req.body);
     const { id, nome, cpfCnpj, limiteCredito, dataAnalise, anotacoes, ultimoUsuario } = parsed;
 
-    if (!id) return res.status(400).json({ erro: "id obrigatorio", recebido: parsed });
+    if (!id) return res.status(400).json({ erro: "id obrigatorio" });
 
-    // Converte valor monetário brasileiro para número inteiro
+    // Converte valor monetário para número inteiro
     const limiteStr = String(limiteCredito || "0");
     const limiteNumero = parseInt(limiteStr.replace(/\./g, "").replace(/,/g, "")) || 0;
     // Regra de negócio: limite zero = mínimo R$ 1,00
     const limiteFormatado = limiteNumero <= 0 ? 1 : limiteNumero;
 
-    // Obtém access token via refresh token
+    // Obtém access token (busca refresh token do Supabase e renova automaticamente)
     const accessToken = await getAccessToken();
 
     // Atualiza limite no Olist via API V3
