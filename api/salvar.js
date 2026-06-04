@@ -44,7 +44,7 @@ module.exports = async (req, res) => {
   try {
     const { id, nome, limiteCredito, dataAnalise, anotacoes, ultimoUsuario } = req.body;
 
-    if (!id) return res.status(400).json({ erro: "id obrigatorio", recebido: req.body });
+    return res.status(200).json({ debug: true, body: req.body, tipo: typeof req.body });
 
     // Atualiza limite no Olist
     const limiteFormatado = parseFloat(limiteCredito).toFixed(2);
