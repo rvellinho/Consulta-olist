@@ -76,6 +76,7 @@ module.exports = async (req, res) => {
     if (dolist.retorno && dolist.retorno.status === "Erro") {
       throw new Error(dolist.retorno.erros[0].erro || "Erro Olist");
     }
+    return res.status(200).json({ debug: true, olistResposta: ro.text, xmlEnviado: xml });
 
     // Salva análise no Supabase usando CNPJ/CPF como chave
     const chave = String(cpfCnpj || id).replace(/[.\-\/]/g, "");
