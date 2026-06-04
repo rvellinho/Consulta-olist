@@ -14,7 +14,6 @@ async function salvarAnalise(clienteId, dataAnalise, anotacoes, ultimoUsuario) {
     ultima_alteracao: new Date().toISOString(),
   };
 
-  // Primeiro tenta atualizar (UPDATE)
   const resUpdate = await fetch(
     `${SUPABASE_URL}/rest/v1/analises_credito?cliente_id=eq.${clienteId}`,
     {
@@ -23,7 +22,7 @@ async function salvarAnalise(clienteId, dataAnalise, anotacoes, ultimoUsuario) {
         apikey: SUPABASE_KEY,
         Authorization: `Bearer ${SUPABASE_KEY}`,
         "Content-Type": "application/json",
-        Prefer: "return=minimal",
+        Prefer: "return=minimal,count=exact",
       },
       body: JSON.stringify(payload),
     }
@@ -34,12 +33,10 @@ async function salvarAnalise(clienteId, dataAnalise, anotacoes, ultimoUsuario) {
     throw new Error(`Supabase update erro: ${err}`);
   }
 
-  // Verifica se atualizou algum registro
   const countHeader = resUpdate.headers.get("content-range");
-  const atualizou = countHeader && !countHeader.startsWith("*/0") && countHeader !== "*/*";
+  const naoAtualizou = !countHeader || countHeader === "*/0";
 
-  // Se não existia registro, insere (INSERT)
-  if (!atualizou) {
+  if (naoAtualizou) {
     const resInsert = await fetch(`${SUPABASE_URL}/rest/v1/analises_credito`, {
       method: "POST",
       headers: {
@@ -67,7 +64,6 @@ module.exports = async (req, res) => {
   if (req.method === "OPTIONS") return res.status(200).end();
 
   try {
-    // ── GET /api/contatos?pagina=1&pesquisa=xxx ───────────────────────────
     if (req.method === "GET" && !req.query.id) {
       const pagina = req.query.pagina || 1;
       const pesquisa = req.query.pesquisa || " ";
@@ -81,3 +77,86 @@ module.exports = async (req, res) => {
       });
 
       const apiRes = await fetch(`${API}/contatos.pesquisa.php`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: params.toString(),
+      });
+
+      if (!apiRes.ok) throw new Error(`HTTP ${apiRes.status}`);
+      const data = await apiRes.json();
+      if (data.retorno?.status === "Erro") throw new Error(data.retorno?.erros?.[0]?.erro || "Erro API");
+
+      const lista = data.retorno?.contatos?.map(c => c.contato) || [];
+
+      const ids = lista.map(c => c.id);
+      let analises = {};
+      if (ids.length > 0) {
+        const anRes = await fetch(
+          `${SUPABASE_URL}/rest/v1/analises_credito?cliente_id=in.(${ids.join(",")})`,
+          {
+            headers: {
+              apikey: SUPABASE_KEY,
+              Authorization: `Bearer ${SUPABASE_KEY}`,
+            },
+          }
+        );
+        const anData = await anRes.json();
+        if (Array.isArray(anData)) {
+          anData.forEach(a => { analises[a.cliente_id] = a; });
+        }
+      }
+
+      return res.status(200).json({ itens: lista, analises });
+    }
+
+    if (req.method === "GET" && req.query.id) {
+      const params = new URLSearchParams({
+        token: TOKEN,
+        id: req.query.id,
+        formato: "JSON",
+      });
+
+      const apiRes = await fetch(`${API}/contato.obter.php`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: params.toString(),
+      });
+
+      if (!apiRes.ok) throw new Error(`HTTP ${apiRes.status}`);
+      const data = await apiRes.json();
+      if (data.retorno?.status === "Erro") throw new Error(data.retorno?.erros?.[0]?.erro || "Erro API");
+
+      const contato = data.retorno?.contato || {};
+      return res.status(200).json({ contato });
+    }
+
+    if (req.method === "PUT") {
+      const { id, nome, limiteCredito, dataAnalise, anotacoes, ultimoUsuario } = req.body;
+      if (!id || limiteCredito === undefined) return res.status(400).json({ erro: "id e limiteCredito obrigatórios." });
+
+      const limiteFormatado = parseFloat(limiteCredito).toFixed(2);
+
+      const xml = `<contatos><contato><id>${id}</id><nome>${nome}</nome><limite_credito>${limiteFormatado}</limite_credito></contato></contatos>`;
+      const params = new URLSearchParams({ token: TOKEN, contato: xml, formato: "JSON" });
+      const apiRes = await fetch(`${API}/contato.alterar.php`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: params.toString(),
+      });
+      if (!apiRes.ok) throw new Error(`Olist HTTP ${apiRes.status}`);
+      const texto = await apiRes.text();
+      let dataOlist = {};
+      try { dataOlist = JSON.parse(texto); } catch {}
+      if (dataOlist.retorno?.status === "Erro") throw new Error(dataOlist.retorno?.erros?.[0]?.erro || "Erro Olist");
+
+      await salvarAnalise(id, dataAnalise, anotacoes, ultimoUsuario);
+
+      return res.status(200).json({ ok: true });
+    }
+
+    return res.status(405).json({ erro: "Método não permitido." });
+
+  } catch (e) {
+    return res.status(500).json({ erro: e.message, stack: e.stack });
+  }
+};
