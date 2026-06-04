@@ -15,8 +15,6 @@
       --r: 12px; --sh: 0 1px 3px rgba(0,0,0,.08), 0 4px 16px rgba(0,0,0,.06);
     }
     body { background: var(--bg); color: var(--tx); font-family: 'Epilogue', sans-serif; min-height: 100vh; }
-
-    /* LOGIN */
     .login-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: linear-gradient(135deg, #1a2e5a, #1a56db); padding: 20px; }
     .login-card { background: #fff; border-radius: 20px; padding: 40px 36px; width: 100%; max-width: 400px; box-shadow: 0 20px 60px rgba(0,0,0,.3); }
     .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
@@ -26,37 +24,22 @@
     .login-sub { font-size: 13px; color: var(--mt); margin-bottom: 28px; }
     .fg { margin-bottom: 16px; }
     .fg label { display: block; font-size: 11px; font-weight: 700; color: var(--tx2); margin-bottom: 6px; text-transform: uppercase; letter-spacing: .5px; }
-    .fg input, .fg textarea {
-      width: 100%; border: 1.5px solid var(--br); border-radius: 8px;
-      padding: 10px 14px; font-size: 14px; font-family: 'Epilogue', sans-serif;
-      color: var(--tx); background: var(--s2); outline: none; transition: border .2s;
-    }
+    .fg input, .fg textarea { width: 100%; border: 1.5px solid var(--br); border-radius: 8px; padding: 10px 14px; font-size: 14px; font-family: 'Epilogue', sans-serif; color: var(--tx); background: var(--s2); outline: none; transition: border .2s; }
     .fg input:focus, .fg textarea:focus { border-color: var(--ac); background: #fff; }
     .fg textarea { resize: vertical; min-height: 110px; }
-    .btn-primary {
-      background: var(--ac); color: #fff; border: none; border-radius: 8px;
-      padding: 10px 22px; font-size: 14px; font-weight: 700;
-      font-family: 'Syne', sans-serif; cursor: pointer; transition: opacity .2s; white-space: nowrap;
-    }
+    .btn-primary { background: var(--ac); color: #fff; border: none; border-radius: 8px; padding: 10px 22px; font-size: 14px; font-weight: 700; font-family: 'Syne', sans-serif; cursor: pointer; transition: opacity .2s; white-space: nowrap; }
     .btn-primary:hover:not(:disabled) { opacity: .88; }
     .btn-primary:disabled { opacity: .5; cursor: default; }
     .w100 { width: 100%; margin-bottom: 14px; }
-    .btn-sec {
-      background: var(--s2); border: 1.5px solid var(--br); border-radius: 8px;
-      padding: 9px 18px; font-size: 13px; font-weight: 600; cursor: pointer;
-      color: var(--tx2); transition: all .15s; font-family: 'Epilogue', sans-serif;
-    }
+    .btn-sec { background: var(--s2); border: 1.5px solid var(--br); border-radius: 8px; padding: 9px 18px; font-size: 13px; font-weight: 600; cursor: pointer; color: var(--tx2); transition: all .15s; font-family: 'Epilogue', sans-serif; }
     .btn-sec:hover:not(:disabled) { border-color: var(--ac); color: var(--ac); }
     .btn-sec:disabled { opacity: .35; cursor: default; }
     .msg-erro-box { background: var(--redl); color: var(--red); border-radius: 8px; padding: 10px 14px; font-size: 13px; margin-bottom: 14px; }
     .login-hint { font-size: 11px; color: var(--mt); text-align: center; background: var(--s2); border-radius: 6px; padding: 8px 12px; }
     .hidden { display: none !important; }
-
-    /* APP */
     .app { max-width: 1200px; margin: 0 auto; padding: 0 16px 40px; }
     .hdr { display: flex; align-items: center; justify-content: space-between; padding: 16px 0; margin-bottom: 20px; border-bottom: 1px solid var(--br); }
-    .hdr .brand-icon { font-size: 20px; }
-    .hdr .brand-name { font-size: 17px; }
+    .hdr .brand-icon { font-size: 20px; } .hdr .brand-name { font-size: 17px; }
     .badge-demo { background: var(--aml); color: var(--am); border-radius: 6px; padding: 2px 8px; font-size: 11px; font-weight: 700; margin-left: 8px; }
     .hdr-user { display: flex; align-items: center; gap: 12px; }
     .u-info { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
@@ -70,11 +53,7 @@
     .search-bar { display: flex; gap: 10px; margin-bottom: 14px; }
     .search-wrap { flex: 1; position: relative; }
     .si { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--mt); }
-    .search-wrap input {
-      width: 100%; border: 1.5px solid var(--br); border-radius: 8px;
-      padding: 10px 14px 10px 38px; font-size: 14px; font-family: 'Epilogue', sans-serif;
-      color: var(--tx); background: #fff; outline: none; transition: border .2s;
-    }
+    .search-wrap input { width: 100%; border: 1.5px solid var(--br); border-radius: 8px; padding: 10px 14px 10px 38px; font-size: 14px; font-family: 'Epilogue', sans-serif; color: var(--tx); background: #fff; outline: none; transition: border .2s; }
     .search-wrap input:focus { border-color: var(--ac); }
     .aviso { background: var(--aml); color: var(--am); border-radius: 8px; padding: 10px 14px; font-size: 12px; margin-bottom: 12px; border: 1px solid #fcd34d; line-height: 1.5; }
     .table-wrap { background: #fff; border-radius: var(--r); border: 1px solid var(--br); overflow: hidden; box-shadow: var(--sh); }
@@ -97,8 +76,6 @@
     @keyframes spin { to { transform: rotate(360deg); } }
     .pag { display: flex; align-items: center; justify-content: space-between; margin-top: 16px; gap: 10px; flex-wrap: wrap; }
     .pag-inf { font-size: 13px; color: var(--mt); }
-
-    /* MODAL */
     .overlay { position: fixed; inset: 0; background: rgba(17,24,39,.5); backdrop-filter: blur(3px); z-index: 100; display: flex; align-items: center; justify-content: center; padding: 20px; animation: fi .15s; }
     @keyframes fi { from { opacity: 0; } to { opacity: 1; } }
     .modal { background: #fff; border-radius: 16px; width: 100%; max-width: 560px; max-height: 90vh; overflow-y: auto; box-shadow: 0 25px 60px rgba(0,0,0,.25); animation: su .2s; }
@@ -124,15 +101,11 @@
     .msg-ok { background: var(--gl); color: var(--g); }
     .msg-err { background: var(--redl); color: var(--red); }
     .modal-ftr { display: flex; gap: 10px; justify-content: flex-end; padding: 14px 22px; border-top: 1px solid var(--br); margin-top: 14px; }
-
-    @media (max-width: 640px) {
-      .td-rz, thead th:nth-child(3), tbody td:nth-child(3) { display: none; }
-    }
+    @media (max-width: 640px) { .td-rz, thead th:nth-child(3), tbody td:nth-child(3) { display: none; } }
   </style>
 </head>
 <body>
 
-<!-- ── TELA DE LOGIN ─────────────────────────────────────────────────────── -->
 <div id="tela-login" class="login-wrap">
   <div class="login-card">
     <div class="brand"><span class="brand-icon">◈</span><span class="brand-name">Crédito<em>Pro</em></span></div>
@@ -141,11 +114,10 @@
     <div class="fg"><label>Senha</label><input id="inp-senha" type="password" placeholder="••••••••" /></div>
     <div id="login-erro" class="msg-erro-box hidden"></div>
     <button class="btn-primary w100" onclick="fazerLogin()">Entrar</button>
-    <div class="login-hint"><strong>Usuários:</strong> admin / ana / carlos &nbsp;·&nbsp; Senha: igual ao login + 123</div>
+    <div class="login-hint"><strong>Usuários:</strong> admin / ana / carlos &nbsp;·&nbsp; Senha: login + 123</div>
   </div>
 </div>
 
-<!-- ── TELA DO APP ────────────────────────────────────────────────────────── -->
 <div id="tela-app" class="app hidden">
   <header class="hdr">
     <div class="brand">
@@ -161,7 +133,6 @@
       <button class="btn-logout" onclick="fazerLogout()">⎋ Sair</button>
     </div>
   </header>
-
   <div class="search-bar">
     <div class="search-wrap">
       <span class="si">🔍</span>
@@ -169,28 +140,17 @@
     </div>
     <button class="btn-primary" onclick="buscar()">Buscar</button>
   </div>
-
   <div id="aviso" class="aviso hidden"></div>
-
   <div class="table-wrap">
-    <div id="estado" class="state-center">
-      <div class="spinner"></div><p>Carregando...</p>
-    </div>
+    <div id="estado" class="state-center"><div class="spinner"></div><p>Carregando...</p></div>
     <table id="tabela" class="hidden">
-      <thead>
-        <tr>
-          <th>Código</th>
-          <th>Fantasia</th>
-          <th>Razão Social</th>
-          <th>Limite de Crédito</th>
-          <th id="th-analise">Análise</th>
-          <th></th>
-        </tr>
-      </thead>
+      <thead><tr>
+        <th>Código</th><th>Fantasia</th><th>Razão Social</th>
+        <th>Limite de Crédito</th><th id="th-analise">Análise</th><th></th>
+      </tr></thead>
       <tbody id="tbody"></tbody>
     </table>
   </div>
-
   <div class="pag">
     <button class="btn-sec" id="btn-ant" onclick="mudarPagina(-1)" disabled>← Anterior</button>
     <span class="pag-inf" id="pag-inf">Página 1 · 100 por página</span>
@@ -198,9 +158,8 @@
   </div>
 </div>
 
-<!-- ── MODAL ──────────────────────────────────────────────────────────────── -->
 <div id="modal-overlay" class="overlay hidden" onclick="fecharModal(event)">
-  <div class="modal" id="modal">
+  <div class="modal">
     <div class="modal-hdr">
       <div class="modal-av" id="m-av"></div>
       <div class="modal-hdr-info">
@@ -215,7 +174,7 @@
         <div class="sec-title">💳 Limite de Crédito</div>
         <div class="fg">
           <label>Valor (R$)</label>
-          <input id="m-limite" class="input-limite fg input" placeholder="0,00" />
+          <input id="m-limite" class="input-limite" placeholder="0,00" />
           <div id="m-limite-ro" class="field-ro hidden"></div>
         </div>
       </div>
@@ -223,13 +182,13 @@
         <div class="sec-title">📋 Análise de Crédito</div>
         <div id="analise-form">
           <div class="fg"><label>Data da Última Análise</label><input type="date" id="m-data" /></div>
-          <div class="fg"><label>Anotações da Análise</label><textarea id="m-anotacoes" rows="5" placeholder="Descreva a análise realizada, documentos consultados, score, observações relevantes..."></textarea></div>
+          <div class="fg"><label>Anotações da Análise</label><textarea id="m-anotacoes" rows="5" placeholder="Descreva a análise realizada, documentos consultados, score, observações..."></textarea></div>
         </div>
         <div id="analise-ro" class="hidden">
           <div class="ro-block"><span class="ro-label">Data da análise</span><span id="ro-data"></span></div>
           <div class="ro-block"><span class="ro-label">Anotações</span><p id="ro-anotacoes" class="anot-txt"></p></div>
         </div>
-        <div id="analise-vazia" class="sem-analise hidden">Nenhuma análise registrada para este cliente.</div>
+        <div id="analise-vazia" class="sem-analise hidden">Nenhuma análise registrada.</div>
       </div>
     </div>
     <div id="m-audit" class="audit-row hidden"></div>
@@ -242,283 +201,135 @@
 </div>
 
 <script>
-// ── USUÁRIOS ────────────────────────────────────────────────────────────────
 const USUARIOS = [
-  { id: 1, nome: "Administrador", login: "admin", senha: "admin123", perfil: "admin" },
-  { id: 2, nome: "Ana Paula",     login: "ana",   senha: "ana123",   perfil: "analista" },
-  { id: 3, nome: "Carlos Souza",  login: "carlos",senha: "carlos123",perfil: "visualizador" },
+  { id:1, nome:"Administrador", login:"admin",  senha:"admin123",  perfil:"admin" },
+  { id:2, nome:"Ana Paula",     login:"ana",    senha:"ana123",    perfil:"analista" },
+  { id:3, nome:"Carlos Souza",  login:"carlos", senha:"carlos123", perfil:"visualizador" },
 ];
 
-// ── ESTADO ──────────────────────────────────────────────────────────────────
-let usuarioAtual = null;
-let paginaAtual  = 1;
-let buscaAtual   = "";
-let temProxima   = false;
-let clienteSel   = null;
-let modoDemo     = false;
+let usuarioAtual=null, paginaAtual=1, buscaAtual="", temProxima=false, clienteSel=null, modoDemo=false;
+let analisesBD = {}; // análises vindas do banco de dados
 
-const STORAGE_KEY = "olist_analise_v1";
-const lerAnalises  = () => { try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}"); } catch { return {}; } };
-const salvarAnalise = (id, d) => { const a = lerAnalises(); a[id] = d; localStorage.setItem(STORAGE_KEY, JSON.stringify(a)); };
+const fmtBRL=v=>new Intl.NumberFormat("pt-BR",{style:"currency",currency:"BRL",maximumFractionDigits:0}).format(v||0);
+const fmtData=iso=>{if(!iso)return"—";const[y,m,d]=iso.split("-");return`${d}/${m}/${y}`};
+const ini=n=>{if(!n)return"?";const p=n.trim().split(" ").filter(Boolean);return((p[0]?.[0]||"")+(p[1]?.[0]||"")).toUpperCase()};
+const el=id=>document.getElementById(id);
 
-const fmtBRL  = v => new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL", maximumFractionDigits: 0 }).format(v || 0);
-const fmtData = iso => { if (!iso) return "—"; const [y,m,d] = iso.split("-"); return `${d}/${m}/${y}`; };
-const ini     = n => { if (!n) return "?"; const p = n.trim().split(" ").filter(Boolean); return ((p[0]?.[0]||"")+(p[1]?.[0]||"")).toUpperCase(); };
-const el      = id => document.getElementById(id);
+const DEMO=Array.from({length:20},(_,i)=>({id:1000+i,codigo:`C${String(1000+i).padStart(4,"0")}`,nome:["Metalúrgica Souza Ltda","Distribuidora Norte S.A.","Papelaria Central Eireli","Tech Solutions Ltda","Supermercado Família Eireli","Construtora Horizonte S.A.","Farmácia Popular Ltda","Agropecuária Vale Verde","Academia Corpo em Forma","Transportadora Rápida S.A.","Clínica Médica Total Ltda","Escola Dom Pedro II","Indústria Plástica Ltda","Atacadão Ferragens","Gráfica Central","Posto BH","Floricultura Rosas","Auto Peças Sul","Gelato Fino Ltda","Madeireira São José"][i],fantasia:["MetalSouza","DistriNorte","PapelCentral","TechSol","Fam.Oliveira","Horizonte","FarmaPopular","ValeVerde","CorpoForma","TranspRápida","SaúdeTotal","DomPedroII","PlásticaBV","AtacadãoF","GráficaC","PosoBH","Floricultura","AutoPeças","GelatoFino","MadeireiraSJ"][i],limiteCredito:[85000,120000,15000,200000,45000,350000,30000,95000,12000,180000,60000,25000,75000,130000,42000,90000,8000,55000,18000,110000][i]}));
 
-// ── DEMO DATA ───────────────────────────────────────────────────────────────
-const DEMO = Array.from({ length: 20 }, (_, i) => ({
-  id: 1000+i, codigo: `C${String(1000+i).padStart(4,"0")}`,
-  nome:    ["Metalúrgica Souza Ltda","Distribuidora Norte S.A.","Papelaria Central Eireli","Tech Solutions Ltda","Supermercado Família Eireli","Construtora Horizonte S.A.","Farmácia Popular Ltda","Agropecuária Vale Verde","Academia Corpo em Forma","Transportadora Rápida S.A.","Clínica Médica Total Ltda","Escola Dom Pedro II","Indústria Plástica Ltda","Atacadão Ferragens","Gráfica Central","Posto BH","Floricultura Rosas","Auto Peças Sul","Gelato Fino Ltda","Madeireira São José"][i],
-  fantasia:["MetalSouza","DistriNorte","PapelCentral","TechSol","Fam.Oliveira","Horizonte","FarmaPopular","ValeVerde","CorpoForma","TranspRápida","SaúdeTotal","DomPedroII","PlásticaBV","AtacadãoF","GráficaC","PosoBH","Floricultura","AutoPeças","GelatoFino","MadeireiraSJ"][i],
-  limiteCredito: [85000,120000,15000,200000,45000,350000,30000,95000,12000,180000,60000,25000,75000,130000,42000,90000,8000,55000,18000,110000][i],
-}));
-
-// ── LOGIN ────────────────────────────────────────────────────────────────────
-function fazerLogin() {
-  const login = el("inp-login").value.trim();
-  const senha = el("inp-senha").value;
-  const u = USUARIOS.find(x => x.login === login && x.senha === senha);
-  if (!u) { el("login-erro").textContent = "Usuário ou senha incorretos."; el("login-erro").classList.remove("hidden"); return; }
-  usuarioAtual = u;
-  sessionStorage.setItem("sessao", JSON.stringify(u));
-  el("tela-login").classList.add("hidden");
-  el("tela-app").classList.remove("hidden");
-  el("usr-nome").textContent = u.nome;
-  const bp = { admin: ["Admin","bp-admin"], analista: ["Analista","bp-analista"], visualizador: ["Visualizador","bp-viz"] }[u.perfil];
-  el("usr-perfil").textContent = bp[0];
-  el("usr-perfil").className = `bp ${bp[1]}`;
-  const podeVerAnalise = u.perfil === "admin" || u.perfil === "analista";
-  if (!podeVerAnalise) el("th-analise").style.display = "none";
-  carregarClientes(1, "");
+function fazerLogin(){
+  const login=el("inp-login").value.trim(),senha=el("inp-senha").value;
+  const u=USUARIOS.find(x=>x.login===login&&x.senha===senha);
+  if(!u){el("login-erro").textContent="Usuário ou senha incorretos.";el("login-erro").classList.remove("hidden");return;}
+  usuarioAtual=u;sessionStorage.setItem("sessao",JSON.stringify(u));
+  el("tela-login").classList.add("hidden");el("tela-app").classList.remove("hidden");
+  el("usr-nome").textContent=u.nome;
+  const bp={admin:["Admin","bp-admin"],analista:["Analista","bp-analista"],visualizador:["Visualizador","bp-viz"]}[u.perfil];
+  el("usr-perfil").textContent=bp[0];el("usr-perfil").className=`bp ${bp[1]}`;
+  if(u.perfil==="visualizador")el("th-analise").style.display="none";
+  carregarClientes(1,"");
 }
+function fazerLogout(){sessionStorage.removeItem("sessao");usuarioAtual=null;el("tela-app").classList.add("hidden");el("tela-login").classList.remove("hidden");el("inp-login").value="";el("inp-senha").value="";}
+el("inp-senha").addEventListener("keydown",e=>{if(e.key==="Enter")fazerLogin()});
 
-function fazerLogout() {
-  sessionStorage.removeItem("sessao");
-  usuarioAtual = null;
-  el("tela-app").classList.add("hidden");
-  el("tela-login").classList.remove("hidden");
-  el("inp-login").value = "";
-  el("inp-senha").value = "";
-}
-
-el("inp-senha").addEventListener("keydown", e => { if (e.key === "Enter") fazerLogin(); });
-
-// ── CARREGAR CLIENTES ────────────────────────────────────────────────────────
-async function carregarClientes(pagina, pesquisa) {
-  paginaAtual = pagina;
-  buscaAtual  = pesquisa;
-  el("estado").classList.remove("hidden");
-  el("tabela").classList.add("hidden");
-  el("aviso").classList.add("hidden");
-
-  try {
-    const params = new URLSearchParams({ pagina, pesquisa });
-    const res = await fetch(`/api/contatos?${params.toString()}`);
-    if (!res.ok) throw new Error(`Servidor retornou ${res.status}`);
-    const data = await res.json();
-
-    // A V3 retorna { itens: [...], ... }
-    const lista = data.itens || data.contatos || [];
-    modoDemo = false;
+async function carregarClientes(pagina,pesquisa){
+  paginaAtual=pagina;buscaAtual=pesquisa;
+  el("estado").innerHTML='<div class="spinner"></div><p>Consultando Olist ERP...</p>';
+  el("estado").classList.remove("hidden");el("tabela").classList.add("hidden");el("aviso").classList.add("hidden");
+  try{
+    const res=await fetch(`/api/contatos?pagina=${pagina}&pesquisa=${encodeURIComponent(pesquisa||" ")}`);
+    if(!res.ok)throw new Error(`Erro ${res.status}`);
+    const data=await res.json();
+    const lista=data.itens||[];
+    analisesBD = data.analises || {};
+    modoDemo=false;
     renderTabela(lista);
-    temProxima = lista.length === 100;
-  } catch (e) {
-    // Fallback demo
-    modoDemo = true;
-    el("badge-demo").classList.remove("hidden");
-    el("aviso").textContent = `⚠️ Não foi possível conectar à API Olist. Exibindo dados demonstrativos. Erro: ${e.message}`;
+    temProxima=lista.length===100;
+  }catch(e){
+    modoDemo=true;el("badge-demo").classList.remove("hidden");
+    el("aviso").textContent=`⚠️ Não foi possível conectar à API Olist. Exibindo dados demonstrativos. Erro: ${e.message}`;
     el("aviso").classList.remove("hidden");
-    renderTabela(DEMO);
-    temProxima = false;
+    renderTabela(DEMO);temProxima=false;
   }
-
-  el("btn-ant").disabled  = paginaAtual <= 1;
-  el("btn-prox").disabled = !temProxima;
-  el("pag-inf").textContent = `Página ${paginaAtual} · 100 registros por página`;
+  el("btn-ant").disabled=paginaAtual<=1;el("btn-prox").disabled=!temProxima;
+  el("pag-inf").textContent=`Página ${paginaAtual} · 100 registros por página`;
 }
 
-function renderTabela(lista) {
-  el("estado").classList.add("hidden");
-  el("tabela").classList.remove("hidden");
-
-  const analises = lerAnalises();
-  const podeVerAnalise = usuarioAtual.perfil === "admin" || usuarioAtual.perfil === "analista";
-  const tbody = el("tbody");
-  tbody.innerHTML = "";
-
-  if (lista.length === 0) {
-    el("tabela").classList.add("hidden");
-    el("estado").innerHTML = "<p>🔎 Nenhum cliente encontrado.</p>";
-    el("estado").classList.remove("hidden");
-    return;
-  }
-
-  lista.forEach(c => {
-    const id = c.id;
-    const nome = c.nome || c.razaoSocial || "";
-    const fantasia = c.fantasia || c.nomeFantasia || "";
-    const limite = c.limiteCredito ?? c.limite_credito ?? 0;
-    const an = analises[id];
-    const tr = document.createElement("tr");
-    tr.innerHTML = `
-      <td class="td-cod">${c.codigo || id}</td>
-      <td><div class="td-cli"><span class="av">${ini(fantasia||nome)}</span><span>${fantasia||"—"}</span></div></td>
-      <td class="td-rz">${nome}</td>
-      <td class="td-lim">${fmtBRL(limite)}</td>
-      ${podeVerAnalise ? `<td>${an ? `<span class="ba">✓ ${fmtData(an.dataAnalise)}</span>` : `<span class="bp2">Pendente</span>`}</td>` : ""}
-      <td><span class="arr">→</span></td>
-    `;
-    tr.onclick = () => abrirModal(c);
-    tbody.appendChild(tr);
+function renderTabela(lista){
+  el("estado").classList.add("hidden");el("tabela").classList.remove("hidden");
+  const podeVer=usuarioAtual.perfil!=="visualizador",tbody=el("tbody");
+  tbody.innerHTML="";
+  if(!lista.length){el("tabela").classList.add("hidden");el("estado").innerHTML="<p>🔎 Nenhum cliente encontrado.</p>";el("estado").classList.remove("hidden");return;}
+  lista.forEach(c=>{
+    const id=c.id,nome=c.nome||c.razaoSocial||"",fantasia=c.fantasia||c.nomeFantasia||"",limite=c.limiteCredito??c.limite_credito??0;
+    const an=analisesBD[String(id)];
+    const tr=document.createElement("tr");
+    tr.innerHTML=`<td class="td-cod">${c.codigo||id}</td><td><div class="td-cli"><span class="av">${ini(fantasia||nome)}</span><span>${fantasia||"—"}</span></div></td><td class="td-rz">${nome}</td><td class="td-lim">${fmtBRL(limite)}</td>${podeVer?`<td>${an?`<span class="ba">✓ ${fmtData(an.data_analise)}</span>`:`<span class="bp2">Pendente</span>`}</td>`:""}<td><span class="arr">→</span></td>`;
+    tr.onclick=()=>abrirModal(c);tbody.appendChild(tr);
   });
 }
 
-// ── BUSCA / PAGINAÇÃO ────────────────────────────────────────────────────────
-function buscar() {
-  carregarClientes(1, el("inp-busca").value.trim());
+function buscar(){carregarClientes(1,el("inp-busca").value.trim());}
+function mudarPagina(d){carregarClientes(paginaAtual+d,buscaAtual);}
+
+function abrirModal(c){
+  clienteSel=c;
+  const id=c.id,nome=c.nome||c.razaoSocial||"",fantasia=c.fantasia||c.nomeFantasia||"",limite=c.limiteCredito??c.limite_credito??0;
+  const an=analisesBD[String(id)];
+  const podeEditar=usuarioAtual.perfil!=="visualizador";
+  el("m-av").textContent=ini(fantasia||nome);el("m-titulo").textContent=fantasia||nome;
+  el("m-razao").textContent=nome;el("m-cod").textContent=`#${c.codigo||id}`;
+  if(podeEditar){el("m-limite").value=String(limite).replace(".",",");el("m-limite").classList.remove("hidden");el("m-limite-ro").classList.add("hidden");}
+  else{el("m-limite-ro").textContent=fmtBRL(limite);el("m-limite-ro").classList.remove("hidden");el("m-limite").classList.add("hidden");}
+  if(podeEditar){
+    el("sec-analise").classList.remove("hidden");el("analise-form").classList.remove("hidden");
+    el("analise-ro").classList.add("hidden");el("analise-vazia").classList.add("hidden");
+    el("m-data").value=an?.data_analise||"";el("m-anotacoes").value=an?.anotacoes||"";
+  }else if(an){
+    el("sec-analise").classList.remove("hidden");el("analise-form").classList.add("hidden");
+    el("analise-ro").classList.remove("hidden");el("analise-vazia").classList.add("hidden");
+    el("ro-data").textContent=fmtData(an.data_analise);el("ro-anotacoes").textContent=an.anotacoes||"—";
+  }else{el("sec-analise").classList.remove("hidden");el("analise-form").classList.add("hidden");el("analise-ro").classList.add("hidden");el("analise-vazia").classList.remove("hidden");}
+  if(an?.ultimo_usuario){el("m-audit").innerHTML=`<span>👤 Última alteração por <strong>${an.ultimo_usuario}</strong></span><span>${new Date(an.ultima_alteracao).toLocaleString("pt-BR")}</span>`;el("m-audit").classList.remove("hidden");}
+  else el("m-audit").classList.add("hidden");
+  el("btn-salvar").style.display=podeEditar?"":"none";
+  el("m-msg").classList.add("hidden");el("modal-overlay").classList.remove("hidden");
 }
-function mudarPagina(delta) {
-  carregarClientes(paginaAtual + delta, buscaAtual);
-}
+function fecharModal(e){if(e.target===el("modal-overlay"))el("modal-overlay").classList.add("hidden");}
 
-// ── MODAL ────────────────────────────────────────────────────────────────────
-function abrirModal(c) {
-  clienteSel = c;
-  const id       = c.id;
-  const nome     = c.nome || c.razaoSocial || "";
-  const fantasia = c.fantasia || c.nomeFantasia || "";
-  const limite   = c.limiteCredito ?? c.limite_credito ?? 0;
-  const analises = lerAnalises();
-  const an       = analises[id];
-  const podeEditar = usuarioAtual.perfil === "admin" || usuarioAtual.perfil === "analista";
-  const podeVerAnalise = podeEditar;
-
-  el("m-av").textContent    = ini(fantasia||nome);
-  el("m-titulo").textContent = fantasia || nome;
-  el("m-razao").textContent  = nome;
-  el("m-cod").textContent    = `#${c.codigo||id}`;
-
-  // Limite
-  if (podeEditar) {
-    el("m-limite").value = String(limite).replace(".", ",");
-    el("m-limite").classList.remove("hidden");
-    el("m-limite-ro").classList.add("hidden");
-  } else {
-    el("m-limite-ro").textContent = fmtBRL(limite);
-    el("m-limite-ro").classList.remove("hidden");
-    el("m-limite").classList.add("hidden");
-  }
-
-  // Análise
-  if (podeVerAnalise) {
-    el("sec-analise").classList.remove("hidden");
-    if (podeEditar) {
-      el("analise-form").classList.remove("hidden");
-      el("analise-ro").classList.add("hidden");
-      el("analise-vazia").classList.add("hidden");
-      el("m-data").value      = an?.dataAnalise || "";
-      el("m-anotacoes").value = an?.anotacoes || "";
-    } else if (an) {
-      el("analise-form").classList.add("hidden");
-      el("analise-ro").classList.remove("hidden");
-      el("analise-vazia").classList.add("hidden");
-      el("ro-data").textContent      = fmtData(an.dataAnalise);
-      el("ro-anotacoes").textContent = an.anotacoes || "—";
-    } else {
-      el("analise-form").classList.add("hidden");
-      el("analise-ro").classList.add("hidden");
-      el("analise-vazia").classList.remove("hidden");
-    }
-  } else {
-    el("sec-analise").classList.add("hidden");
-  }
-
-  // Auditoria
-  if (an?.ultimoUsuario) {
-    el("m-audit").innerHTML = `<span>👤 Última alteração por <strong>${an.ultimoUsuario}</strong></span><span>${new Date(an.ultimaAlteracao).toLocaleString("pt-BR")}</span>`;
-    el("m-audit").classList.remove("hidden");
-  } else {
-    el("m-audit").classList.add("hidden");
-  }
-
-  el("btn-salvar").style.display = podeEditar ? "" : "none";
-  el("m-msg").classList.add("hidden");
-  el("modal-overlay").classList.remove("hidden");
-}
-
-function fecharModal(e) {
-  if (e.target === el("modal-overlay")) el("modal-overlay").classList.add("hidden");
-}
-
-// ── SALVAR ───────────────────────────────────────────────────────────────────
-async function salvarCliente() {
-  const btn = el("btn-salvar");
-  btn.disabled = true;
-  btn.textContent = "Salvando...";
-  el("m-msg").classList.add("hidden");
-
-  try {
-    const limiteStr = el("m-limite").value.replace(/\./g, "").replace(",", ".");
-    const limiteNum = parseFloat(limiteStr);
-    if (isNaN(limiteNum)) throw new Error("Valor de limite inválido.");
-
-    if (!modoDemo) {
-      const res = await fetch("/api/contatos", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: clienteSel.id, nome: clienteSel.nome || clienteSel.razaoSocial, limiteCredito: limiteNum }),
+async function salvarCliente(){
+  const btn=el("btn-salvar");btn.disabled=true;btn.textContent="Salvando...";el("m-msg").classList.add("hidden");
+  try{
+    const limiteNum=parseFloat(el("m-limite").value.replace(/\./g,"").replace(",","."));
+    if(isNaN(limiteNum))throw new Error("Valor de limite inválido.");
+    if(!modoDemo){
+      const res=await fetch("/api/contatos",{
+        method:"PUT",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({
+          id:clienteSel.id,
+          nome:clienteSel.nome||clienteSel.razaoSocial,
+          limiteCredito:limiteNum,
+          dataAnalise:el("m-data").value,
+          anotacoes:el("m-anotacoes").value,
+          ultimoUsuario:usuarioAtual.nome
+        })
       });
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.erro || `Erro ${res.status}`);
-      }
+      if(!res.ok){const err=await res.json();throw new Error(err.erro||`Erro ${res.status}`);}
     }
-
-    // Salva análise local
-    const reg = {
-      dataAnalise: el("m-data").value,
-      anotacoes: el("m-anotacoes").value,
-      ultimoUsuario: usuarioAtual.nome,
-      ultimaAlteracao: new Date().toISOString(),
+    // Atualiza cache local
+    analisesBD[String(clienteSel.id)]={
+      data_analise:el("m-data").value,
+      anotacoes:el("m-anotacoes").value,
+      ultimo_usuario:usuarioAtual.nome,
+      ultima_alteracao:new Date().toISOString()
     };
-    salvarAnalise(clienteSel.id, reg);
-
-    // Atualiza linha na tabela
-    clienteSel.limiteCredito = limiteNum;
-    clienteSel.limite_credito = limiteNum;
-
-    mostrarMsg("ok", modoDemo ? "✓ Análise salva localmente (modo demo)." : "✓ Alterações salvas com sucesso no Olist ERP!");
-    setTimeout(() => {
-      el("modal-overlay").classList.add("hidden");
-      carregarClientes(paginaAtual, buscaAtual);
-    }, 1500);
-  } catch (e) {
-    mostrarMsg("err", `Erro: ${e.message}`);
-  } finally {
-    btn.disabled = false;
-    btn.textContent = "Salvar Alterações";
-  }
+    const d=el("m-msg");d.textContent=modoDemo?"✓ Análise salva (modo demo).":"✓ Salvo com sucesso no Olist ERP e banco de dados!";d.className="modal-msg msg-ok";d.classList.remove("hidden");
+    setTimeout(()=>{el("modal-overlay").classList.add("hidden");carregarClientes(paginaAtual,buscaAtual);},1500);
+  }catch(e){const d=el("m-msg");d.textContent=`Erro: ${e.message}`;d.className="modal-msg msg-err";d.classList.remove("hidden");}
+  finally{btn.disabled=false;btn.textContent="Salvar Alterações";}
 }
-
-function mostrarMsg(tipo, texto) {
-  const d = el("m-msg");
-  d.textContent = texto;
-  d.className = `modal-msg msg-${tipo}`;
-  d.classList.remove("hidden");
-}
-
-// ── RESTAURAR SESSÃO ─────────────────────────────────────────────────────────
-(function restaurarSessao() {
-  try {
-    const s = JSON.parse(sessionStorage.getItem("sessao"));
-    if (s) {
-      el("inp-login").value = s.login;
-      el("inp-senha").value = s.senha;
-      fazerLogin();
-    }
-  } catch {}
-})();
+(function(){try{const s=JSON.parse(sessionStorage.getItem("sessao"));if(s){el("inp-login").value=s.login;el("inp-senha").value=s.senha;fazerLogin();}}catch{}})();
 </script>
 </body>
 </html>
