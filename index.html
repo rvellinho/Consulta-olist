@@ -15,8 +15,6 @@
       --r: 12px; --sh: 0 1px 3px rgba(0,0,0,.08), 0 4px 16px rgba(0,0,0,.06);
     }
     body { background: var(--bg); color: var(--tx); font-family: 'Inter', sans-serif; min-height: 100vh; }
-
-    /* LOGIN */
     .login-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: linear-gradient(135deg, #1a1a1a, #3a0008); padding: 20px; }
     .login-card { background: #fff; border-radius: 20px; padding: 40px 36px; width: 100%; max-width: 400px; box-shadow: 0 20px 60px rgba(0,0,0,.3); }
     .login-logo { margin-bottom: 8px; }
@@ -24,8 +22,8 @@
     .login-sub { font-size: 13px; color: var(--mt); margin-bottom: 28px; margin-top: 4px; }
     .fg { margin-bottom: 16px; }
     .fg label { display: block; font-size: 11px; font-weight: 600; color: var(--tx2); margin-bottom: 6px; text-transform: uppercase; letter-spacing: .5px; }
-    .fg input, .fg textarea { width: 100%; border: 1.5px solid var(--br); border-radius: 8px; padding: 10px 14px; font-size: 14px; font-family: 'Inter', sans-serif; color: var(--tx); background: var(--s2); outline: none; transition: border .2s; }
-    .fg input:focus, .fg textarea:focus { border-color: var(--ac); background: #fff; }
+    .fg input, .fg textarea, .fg select { width: 100%; border: 1.5px solid var(--br); border-radius: 8px; padding: 10px 14px; font-size: 14px; font-family: 'Inter', sans-serif; color: var(--tx); background: var(--s2); outline: none; transition: border .2s; }
+    .fg input:focus, .fg textarea:focus, .fg select:focus { border-color: var(--ac); background: #fff; }
     .fg textarea { resize: vertical; min-height: 80px; font-size: 13px; }
     .btn-primary { background: var(--ac); color: #fff; border: none; border-radius: 8px; padding: 10px 22px; font-size: 14px; font-weight: 600; font-family: 'Inter', sans-serif; cursor: pointer; transition: opacity .2s; white-space: nowrap; }
     .btn-primary:hover:not(:disabled) { opacity: .88; }
@@ -34,13 +32,13 @@
     .btn-sec { background: var(--s2); border: 1.5px solid var(--br); border-radius: 8px; padding: 9px 18px; font-size: 13px; font-weight: 600; cursor: pointer; color: var(--tx2); transition: all .15s; font-family: 'Inter', sans-serif; }
     .btn-sec:hover:not(:disabled) { border-color: var(--ac); color: var(--ac); }
     .btn-sec:disabled { opacity: .35; cursor: default; }
+    .btn-danger { background: var(--redl); border: 1.5px solid var(--red); border-radius: 8px; padding: 7px 14px; font-size: 12px; font-weight: 600; cursor: pointer; color: var(--red); transition: all .15s; font-family: 'Inter', sans-serif; }
+    .btn-danger:hover { background: var(--red); color: #fff; }
     .msg-erro-box { background: var(--redl); color: var(--red); border-radius: 8px; padding: 10px 14px; font-size: 13px; margin-bottom: 14px; }
-    .login-hint { font-size: 11px; color: var(--mt); text-align: center; background: var(--s2); border-radius: 6px; padding: 8px 12px; }
     .hidden { display: none !important; }
-
-    /* APP */
     .app { max-width: 1200px; margin: 0 auto; padding: 0 16px 40px; }
     .hdr { display: flex; align-items: center; justify-content: space-between; padding: 14px 0; margin-bottom: 20px; border-bottom: 1px solid var(--br); }
+    .hdr-logo { display: flex; align-items: center; gap: 10px; }
     .hdr-logo img { height: 36px; object-fit: contain; }
     .badge-demo { background: var(--aml); color: var(--am); border-radius: 6px; padding: 2px 8px; font-size: 11px; font-weight: 700; margin-left: 8px; }
     .hdr-user { display: flex; align-items: center; gap: 12px; }
@@ -52,6 +50,10 @@
     .bp-viz { background: var(--s2); color: var(--mt); border: 1px solid var(--br); }
     .btn-logout { background: var(--s2); border: 1px solid var(--br); border-radius: 8px; padding: 7px 14px; font-size: 12px; color: var(--mt); cursor: pointer; transition: all .15s; }
     .btn-logout:hover { border-color: var(--red); color: var(--red); background: var(--redl); }
+    .nav-tabs { display: flex; gap: 4px; margin-bottom: 20px; border-bottom: 2px solid var(--br); }
+    .nav-tab { padding: 10px 18px; font-size: 13px; font-weight: 600; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -2px; color: var(--mt); transition: all .15s; background: none; border-top: none; border-left: none; border-right: none; font-family: 'Inter', sans-serif; }
+    .nav-tab:hover { color: var(--ac); }
+    .nav-tab.active { color: var(--ac); border-bottom-color: var(--ac); }
     .search-bar { display: flex; gap: 10px; margin-bottom: 14px; }
     .search-wrap { flex: 1; position: relative; }
     .si { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--mt); }
@@ -64,7 +66,7 @@
     tbody tr { border-bottom: 1px solid var(--br); cursor: pointer; transition: background .12s; }
     tbody tr:last-child { border-bottom: none; }
     tbody tr:hover { background: var(--acl); }
-    tbody td { padding: 11px 15px; font-size: 13px; vertical-align: middle; }
+    tbody td { padding: 12px 15px; font-size: 14px; vertical-align: middle; }
     .td-cod { font-size: 11px; color: var(--mt); font-family: 'Inter', sans-serif; }
     .td-cli { display: flex; align-items: center; gap: 10px; }
     .av { width: 32px; height: 32px; border-radius: 8px; background: linear-gradient(135deg, #c0001a, #7a0010); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; font-family: 'Inter', sans-serif; flex-shrink: 0; }
@@ -75,14 +77,14 @@
     .arr { color: var(--ac); font-size: 15px; }
     .state-center { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 60px 20px; color: var(--mt); }
     .spinner { width: 30px; height: 30px; border: 3px solid var(--br); border-top-color: var(--ac); border-radius: 50%; animation: spin .7s linear infinite; }
+    .spinner-sm { width: 16px; height: 16px; border: 2px solid var(--br); border-top-color: var(--ac); border-radius: 50%; animation: spin .7s linear infinite; display: inline-block; vertical-align: middle; margin-right: 6px; }
     @keyframes spin { to { transform: rotate(360deg); } }
     .pag { display: flex; align-items: center; justify-content: space-between; margin-top: 16px; gap: 10px; flex-wrap: wrap; }
     .pag-inf { font-size: 13px; color: var(--mt); }
-
-    /* MODAL */
     .overlay { position: fixed; inset: 0; background: rgba(17,24,39,.5); backdrop-filter: blur(3px); z-index: 100; display: flex; align-items: center; justify-content: center; padding: 20px; animation: fi .15s; }
     @keyframes fi { from { opacity: 0; } to { opacity: 1; } }
     .modal { background: #fff; border-radius: 16px; width: 100%; max-width: 580px; box-shadow: 0 25px 60px rgba(0,0,0,.25); animation: su .2s; overflow: hidden; }
+    .modal-sm { max-width: 440px; }
     @keyframes su { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
     .modal-hdr { display: flex; align-items: flex-start; gap: 12px; padding: 18px 20px 14px; border-bottom: 1px solid var(--br); background: #fff; }
     .modal-av { width: 40px; height: 40px; border-radius: 10px; background: linear-gradient(135deg, #c0001a, #7a0010); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; flex-shrink: 0; }
@@ -94,22 +96,20 @@
     .c-cnpj { font-size: 10px; font-weight: 600; color: var(--mt); background: var(--s2); border-radius: 4px; padding: 2px 6px; border: 1px solid var(--br); }
     .close-btn { background: var(--s2); border: 1px solid var(--br); border-radius: 8px; width: 30px; height: 30px; cursor: pointer; font-size: 13px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; transition: all .15s; }
     .close-btn:hover { background: var(--redl); color: var(--red); border-color: var(--red); }
-
-    /* MODAL BODY — layout compacto */
     .modal-body { padding: 16px 20px; }
     .modal-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
     .modal-row-full { margin-bottom: 12px; }
     .sec-title { font-size: 10px; font-weight: 700; color: var(--mt); text-transform: uppercase; letter-spacing: .6px; margin-bottom: 10px; padding-bottom: 6px; border-bottom: 1px solid var(--br); }
-    .fg-sm { }
     .fg-sm label { display: block; font-size: 10px; font-weight: 600; color: var(--mt); margin-bottom: 4px; text-transform: uppercase; letter-spacing: .4px; }
-    .fg-sm input { width: 100%; border: 1.5px solid var(--br); border-radius: 7px; padding: 8px 11px; font-size: 14px; font-family: 'Inter', sans-serif; font-weight: 600; color: var(--ac); background: var(--s2); outline: none; transition: border .2s; }
-    .fg-sm input:focus { border-color: var(--ac); background: #fff; }
-    .fg-sm input[type="date"] { font-size: 13px; font-weight: 400; color: var(--tx); }
+    .fg-sm input, .fg-sm select { width: 100%; border: 1.5px solid var(--br); border-radius: 7px; padding: 8px 11px; font-size: 14px; font-family: 'Inter', sans-serif; font-weight: 600; color: var(--ac); background: var(--s2); outline: none; transition: border .2s; }
+    .fg-sm input:focus, .fg-sm select:focus { border-color: var(--ac); background: #fff; }
+    .fg-sm input[type="date"], .fg-sm input[type="password"], .fg-sm input[type="text"] { font-size: 13px; font-weight: 400; color: var(--tx); }
     .fg-sm textarea { width: 100%; border: 1.5px solid var(--br); border-radius: 7px; padding: 8px 11px; font-size: 13px; font-family: 'Inter', sans-serif; color: var(--tx); background: var(--s2); outline: none; transition: border .2s; resize: none; }
     .fg-sm textarea:focus { border-color: var(--ac); background: #fff; }
     .field-ro { font-size: 18px; font-weight: 700; padding: 8px 11px; background: var(--s2); border-radius: 7px; color: var(--ac); font-family: 'Inter', sans-serif; }
-    .ro-block { display: flex; flex-direction: column; gap: 3px; }
-    .ro-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .4px; color: var(--mt); }
+    .modal-loading { display: flex; align-items: center; gap: 10px; padding: 20px 0; color: var(--mt); font-size: 14px; }
+    .ro-block { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+    .ro-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--mt); }
     .ro-val { font-size: 13px; color: var(--tx2); background: var(--s2); border-radius: 7px; padding: 8px 11px; }
     .anot-txt { font-size: 13px; color: var(--tx2); line-height: 1.5; white-space: pre-wrap; background: var(--s2); border-radius: 7px; padding: 8px 11px; }
     .sem-analise { font-size: 13px; color: var(--mt); background: var(--s2); border-radius: 8px; padding: 10px 12px; }
@@ -118,7 +118,16 @@
     .msg-ok { background: var(--gl); color: var(--g); }
     .msg-err { background: var(--redl); color: var(--red); }
     .modal-ftr { display: flex; gap: 10px; justify-content: flex-end; padding: 12px 20px; border-top: 1px solid var(--br); margin-top: 12px; }
-    .spinner-sm { width: 16px; height: 16px; border: 2px solid var(--br); border-top-color: var(--ac); border-radius: 50%; animation: spin .7s linear infinite; display: inline-block; margin-right: 6px; vertical-align: middle; }
+
+    /* USUÁRIOS */
+    .usr-card { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid var(--br); transition: background .12s; }
+    .usr-card:last-child { border-bottom: none; }
+    .usr-card:hover { background: var(--s2); }
+    .usr-info { display: flex; align-items: center; gap: 12px; }
+    .usr-av { width: 36px; height: 36px; border-radius: 8px; background: linear-gradient(135deg, #c0001a, #7a0010); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; flex-shrink: 0; }
+    .usr-login { font-weight: 600; font-size: 14px; }
+    .usr-actions { display: flex; gap: 8px; align-items: center; }
+    .tag-inativo { background: var(--s2); color: var(--mt); border-radius: 6px; padding: 2px 8px; font-size: 11px; border: 1px solid var(--br); }
 
     @media (max-width: 640px) {
       .td-rz, thead th:nth-child(3), tbody td:nth-child(3),
@@ -137,8 +146,7 @@
     <div class="fg"><label>Usuário</label><input id="inp-login" placeholder="seu.login" /></div>
     <div class="fg"><label>Senha</label><input id="inp-senha" type="password" placeholder="••••••••" /></div>
     <div id="login-erro" class="msg-erro-box hidden"></div>
-    <button class="btn-primary w100" onclick="fazerLogin()">Entrar</button>
-    <div class="login-hint"><strong>Usuários:</strong> admin / ana / carlos &nbsp;·&nbsp; Senha: login + 123</div>
+    <button class="btn-primary w100" id="btn-entrar" onclick="fazerLogin()">Entrar</button>
   </div>
 </div>
 
@@ -158,39 +166,51 @@
     </div>
   </header>
 
-  <div class="search-bar">
-    <div class="search-wrap">
-      <span class="si">🔍</span>
-      <input id="inp-busca" placeholder="Buscar por nome, fantasia, CNPJ ou código..." onkeydown="if(event.key==='Enter') buscar()" />
+  <!-- ABAS -->
+  <div class="nav-tabs">
+    <button class="nav-tab active" id="tab-clientes" onclick="mudarAba('clientes')">👥 Clientes</button>
+    <button class="nav-tab hidden" id="tab-usuarios" onclick="mudarAba('usuarios')">⚙️ Usuários</button>
+  </div>
+
+  <!-- ABA CLIENTES -->
+  <div id="aba-clientes">
+    <div class="search-bar">
+      <div class="search-wrap">
+        <span class="si">🔍</span>
+        <input id="inp-busca" placeholder="Buscar por nome, fantasia, CNPJ ou código..." onkeydown="if(event.key==='Enter') buscar()" />
+      </div>
+      <button class="btn-primary" onclick="buscar()">Buscar</button>
     </div>
-    <button class="btn-primary" onclick="buscar()">Buscar</button>
+    <div id="aviso" class="aviso hidden"></div>
+    <div class="table-wrap">
+      <div id="estado" class="state-center"><div class="spinner"></div><p>Carregando...</p></div>
+      <table id="tabela" class="hidden">
+        <thead><tr>
+          <th>Código</th><th>Fantasia</th><th>Razão Social</th>
+          <th>CNPJ/CPF</th><th id="th-analise">Análise</th><th></th>
+        </tr></thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+    <div class="pag">
+      <button class="btn-sec" id="btn-ant" onclick="mudarPagina(-1)" disabled>← Anterior</button>
+      <span class="pag-inf" id="pag-inf">Página 1 · 100 por página</span>
+      <button class="btn-sec" id="btn-prox" onclick="mudarPagina(1)">Próxima →</button>
+    </div>
   </div>
 
-  <div id="aviso" class="aviso hidden"></div>
-
-  <div class="table-wrap">
-    <div id="estado" class="state-center"><div class="spinner"></div><p>Carregando...</p></div>
-    <table id="tabela" class="hidden">
-      <thead><tr>
-        <th>Código</th>
-        <th>Fantasia</th>
-        <th>Razão Social</th>
-        <th>CNPJ/CPF</th>
-        <th id="th-analise">Análise</th>
-        <th></th>
-      </tr></thead>
-      <tbody id="tbody"></tbody>
-    </table>
-  </div>
-
-  <div class="pag">
-    <button class="btn-sec" id="btn-ant" onclick="mudarPagina(-1)" disabled>← Anterior</button>
-    <span class="pag-inf" id="pag-inf">Página 1 · 100 por página</span>
-    <button class="btn-sec" id="btn-prox" onclick="mudarPagina(1)">Próxima →</button>
+  <!-- ABA USUÁRIOS -->
+  <div id="aba-usuarios" class="hidden">
+    <div style="display:flex;justify-content:flex-end;margin-bottom:14px;">
+      <button class="btn-primary" onclick="abrirModalNovoUsuario()">+ Novo Usuário</button>
+    </div>
+    <div class="table-wrap" id="lista-usuarios">
+      <div class="state-center"><div class="spinner"></div></div>
+    </div>
   </div>
 </div>
 
-<!-- MODAL -->
+<!-- MODAL CLIENTE -->
 <div id="modal-overlay" class="overlay hidden" onclick="fecharModal(event)">
   <div class="modal">
     <div class="modal-hdr">
@@ -206,7 +226,7 @@
       <button class="close-btn" onclick="document.getElementById('modal-overlay').classList.add('hidden')">✕</button>
     </div>
     <div class="modal-body" id="modal-body">
-      <div class="state-center"><div class="spinner"></div></div>
+      <div class="modal-loading"><div class="spinner-sm"></div> Carregando...</div>
     </div>
     <div id="m-audit" class="audit-row hidden"></div>
     <div id="m-msg" class="modal-msg hidden"></div>
@@ -217,51 +237,104 @@
   </div>
 </div>
 
-<script>
-const USUARIOS = [
-  { id:1, nome:"Administrador", login:"admin",  senha:"admin123",  perfil:"admin" },
-  { id:2, nome:"Ana Paula",     login:"ana",    senha:"ana123",    perfil:"analista" },
-  { id:3, nome:"Carlos Souza",  login:"carlos", senha:"carlos123", perfil:"visualizador" },
-];
+<!-- MODAL USUÁRIO -->
+<div id="modal-usr-overlay" class="overlay hidden" onclick="fecharModalUsr(event)">
+  <div class="modal modal-sm">
+    <div class="modal-hdr">
+      <div class="modal-av">👤</div>
+      <div class="modal-hdr-info">
+        <h2 id="mu-titulo">Novo Usuário</h2>
+        <p class="c-razao">Defina login, senha e permissão</p>
+      </div>
+      <button class="close-btn" onclick="document.getElementById('modal-usr-overlay').classList.add('hidden')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="fg-sm modal-row-full"><label>Login</label><input type="text" id="mu-login" placeholder="ex: joao.silva" /></div>
+      <div class="fg-sm modal-row-full"><label>Senha</label><input type="password" id="mu-senha" placeholder="••••••••" /></div>
+      <div class="fg-sm modal-row-full">
+        <label>Perfil</label>
+        <select id="mu-perfil">
+          <option value="visualizador">Visualizador — só leitura</option>
+          <option value="analista">Analista — leitura e análise de crédito</option>
+          <option value="admin">Admin — acesso total</option>
+        </select>
+      </div>
+    </div>
+    <div id="mu-msg" class="modal-msg hidden"></div>
+    <div class="modal-ftr">
+      <button class="btn-sec" onclick="document.getElementById('modal-usr-overlay').classList.add('hidden')">Cancelar</button>
+      <button class="btn-primary" id="btn-salvar-usr" onclick="salvarUsuario()">Salvar</button>
+    </div>
+  </div>
+</div>
 
+<script>
 let usuarioAtual=null, paginaAtual=1, buscaAtual="", temProxima=false, clienteSel=null, modoDemo=false;
-let analisesBD={};
+let analisesBD={}, usuarioEditandoId=null;
 
 const fmtBRL=v=>new Intl.NumberFormat("pt-BR",{style:"currency",currency:"BRL",maximumFractionDigits:0}).format(v||0);
-const fmtLimiteInput=v=>new Intl.NumberFormat("pt-BR",{minimumFractionDigits:0,maximumFractionDigits:0}).format(v||0);
-function mascaraLimite(el){
-  let v=el.value.replace(/\D/g,"");
-  if(!v){el.value="";return;}
-  el.value=new Intl.NumberFormat("pt-BR",{minimumFractionDigits:0,maximumFractionDigits:0}).format(parseInt(v));
-}
+const fmtLimiteInput=v=>new Intl.NumberFormat("pt-BR",{minimumFractionDigits:0,maximumFractionDigits:0}).format(Math.round(parseFloat(v)||0));
 const fmtData=iso=>{if(!iso)return"—";const[y,m,d]=iso.split("-");return`${d}/${m}/${y}`};
 const ini=n=>{if(!n)return"?";const p=n.trim().split(" ").filter(Boolean);return((p[0]?.[0]||"")+(p[1]?.[0]||"")).toUpperCase()};
 const el=id=>document.getElementById(id);
 const limparDoc=d=>String(d||"").replace(/[.\-\/]/g,"");
 
-const DEMO=Array.from({length:20},(_,i)=>({
-  id:1000+i, codigo:`C${String(1000+i).padStart(4,"0")}`,
-  cpf_cnpj:["51.251.441/0001-05","21.604.056/0001-25","46.255.795/0001-80","12.345.678/0001-90","98.765.432/0001-10","11.222.333/0001-44","55.666.777/0001-88","33.444.555/0001-66","77.888.999/0001-22","44.555.666/0001-33","66.777.888/0001-11","22.333.444/0001-55","88.999.000/0001-77","99.000.111/0001-99","10.111.222/0001-88","20.222.333/0001-77","30.333.444/0001-66","40.444.555/0001-55","50.555.666/0001-44","60.666.777/0001-33"][i],
-  nome:["Metalúrgica Souza Ltda","Distribuidora Norte S.A.","Papelaria Central Eireli","Tech Solutions Ltda","Supermercado Família Eireli","Construtora Horizonte S.A.","Farmácia Popular Ltda","Agropecuária Vale Verde","Academia Corpo em Forma","Transportadora Rápida S.A.","Clínica Médica Total Ltda","Escola Dom Pedro II","Indústria Plástica Ltda","Atacadão Ferragens","Gráfica Central","Posto BH","Floricultura Rosas","Auto Peças Sul","Gelato Fino Ltda","Madeireira São José"][i],
-  fantasia:["MetalSouza","DistriNorte","PapelCentral","TechSol","Fam.Oliveira","Horizonte","FarmaPopular","ValeVerde","CorpoForma","TranspRápida","SaúdeTotal","DomPedroII","PlásticaBV","AtacadãoF","GráficaC","PosoBH","Floricultura","AutoPeças","GelatoFino","MadeireiraSJ"][i],
-  limiteCredito:[85000,120000,15000,200000,45000,350000,30000,95000,12000,180000,60000,25000,75000,130000,42000,90000,8000,55000,18000,110000][i],
-}));
+function mascaraLimite(input){
+  let v=input.value.replace(/\D/g,"");
+  if(!v){input.value="";return;}
+  input.value=new Intl.NumberFormat("pt-BR",{minimumFractionDigits:0,maximumFractionDigits:0}).format(parseInt(v));
+}
 
-function fazerLogin(){
-  const login=el("inp-login").value.trim(),senha=el("inp-senha").value;
-  const u=USUARIOS.find(x=>x.login===login&&x.senha===senha);
-  if(!u){el("login-erro").textContent="Usuário ou senha incorretos.";el("login-erro").classList.remove("hidden");return;}
-  usuarioAtual=u;sessionStorage.setItem("sessao",JSON.stringify(u));
+const DEMO=Array.from({length:20},(_,i)=>({id:1000+i,codigo:`C${String(1000+i).padStart(4,"0")}`,cpf_cnpj:["51.251.441/0001-05","21.604.056/0001-25","46.255.795/0001-80","12.345.678/0001-90","98.765.432/0001-10","11.222.333/0001-44","55.666.777/0001-88","33.444.555/0001-66","77.888.999/0001-22","44.555.666/0001-33","66.777.888/0001-11","22.333.444/0001-55","88.999.000/0001-77","99.000.111/0001-99","10.111.222/0001-88","20.222.333/0001-77","30.333.444/0001-66","40.444.555/0001-55","50.555.666/0001-44","60.666.777/0001-33"][i],nome:["Metalúrgica Souza Ltda","Distribuidora Norte S.A.","Papelaria Central Eireli","Tech Solutions Ltda","Supermercado Família Eireli","Construtora Horizonte S.A.","Farmácia Popular Ltda","Agropecuária Vale Verde","Academia Corpo em Forma","Transportadora Rápida S.A.","Clínica Médica Total Ltda","Escola Dom Pedro II","Indústria Plástica Ltda","Atacadão Ferragens","Gráfica Central","Posto BH","Floricultura Rosas","Auto Peças Sul","Gelato Fino Ltda","Madeireira São José"][i],fantasia:["MetalSouza","DistriNorte","PapelCentral","TechSol","Fam.Oliveira","Horizonte","FarmaPopular","ValeVerde","CorpoForma","TranspRápida","SaúdeTotal","DomPedroII","PlásticaBV","AtacadãoF","GráficaC","PosoBH","Floricultura","AutoPeças","GelatoFino","MadeireiraSJ"][i]}));
+
+// LOGIN via Supabase
+async function fazerLogin(){
+  const login=el("inp-login").value.trim();
+  const senha=el("inp-senha").value;
+  if(!login||!senha){el("login-erro").textContent="Preencha login e senha.";el("login-erro").classList.remove("hidden");return;}
+  const btn=el("btn-entrar");
+  btn.disabled=true;btn.innerHTML='<span class="spinner-sm"></span>Verificando...';
+  el("login-erro").classList.add("hidden");
+  try{
+    const res=await fetch(`/api/contatos?login=${encodeURIComponent(login)}&senha=${encodeURIComponent(senha)}`);
+    const data=await res.json();
+    if(!res.ok||!data.usuario){el("login-erro").textContent="Usuário ou senha incorretos.";el("login-erro").classList.remove("hidden");return;}
+    const u=data.usuario;
+    usuarioAtual=u;
+    sessionStorage.setItem("sessao",JSON.stringify(u));
+    iniciarApp(u);
+  }catch(e){
+    // Fallback demo
+    const DEMO_USERS=[{id:1,login:"admin",senha:"admin123",perfil:"admin"},{id:2,login:"ana",senha:"ana123",perfil:"analista"},{id:3,login:"carlos",senha:"carlos123",perfil:"visualizador"}];
+    const u=DEMO_USERS.find(x=>x.login===login&&x.senha===senha);
+    if(u){usuarioAtual=u;sessionStorage.setItem("sessao",JSON.stringify(u));iniciarApp(u);}
+    else{el("login-erro").textContent="Usuário ou senha incorretos.";el("login-erro").classList.remove("hidden");}
+  }finally{btn.disabled=false;btn.textContent="Entrar";}
+}
+
+function iniciarApp(u){
   el("tela-login").classList.add("hidden");el("tela-app").classList.remove("hidden");
-  el("usr-nome").textContent=u.nome;
-  const bp={admin:["Admin","bp-admin"],analista:["Analista","bp-analista"],visualizador:["Visualizador","bp-viz"]}[u.perfil];
+  el("usr-nome").textContent=u.login;
+  const bp={admin:["Admin","bp-admin"],analista:["Analista","bp-analista"],visualizador:["Visualizador","bp-viz"]}[u.perfil]||["?","bp-viz"];
   el("usr-perfil").textContent=bp[0];el("usr-perfil").className=`bp ${bp[1]}`;
   if(u.perfil==="visualizador")el("th-analise").style.display="none";
+  if(u.perfil==="admin")el("tab-usuarios").classList.remove("hidden");
   carregarClientes(1,"");
 }
+
 function fazerLogout(){sessionStorage.removeItem("sessao");usuarioAtual=null;el("tela-app").classList.add("hidden");el("tela-login").classList.remove("hidden");el("inp-login").value="";el("inp-senha").value="";}
 el("inp-senha").addEventListener("keydown",e=>{if(e.key==="Enter")fazerLogin()});
 
+// ABAS
+function mudarAba(aba){
+  el("aba-clientes").classList.toggle("hidden",aba!=="clientes");
+  el("aba-usuarios").classList.toggle("hidden",aba!=="usuarios");
+  el("tab-clientes").classList.toggle("active",aba==="clientes");
+  el("tab-usuarios").classList.toggle("active",aba==="usuarios");
+  if(aba==="usuarios")carregarUsuarios();
+}
+
+// CLIENTES
 async function carregarClientes(pagina,pesquisa){
   paginaAtual=pagina;buscaAtual=pesquisa;
   el("estado").innerHTML='<div class="spinner"></div><p>Consultando Olist ERP...</p>';
@@ -270,16 +343,12 @@ async function carregarClientes(pagina,pesquisa){
     const res=await fetch(`/api/contatos?pagina=${pagina}&pesquisa=${encodeURIComponent(pesquisa||" ")}`);
     if(!res.ok)throw new Error(`Erro ${res.status}`);
     const data=await res.json();
-    const lista=data.itens||[];
     analisesBD=data.analises||{};
-    modoDemo=false;
-    renderTabela(lista);
-    temProxima=lista.length===100;
+    modoDemo=false;renderTabela(data.itens||[]);temProxima=(data.itens||[]).length===100;
   }catch(e){
     modoDemo=true;el("badge-demo").classList.remove("hidden");
-    el("aviso").textContent=`⚠️ Não foi possível conectar à API Olist. Exibindo dados demonstrativos. Erro: ${e.message}`;
-    el("aviso").classList.remove("hidden");
-    renderTabela(DEMO);temProxima=false;
+    el("aviso").textContent=`⚠️ Não foi possível conectar à API Olist. Exibindo dados demonstrativos.`;
+    el("aviso").classList.remove("hidden");renderTabela(DEMO);temProxima=false;
   }
   el("btn-ant").disabled=paginaAtual<=1;el("btn-prox").disabled=!temProxima;
   el("pag-inf").textContent=`Página ${paginaAtual} · 100 registros por página`;
@@ -295,13 +364,7 @@ function renderTabela(lista){
     const chave=limparDoc(cnpj)||String(id);
     const an=analisesBD[chave];
     const tr=document.createElement("tr");
-    tr.innerHTML=`
-      <td class="td-cod">${c.codigo||id}</td>
-      <td><div class="td-cli"><span class="av">${ini(fantasia||nome)}</span><span>${fantasia||"—"}</span></div></td>
-      <td class="td-rz">${nome}</td>
-      <td class="td-cnpj">${cnpj||"—"}</td>
-      ${podeVer?`<td>${an?`<span class="ba">✓ ${fmtData(an.data_analise)}</span>`:`<span class="bp2">Pendente</span>`}</td>`:""}
-      <td><span class="arr">→</span></td>`;
+    tr.innerHTML=`<td class="td-cod">${c.codigo||id}</td><td><div class="td-cli"><span class="av">${ini(fantasia||nome)}</span><span>${fantasia||"—"}</span></div></td><td class="td-rz">${nome}</td><td class="td-cnpj">${cnpj||"—"}</td>${podeVer?`<td>${an?`<span class="ba">✓ ${fmtData(an.data_analise)}</span>`:`<span class="bp2">Pendente</span>`}</td>`:""}<td><span class="arr">→</span></td>`;
     tr.onclick=()=>abrirModal(c);tbody.appendChild(tr);
   });
 }
@@ -315,64 +378,24 @@ async function abrirModal(c){
   const chave=limparDoc(cnpj)||String(id);
   const an=analisesBD[chave];
   const podeEditar=usuarioAtual.perfil!=="visualizador";
-
-  el("m-av").textContent=ini(fantasia||nome);
-  el("m-titulo").textContent=fantasia||nome;
-  el("m-razao").textContent=nome;
-  el("m-cod").textContent=`#${c.codigo||id}`;
+  el("m-av").textContent=ini(fantasia||nome);el("m-titulo").textContent=fantasia||nome;
+  el("m-razao").textContent=nome;el("m-cod").textContent=`#${c.codigo||id}`;
   el("m-cnpj").textContent=cnpj||"";
-  el("m-audit").classList.add("hidden");
-  el("m-msg").classList.add("hidden");
-  el("btn-salvar").classList.add("hidden");
-  el("modal-body").innerHTML='<div class="state-center"><div class="spinner"></div></div>';
+  el("m-audit").classList.add("hidden");el("m-msg").classList.add("hidden");el("btn-salvar").classList.add("hidden");
+  el("modal-body").innerHTML='<div class="modal-loading"><div class="spinner-sm"></div> Carregando dados do cliente...</div>';
   el("modal-overlay").classList.remove("hidden");
-
-  // Busca limite do cliente
   let limite=0;
-    // Garante que limite é número inteiro sem decimais
-    const parseLimite = v => Math.round(parseFloat(v)||0);
-  if(!modoDemo){
-    try{
-      const res=await fetch(`/api/contatos?id=${id}`);
-      if(res.ok){const data=await res.json();limite=parseFloat(data.contato?.limite_credito)||0;}
-    }catch{}
-  } else { limite=c.limiteCredito||0; }
-
-  // Monta modal compacto
+  if(!modoDemo){try{const res=await fetch(`/api/contatos?id=${id}`);if(res.ok){const data=await res.json();limite=Math.round(parseFloat(data.contato?.limite_credito)||0);}}catch{}}
+  else{limite=Math.round(c.limiteCredito||0);}
   let html=`<div class="sec-title">💳 Limite &amp; Análise de Crédito</div>`;
-
   if(podeEditar){
-    html+=`
-    <div class="modal-row">
-      <div class="fg-sm">
-        <label>Limite de Crédito (R$)</label>
-        <input id="m-limite" value="${fmtLimiteInput(parseLimite(limite))}" placeholder="0" oninput="mascaraLimite(this)" />
-      </div>
-      <div class="fg-sm">
-        <label>Data da Última Análise</label>
-        <input type="date" id="m-data" value="${an?.data_analise||''}" />
-      </div>
-    </div>
-    <div class="modal-row-full fg-sm">
-      <label>Anotações da Análise</label>
-      <textarea id="m-anotacoes" rows="4" placeholder="Descreva a análise realizada, documentos consultados, score, observações...">${an?.anotacoes||''}</textarea>
-    </div>`;
-  } else {
-    html+=`
-    <div class="modal-row">
-      <div class="ro-block"><span class="ro-label">Limite de Crédito</span><span class="ro-val">${fmtBRL(limite)}</span></div>
-      ${an?`<div class="ro-block"><span class="ro-label">Data da Análise</span><span class="ro-val">${fmtData(an.data_analise)}</span></div>`:`<div></div>`}
-    </div>
-    ${an?`<div class="modal-row-full ro-block"><span class="ro-label">Anotações</span><p class="anot-txt">${an.anotacoes||'—'}</p></div>`:`<p class="sem-analise">Nenhuma análise registrada.</p>`}`;
+    html+=`<div class="modal-row"><div class="fg-sm"><label>Limite de Crédito (R$)</label><input id="m-limite" value="${fmtLimiteInput(limite)}" placeholder="0" oninput="mascaraLimite(this)" /></div><div class="fg-sm"><label>Data da Última Análise</label><input type="date" id="m-data" value="${an?.data_analise||''}" /></div></div><div class="modal-row-full fg-sm"><label>Anotações da Análise</label><textarea id="m-anotacoes" rows="4" placeholder="Descreva a análise realizada, documentos consultados, score, observações...">${an?.anotacoes||''}</textarea></div>`;
+  }else{
+    html+=`<div class="modal-row"><div class="ro-block"><span class="ro-label">Limite de Crédito</span><span class="ro-val">${fmtBRL(limite)}</span></div>${an?`<div class="ro-block"><span class="ro-label">Data da Análise</span><span class="ro-val">${fmtData(an.data_analise)}</span></div>`:`<div></div>`}</div>${an?`<div class="modal-row-full ro-block"><span class="ro-label">Anotações</span><p class="anot-txt">${an.anotacoes||'—'}</p></div>`:`<p class="sem-analise">Nenhuma análise registrada.</p>`}`;
   }
-
   el("modal-body").innerHTML=html;
-
-  if(an?.ultimo_usuario){
-    el("m-audit").innerHTML=`<span>👤 <strong>${an.ultimo_usuario}</strong></span><span>${new Date(an.ultima_alteracao).toLocaleString("pt-BR")}</span>`;
-    el("m-audit").classList.remove("hidden");
-  }
-  if(podeEditar) el("btn-salvar").classList.remove("hidden");
+  if(an?.ultimo_usuario){el("m-audit").innerHTML=`<span>👤 <strong>${an.ultimo_usuario}</strong></span><span>${new Date(an.ultima_alteracao).toLocaleString("pt-BR")}</span>`;el("m-audit").classList.remove("hidden");}
+  if(podeEditar)el("btn-salvar").classList.remove("hidden");
 }
 
 function fecharModal(e){if(e.target===el("modal-overlay"))el("modal-overlay").classList.add("hidden");}
@@ -381,51 +404,106 @@ async function salvarCliente(){
   const btn=el("btn-salvar");btn.disabled=true;btn.innerHTML='<span class="spinner-sm"></span>Salvando...';
   el("m-msg").classList.add("hidden");
   try{
-    const limiteInput=el("m-limite");
+    const limiteInput=document.querySelector("#modal-body input[id='m-limite']");
     if(!limiteInput)throw new Error("Campo de limite não encontrado.");
     const limiteNum=parseInt(limiteInput.value.replace(/\./g,"").replace(/,/g,""))||0;
-    if(isNaN(limiteNum))throw new Error("Valor de limite inválido.");
-    const dataAnalise=el("m-data")?.value||"";
-    const anotacoes=el("m-anotacoes")?.value||"";
-    const cnpj=clienteSel.cpf_cnpj||"";
-
+    const dataAnalise=document.querySelector("#modal-body input[type='date']")?.value||"";
+    const anotacoes=document.querySelector("#modal-body textarea")?.value||"";
+    const cnpj=clienteSel.cpf_cnpj||clienteSel.cpfCnpj||"";
     if(!modoDemo){
-      const res=await fetch("/api/salvar",{
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({
-          id:clienteSel.id,
-          nome:clienteSel.nome,
-          cpfCnpj:cnpj,
-          limiteCredito:limiteNum,
-          dataAnalise,
-          anotacoes,
-          ultimoUsuario:usuarioAtual.nome
-        })
-      });
+      const res=await fetch("/api/salvar",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:clienteSel.id,nome:clienteSel.nome,cpfCnpj:cnpj,limiteCredito:limiteNum,dataAnalise,anotacoes,ultimoUsuario:usuarioAtual.login})});
       if(!res.ok){const err=await res.json();throw new Error(err.erro||`Erro ${res.status}`);}
     }
-
-    // Atualiza cache local
     const chave=limparDoc(cnpj)||String(clienteSel.id);
-    analisesBD[chave]={
-      data_analise:dataAnalise,
-      anotacoes,
-      ultimo_usuario:usuarioAtual.nome,
-      ultima_alteracao:new Date().toISOString()
-    };
-
-    const d=el("m-msg");
-    d.textContent=modoDemo?"✓ Salvo (modo demo).":"✓ Salvo com sucesso no Olist ERP e banco de dados!";
-    d.className="modal-msg msg-ok";d.classList.remove("hidden");
-    setTimeout(()=>{el("modal-overlay").classList.add("hidden");carregarClientes(paginaAtual,buscaAtual);},1800);
-  }catch(e){
-    const d=el("m-msg");d.textContent=`Erro: ${e.message}`;d.className="modal-msg msg-err";d.classList.remove("hidden");
-  }finally{btn.disabled=false;btn.textContent="Salvar Alterações";}
+    analisesBD[chave]={data_analise:dataAnalise,anotacoes,ultimo_usuario:usuarioAtual.login,ultima_alteracao:new Date().toISOString()};
+    const d=el("m-msg");d.textContent=modoDemo?"✓ Salvo (modo demo).":"✓ Salvo com sucesso!";d.className="modal-msg msg-ok";d.classList.remove("hidden");
+    setTimeout(()=>{el("modal-overlay").classList.add("hidden");carregarClientes(paginaAtual,buscaAtual);},1500);
+  }catch(e){const d=el("m-msg");d.textContent=`Erro: ${e.message}`;d.className="modal-msg msg-err";d.classList.remove("hidden");}
+  finally{btn.disabled=false;btn.textContent="Salvar Alterações";}
 }
 
-(function(){try{const s=JSON.parse(sessionStorage.getItem("sessao"));if(s){el("inp-login").value=s.login;el("inp-senha").value=s.senha;fazerLogin();}}catch{}})();
+// USUÁRIOS
+async function carregarUsuarios(){
+  el("lista-usuarios").innerHTML='<div class="state-center"><div class="spinner"></div></div>';
+  try{
+    const res=await fetch("/api/usuarios");
+    const lista=await res.json();
+    if(!lista.length){el("lista-usuarios").innerHTML='<div class="state-center">Nenhum usuário cadastrado.</div>';return;}
+    el("lista-usuarios").innerHTML=lista.map(u=>`
+      <div class="usr-card">
+        <div class="usr-info">
+          <div class="usr-av">${(u.login[0]||"?").toUpperCase()}</div>
+          <div>
+            <div class="usr-login">${u.login} ${!u.ativo?'<span class="tag-inativo">Inativo</span>':''}</div>
+            <span class="bp bp-${u.perfil==='admin'?'admin':u.perfil==='analista'?'analista':'viz'}">${u.perfil}</span>
+          </div>
+        </div>
+        <div class="usr-actions">
+          <button class="btn-sec" onclick="abrirModalEditarUsuario(${u.id},'${u.login}','${u.perfil}',${u.ativo})">Editar</button>
+          ${u.login!=='admin'?`<button class="btn-danger" onclick="excluirUsuario(${u.id},'${u.login}')">Excluir</button>`:''}
+        </div>
+      </div>`).join("");
+  }catch(e){el("lista-usuarios").innerHTML=`<div class="state-center">Erro ao carregar usuários.</div>`;}
+}
+
+function abrirModalNovoUsuario(){
+  usuarioEditandoId=null;
+  el("mu-titulo").textContent="Novo Usuário";
+  el("mu-login").value="";el("mu-senha").value="";el("mu-perfil").value="visualizador";
+  el("mu-login").disabled=false;
+  el("mu-msg").classList.add("hidden");
+  el("modal-usr-overlay").classList.remove("hidden");
+}
+
+function abrirModalEditarUsuario(id,login,perfil,ativo){
+  usuarioEditandoId=id;
+  el("mu-titulo").textContent="Editar Usuário";
+  el("mu-login").value=login;el("mu-senha").value="";el("mu-perfil").value=perfil;
+  el("mu-login").disabled=true;
+  el("mu-msg").classList.add("hidden");
+  el("modal-usr-overlay").classList.remove("hidden");
+}
+
+function fecharModalUsr(e){if(e.target===el("modal-usr-overlay"))el("modal-usr-overlay").classList.add("hidden");}
+
+async function salvarUsuario(){
+  const btn=el("btn-salvar-usr");
+  btn.disabled=true;btn.innerHTML='<span class="spinner-sm"></span>Salvando...';
+  el("mu-msg").classList.add("hidden");
+  const login=el("mu-login").value.trim();
+  const senha=el("mu-senha").value;
+  const perfil=el("mu-perfil").value;
+  try{
+    if(!usuarioEditandoId&&(!login||!senha))throw new Error("Login e senha são obrigatórios.");
+    if(!perfil)throw new Error("Selecione um perfil.");
+    const body=usuarioEditandoId
+      ?{id:usuarioEditandoId,...(senha?{senha}:{}),perfil}
+      :{login,senha,perfil};
+    const res=await fetch("/api/usuarios",{method:usuarioEditandoId?"PUT":"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+    const data=await res.json();
+    if(!res.ok)throw new Error(data.erro||"Erro ao salvar");
+    el("modal-usr-overlay").classList.add("hidden");
+    carregarUsuarios();
+  }catch(e){const d=el("mu-msg");d.textContent=e.message;d.className="modal-msg msg-err";d.classList.remove("hidden");}
+  finally{btn.disabled=false;btn.textContent="Salvar";}
+}
+
+async function excluirUsuario(id,login){
+  if(!confirm(`Excluir o usuário "${login}"?`))return;
+  try{
+    const res=await fetch("/api/usuarios",{method:"DELETE",headers:{"Content-Type":"application/json"},body:JSON.stringify({id})});
+    if(!res.ok){const d=await res.json();throw new Error(d.erro);}
+    carregarUsuarios();
+  }catch(e){alert("Erro ao excluir: "+e.message);}
+}
+
+// RESTAURAR SESSÃO
+(function(){
+  try{
+    const s=JSON.parse(sessionStorage.getItem("sessao"));
+    if(s){usuarioAtual=s;iniciarApp(s);}
+  }catch{}
+})();
 </script>
 </body>
 </html>
-
