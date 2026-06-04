@@ -30,6 +30,22 @@ function get(hostname, path, headers) {
   });
 }
 
+const supabaseHeaders = {
+  apikey: SUPABASE_KEY,
+  Authorization: "Bearer " + SUPABASE_KEY,
+  "Content-Type": "application/json",
+};
+
+async function buscarUsuario(login, senha) {
+  const supaHost = SUPABASE_URL.replace("https://", "");
+  const r = await get(supaHost,
+    `/rest/v1/usuarios?login=eq.${encodeURIComponent(login)}&senha=eq.${encodeURIComponent(senha)}&ativo=eq.true&select=id,login,perfil`,
+    supabaseHeaders
+  );
+  const data = parseJSON(r.text);
+  return Array.isArray(data) && data.length > 0 ? data[0] : null;
+}
+
 function parseJSON(text) {
   try { return JSON.parse(text); } catch { return {}; }
 }
@@ -84,6 +100,13 @@ module.exports = async (req, res) => {
       const r = await post("api.tiny.com.br", "/api2/contato.obter.php", params.toString(), { "Content-Type": "application/x-www-form-urlencoded" });
       const data = parseJSON(r.text);
       return res.status(200).json({ contato: (data.retorno && data.retorno.contato) ? data.retorno.contato : {} });
+    }
+
+    // GET /api/contatos?login=xxx&senha=yyy — autenticar usuário
+    if (req.method === "GET" && req.query.login) {
+      const usuario = await buscarUsuario(req.query.login, req.query.senha);
+      if (!usuario) return res.status(401).json({ erro: "Usuário ou senha incorretos" });
+      return res.status(200).json({ usuario });
     }
 
     return res.status(405).json({ erro: "Método não permitido" });
