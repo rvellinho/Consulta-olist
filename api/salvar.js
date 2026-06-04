@@ -99,7 +99,7 @@ module.exports = async (req, res) => {
 
   try {
     const parsed = parseBody(req.body);
-    const { id, cpfCnpj, limiteCredito, dataAnalise, anotacoes, ultimoUsuario } = parsed;
+    const { id, nome, cpfCnpj, limiteCredito, dataAnalise, anotacoes, ultimoUsuario } = parsed;
 
     if (!id) return res.status(400).json({ erro: "id obrigatorio", recebido: parsed });
 
@@ -110,7 +110,7 @@ module.exports = async (req, res) => {
     const accessToken = await getAccessToken();
 
     // Atualiza limite no Olist via API V3
-    const v3Body = JSON.stringify({ dadosAdicionais: { limiteCredito: limiteFormatado } });
+    const v3Body = JSON.stringify({       nome: nome,       dadosAdicionais: { limiteCredito: limiteFormatado }     });
     const ro = await httpsRequest(
       "PUT",
       "api.tiny.com.br",
