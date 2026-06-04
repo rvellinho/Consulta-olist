@@ -43,7 +43,7 @@ module.exports = async (req, res) => {
   if (req.method !== "POST") return res.status(405).json({ erro: "Método não permitido" });
 
   try {
-    const rawBody = await new Promise((resolve) => {     let d = "";     req.on("data", c => d += c);     req.on("end", () => resolve(d));   });      let parsed = {};   try { parsed = JSON.parse(rawBody); } catch {}   if (!parsed.id && req.body && typeof req.body === "object") parsed = req.body;      const { id, nome, limiteCredito, dataAnalise, anotacoes, ultimoUsuario } = parsed;
+    const rawBody = await new Promise((resolve) => {     let d = "";     req.on("data", c => d += c);     req.on("end", () => resolve(d));   });      let parsed = {};   try { parsed = JSON.parse(rawBody); } catch {}   if (!parsed.id && req.body && typeof req.body === "object") parsed = req.body;      const { id, nome, limiteCredito, dataAnalise, anotacoes, ultimoUsuario } = parsed;      // Diagnóstico temporário   return res.status(200).json({      debug: true,      id,      nome,     limiteCredito,     tipoLimite: typeof limiteCredito,     rawBody: rawBody.substring(0, 200)   });
 
     if (!id) return res.status(400).json({ erro: "id obrigatorio", recebido: req.body });
 
