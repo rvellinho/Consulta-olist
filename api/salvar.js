@@ -1,34 +1,42 @@
-// v6
+// v7 - API V3 com OAuth2
 const https = require("https");
 
-const TOKEN = process.env.OLIST_TOKEN;
+const CLIENT_ID = process.env.OLIST_CLIENT_ID;
+const CLIENT_SECRET = process.env.OLIST_CLIENT_SECRET;
+const REFRESH_TOKEN = process.env.OLIST_REFRESH_TOKEN;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
 
-function httpsPost(hostname, path, body, headers) {
+function httpsRequest(method, hostname, path, body, headers) {
   return new Promise((resolve, reject) => {
-    const req = https.request({ hostname, path, method: "POST", headers }, (res) => {
+    const req = https.request({ hostname, path, method, headers }, (res) => {
       let d = "";
       res.on("data", c => d += c);
       res.on("end", () => resolve({ status: res.statusCode, text: d, headers: res.headers }));
     });
     req.on("error", reject);
-    req.write(body);
+    if (body) req.write(body);
     req.end();
   });
 }
 
-function httpsPatch(hostname, path, body, headers) {
-  return new Promise((resolve, reject) => {
-    const req = https.request({ hostname, path, method: "PATCH", headers }, (res) => {
-      let d = "";
-      res.on("data", c => d += c);
-      res.on("end", () => resolve({ status: res.statusCode, text: d, headers: res.headers }));
-    });
-    req.on("error", reject);
-    req.write(body);
-    req.end();
-  });
+async function getAccessToken() {
+  const body = "grant_type=refresh_token"
+    + "&client_id=" + encodeURIComponent(CLIENT_ID)
+    + "&client_secret=" + encodeURIComponent(CLIENT_SECRET)
+    + "&refresh_token=" + encodeURIComponent(REFRESH_TOKEN);
+
+  const r = await httpsRequest(
+    "POST",
+    "accounts.tiny.com.br",
+    "/realms/tiny/protocol/openid-connect/token",
+    body,
+    { "Content-Type": "application/x-www-form-urlencoded", "Content-Length": Buffer.byteLength(body) }
+  );
+
+  const data = JSON.parse(r.text);
+  if (!data.access_token) throw new Error("Falha ao obter access token: " + r.text);
+  return data.access_token;
 }
 
 function parseJSON(text) {
@@ -42,6 +50,46 @@ function parseBody(reqBody) {
   return {};
 }
 
+async function salvarAnalise(chave, dataAnalise, anotacoes, ultimoUsuario) {
+  const supaHost = SUPABASE_URL.replace("https://", "");
+  const payload = JSON.stringify({
+    cliente_id: chave,
+    data_analise: dataAnalise || null,
+    anotacoes: anotacoes || "",
+    ultimo_usuario: ultimoUsuario,
+    ultima_alteracao: new Date().toISOString(),
+  });
+
+  const ru = await httpsRequest("PATCH", supaHost,
+    "/rest/v1/analises_credito?cliente_id=eq." + chave,
+    payload,
+    {
+      apikey: SUPABASE_KEY,
+      Authorization: "Bearer " + SUPABASE_KEY,
+      "Content-Type": "application/json",
+      "Content-Length": Buffer.byteLength(payload),
+      Prefer: "return=minimal,count=exact",
+    }
+  );
+
+  const countHeader = ru.headers["content-range"];
+  const naoAtualizou = !countHeader || countHeader === "*/0";
+
+  if (naoAtualizou) {
+    await httpsRequest("POST", supaHost,
+      "/rest/v1/analises_credito",
+      payload,
+      {
+        apikey: SUPABASE_KEY,
+        Authorization: "Bearer " + SUPABASE_KEY,
+        "Content-Type": "application/json",
+        "Content-Length": Buffer.byteLength(payload),
+        Prefer: "return=minimal",
+      }
+    );
+  }
+}
+
 module.exports = async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
@@ -51,61 +99,37 @@ module.exports = async (req, res) => {
 
   try {
     const parsed = parseBody(req.body);
-    const { id, nome, cpfCnpj, limiteCredito, dataAnalise, anotacoes, ultimoUsuario } = parsed;
+    const { id, cpfCnpj, limiteCredito, dataAnalise, anotacoes, ultimoUsuario } = parsed;
 
     if (!id) return res.status(400).json({ erro: "id obrigatorio", recebido: parsed });
 
     const limiteNumero = parseFloat(String(limiteCredito).replace(/\./g, "").replace(",", "."));
-    const limiteFormatado = isNaN(limiteNumero) ? "0.00" : limiteNumero.toFixed(2);
-    const nomeEscapado = String(nome)
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
+    const limiteFormatado = isNaN(limiteNumero) ? 0 : limiteNumero;
 
-    const xml = "<contatos><contato><sequencia>1</sequencia><id>" + id + "</id><nome>" + nomeEscapado + "</nome><limite_credito>" + limiteFormatado + "</limite_credito></contato></contatos>";
-    const olistBody = "token=" + TOKEN + "&contato=" + encodeURIComponent(xml) + "&formato=JSON";
+    // Obtém access token via refresh token
+    const accessToken = await getAccessToken();
 
-    const ro = await httpsPost("api.tiny.com.br", "/api2/contato.alterar.php", olistBody, {
-      "Content-Type": "application/x-www-form-urlencoded",
-      "Content-Length": Buffer.byteLength(olistBody, "utf8"),
-    });
-
-    const dolist = parseJSON(ro.text);
-    if (dolist.retorno && dolist.retorno.status === "Erro") {
-      throw new Error(dolist.retorno.erros[0].erro || "Erro Olist");
-    }
-
-    const chave = String(cpfCnpj || id).replace(/[.\-\/]/g, "");
-    const supaHost = SUPABASE_URL.replace("https://", "");
-    const payload = JSON.stringify({
-      cliente_id: chave,
-      data_analise: dataAnalise || null,
-      anotacoes: anotacoes || "",
-      ultimo_usuario: ultimoUsuario,
-      ultima_alteracao: new Date().toISOString(),
-    });
-
-    const ru = await httpsPatch(supaHost, "/rest/v1/analises_credito?cliente_id=eq." + chave, payload, {
-      apikey: SUPABASE_KEY,
-      Authorization: "Bearer " + SUPABASE_KEY,
-      "Content-Type": "application/json",
-      "Content-Length": Buffer.byteLength(payload),
-      Prefer: "return=minimal,count=exact",
-    });
-
-    const countHeader = ru.headers["content-range"];
-    const naoAtualizou = !countHeader || countHeader === "*/0";
-
-    if (naoAtualizou) {
-      await httpsPost(supaHost, "/rest/v1/analises_credito", payload, {
-        apikey: SUPABASE_KEY,
-        Authorization: "Bearer " + SUPABASE_KEY,
+    // Atualiza limite no Olist via API V3
+    const v3Body = JSON.stringify({ dadosAdicionais: { limiteCredito: limiteFormatado } });
+    const ro = await httpsRequest(
+      "PUT",
+      "api.tiny.com.br",
+      "/public-api/v3/contatos/" + id,
+      v3Body,
+      {
+        Authorization: "Bearer " + accessToken,
         "Content-Type": "application/json",
-        "Content-Length": Buffer.byteLength(payload),
-        Prefer: "return=minimal",
-      });
+        "Content-Length": Buffer.byteLength(v3Body),
+      }
+    );
+
+    if (ro.status >= 400) {
+      throw new Error("Olist V3 erro " + ro.status + ": " + ro.text);
     }
+
+    // Salva análise no Supabase
+    const chave = String(cpfCnpj || id).replace(/[.\-\/]/g, "");
+    await salvarAnalise(chave, dataAnalise, anotacoes, ultimoUsuario);
 
     return res.status(200).json({ ok: true });
 
