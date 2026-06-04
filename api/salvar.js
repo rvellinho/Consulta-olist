@@ -112,8 +112,8 @@ if (!id) return res.status(400).json({ erro: "id obrigatorio", recebido: parsed 
         ? limiteStr.replace(/\./g, "").replace(",", ".")  // formato BR: 1.234,56
         : limiteStr.replace(",", "")                       // formato simples: 1234.56
     );
-    // Regra de negócio: limite zero = cliente sem análise ou negado = mínimo 0,01
-    const limiteFormatado = (isNaN(limiteNumero) || limiteNumero <= 0) ? 0.01 : limiteNumero;
+    // Regra de negócio: limite zero = cliente sem análise ou negado = mínimo R$ 1,00
+    const limiteFormatado = (isNaN(limiteNumero) || limiteNumero <= 0) ? 1 : limiteNumero;
 
     // Obtém access token via refresh token
     const accessToken = await getAccessToken();
