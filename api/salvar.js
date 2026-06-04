@@ -63,7 +63,7 @@ module.exports = async (req, res) => {
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;");
-    const xml = "<contato><id>" + id + "</id><nome>" + nomeEscapado + "</nome><limite_credito>" + limiteFormatado + "</limite_credito></contato>";
+    const xml = "<contatos><contato><sequencia>1</sequencia><id>" + id + "</id><nome>" + nomeEscapado + "</nome><limite_credito>" + limiteFormatado + "</limite_credito></contato></contatos>";
     const olistBody = "token=" + encodeURIComponent(TOKEN) + "&contato=" + encodeURIComponent(xml) + "&formato=JSON";
     const ro = await httpsPost("api.tiny.com.br", "/api2/contato.alterar.php", olistBody, {
       "Content-Type": "application/x-www-form-urlencoded",
