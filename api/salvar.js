@@ -1,4 +1,4 @@
-// v3
+// v4
 const https = require("https");
 
 const TOKEN = process.env.OLIST_TOKEN;
@@ -51,31 +51,36 @@ module.exports = async (req, res) => {
 
   try {
     const parsed = parseBody(req.body);
-    const { id, nome, limiteCredito, dataAnalise, anotacoes, ultimoUsuario } = parsed;
+    const { id, nome, cpfCnpj, limiteCredito, dataAnalise, anotacoes, ultimoUsuario } = parsed;
 
-    // Diagnóstico
-    if (!id) return res.status(200).json({ debug: true, parsed, bodyTipo: typeof req.body, body: req.body });
+    if (!id) return res.status(400).json({ erro: "id obrigatorio", recebido: parsed });
 
+    // Atualiza limite no Olist
     const limiteNumero = parseFloat(String(limiteCredito).replace(/\./g, "").replace(",", "."));
     const limiteFormatado = isNaN(limiteNumero) ? "0.00" : limiteNumero.toFixed(2);
-
-    const xml = "<contatos><contato><id>" + id + "</id><nome>" + nome + "</nome><limite_credito>" + limiteFormatado + "</limite_credito></contato></contatos>";
+    const nomeEscapado = String(nome)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+    const xml = "<contatos><contato><id>" + id + "</id><nome>" + nomeEscapado + "</nome><limite_credito>" + limiteFormatado + "</limite_credito></contato></contatos>";
     const olistBody = new URLSearchParams({ token: TOKEN, contato: xml, formato: "JSON" }).toString();
     const ro = await httpsPost("api.tiny.com.br", "/api2/contato.alterar.php", olistBody, { "Content-Type": "application/x-www-form-urlencoded" });
-    
-    // Retorna resposta bruta do Olist para diagnóstico
-    return res.status(200).json({ debug: true, olistStatus: ro.status, olistResposta: ro.text, xml, limiteFormatado });
+    const dolist = parseJSON(ro.text);
+    if (dolist.retorno && dolist.retorno.status === "Erro") throw new Error(dolist.retorno.erros[0].erro || "Erro Olist");
 
+    // Salva análise no Supabase usando CNPJ/CPF como chave
+    const chave = String(cpfCnpj || id).replace(/[.\-\/]/g, "");
     const supaHost = SUPABASE_URL.replace("https://", "");
     const payload = JSON.stringify({
-      cliente_id: String(id),
+      cliente_id: chave,
       data_analise: dataAnalise || null,
       anotacoes: anotacoes || "",
       ultimo_usuario: ultimoUsuario,
       ultima_alteracao: new Date().toISOString(),
     });
 
-    const ru = await httpsPatch(supaHost, "/rest/v1/analises_credito?cliente_id=eq." + id, payload, {
+    const ru = await httpsPatch(supaHost, "/rest/v1/analises_credito?cliente_id=eq." + chave, payload, {
       apikey: SUPABASE_KEY,
       Authorization: "Bearer " + SUPABASE_KEY,
       "Content-Type": "application/json",
