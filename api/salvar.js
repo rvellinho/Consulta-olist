@@ -64,8 +64,13 @@ module.exports = async (req, res) => {
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;");
     const xml = "<contatos><contato><id>" + id + "</id><nome>" + nomeEscapado + "</nome><limite_credito>" + limiteFormatado + "</limite_credito></contato></contatos>";
-    const olistBody = new URLSearchParams({ token: TOKEN, contato: xml, formato: "JSON" }).toString();
-    const ro = await httpsPost("api.tiny.com.br", "/api2/contato.alterar.php", olistBody, { "Content-Type": "application/x-www-form-urlencoded" });
+    const olistBody = "token=" + encodeURIComponent(TOKEN) + "&contato=" + encodeURIComponent(xml) + "&formato=JSON";
+    const ro = await httpsPost("api.tiny.com.br", "/api2/contato.alterar.php", olistBody, {
+      "Content-Type": "application/x-www-form-urlencoded",
+      "Content-Length": Buffer.byteLength(olistBody),
+    });
+    // Diagnóstico temporário
+    return res.status(200).json({ debug: true, olistStatus: ro.status, olistResposta: ro.text });
     const dolist = parseJSON(ro.text);
     if (dolist.retorno && dolist.retorno.status === "Erro") throw new Error(dolist.retorno.erros[0].erro || "Erro Olist");
     // Diagnóstico temporário
