@@ -70,7 +70,7 @@ module.exports = async (req, res) => {
       "Content-Length": Buffer.byteLength(olistBody),
     });
     // Diagnóstico temporário
-    return res.status(200).json({ debug: true, olistStatus: ro.status, olistResposta: ro.text });
+    return res.status(200).json({ debug: true, olistStatus: ro.status, olistResposta: ro.text, xmlEnviado: xml, olistBody });
     const dolist = parseJSON(ro.text);
     if (dolist.retorno && dolist.retorno.status === "Erro") throw new Error(dolist.retorno.erros[0].erro || "Erro Olist");
     // Diagnóstico temporário
