@@ -68,6 +68,8 @@ module.exports = async (req, res) => {
     const ro = await httpsPost("api.tiny.com.br", "/api2/contato.alterar.php", olistBody, { "Content-Type": "application/x-www-form-urlencoded" });
     const dolist = parseJSON(ro.text);
     if (dolist.retorno && dolist.retorno.status === "Erro") throw new Error(dolist.retorno.erros[0].erro || "Erro Olist");
+    // Diagnóstico temporário
+    return res.status(200).json({ debug: true, olistStatus: ro.status, olistResposta: ro.text, xmlEnviado: xml });
 
     // Salva análise no Supabase usando CNPJ/CPF como chave
     const chave = String(cpfCnpj || id).replace(/[.\-\/]/g, "");
