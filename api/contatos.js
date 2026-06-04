@@ -1,9 +1,15 @@
-const fetch = require("node-fetch");
+const axios = require("axios");
 
 const TOKEN = process.env.OLIST_TOKEN;
 const API = "https://api.tiny.com.br/api2";
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
+
+const supabaseHeaders = {
+  apikey: SUPABASE_KEY,
+  Authorization: `Bearer ${SUPABASE_KEY}`,
+  "Content-Type": "application/json",
+};
 
 async function salvarAnalise(clienteId, dataAnalise, anotacoes, ultimoUsuario) {
   const payload = {
@@ -14,44 +20,23 @@ async function salvarAnalise(clienteId, dataAnalise, anotacoes, ultimoUsuario) {
     ultima_alteracao: new Date().toISOString(),
   };
 
-  const resUpdate = await fetch(
+  // Tenta atualizar registro existente
+  const resUpdate = await axios.patch(
     `${SUPABASE_URL}/rest/v1/analises_credito?cliente_id=eq.${clienteId}`,
-    {
-      method: "PATCH",
-      headers: {
-        apikey: SUPABASE_KEY,
-        Authorization: `Bearer ${SUPABASE_KEY}`,
-        "Content-Type": "application/json",
-        Prefer: "return=minimal,count=exact",
-      },
-      body: JSON.stringify(payload),
-    }
+    payload,
+    { headers: { ...supabaseHeaders, Prefer: "return=minimal,count=exact" } }
   );
 
-  if (!resUpdate.ok) {
-    const err = await resUpdate.text();
-    throw new Error(`Supabase update erro: ${err}`);
-  }
-
-  const countHeader = resUpdate.headers.get("content-range");
+  const countHeader = resUpdate.headers["content-range"];
   const naoAtualizou = !countHeader || countHeader === "*/0";
 
+  // Se não existia, insere
   if (naoAtualizou) {
-    const resInsert = await fetch(`${SUPABASE_URL}/rest/v1/analises_credito`, {
-      method: "POST",
-      headers: {
-        apikey: SUPABASE_KEY,
-        Authorization: `Bearer ${SUPABASE_KEY}`,
-        "Content-Type": "application/json",
-        Prefer: "return=minimal",
-      },
-      body: JSON.stringify(payload),
-    });
-
-    if (!resInsert.ok) {
-      const err = await resInsert.text();
-      throw new Error(`Supabase insert erro: ${err}`);
-    }
+    await axios.post(
+      `${SUPABASE_URL}/rest/v1/analises_credito`,
+      payload,
+      { headers: { ...supabaseHeaders, Prefer: "return=minimal" } }
+    );
   }
 
   return true;
@@ -64,43 +49,36 @@ module.exports = async (req, res) => {
   if (req.method === "OPTIONS") return res.status(200).end();
 
   try {
+    // ── GET lista de clientes ─────────────────────────────────────────────
     if (req.method === "GET" && !req.query.id) {
       const pagina = req.query.pagina || 1;
       const pesquisa = req.query.pesquisa || " ";
 
       const params = new URLSearchParams({
         token: TOKEN,
-        pesquisa: pesquisa,
+        pesquisa,
         situacao: "A",
         pagina: String(pagina),
         formato: "JSON",
       });
 
-      const apiRes = await fetch(`${API}/contatos.pesquisa.php`, {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: params.toString(),
-      });
+      const { data } = await axios.post(
+        `${API}/contatos.pesquisa.php`,
+        params.toString(),
+        { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
+      );
 
-      if (!apiRes.ok) throw new Error(`HTTP ${apiRes.status}`);
-      const data = await apiRes.json();
       if (data.retorno?.status === "Erro") throw new Error(data.retorno?.erros?.[0]?.erro || "Erro API");
 
       const lista = data.retorno?.contatos?.map(c => c.contato) || [];
-
       const ids = lista.map(c => c.id);
       let analises = {};
+
       if (ids.length > 0) {
-        const anRes = await fetch(
+        const { data: anData } = await axios.get(
           `${SUPABASE_URL}/rest/v1/analises_credito?cliente_id=in.(${ids.join(",")})`,
-          {
-            headers: {
-              apikey: SUPABASE_KEY,
-              Authorization: `Bearer ${SUPABASE_KEY}`,
-            },
-          }
+          { headers: supabaseHeaders }
         );
-        const anData = await anRes.json();
         if (Array.isArray(anData)) {
           anData.forEach(a => { analises[a.cliente_id] = a; });
         }
@@ -109,6 +87,7 @@ module.exports = async (req, res) => {
       return res.status(200).json({ itens: lista, analises });
     }
 
+    // ── GET cliente individual (com limite) ───────────────────────────────
     if (req.method === "GET" && req.query.id) {
       const params = new URLSearchParams({
         token: TOKEN,
@@ -116,54 +95,48 @@ module.exports = async (req, res) => {
         formato: "JSON",
       });
 
-      const apiRes = await fetch(`${API}/contato.obter.php`, {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: params.toString(),
-      });
+      const { data } = await axios.post(
+        `${API}/contato.obter.php`,
+        params.toString(),
+        { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
+      );
 
-      if (!apiRes.ok) throw new Error(`HTTP ${apiRes.status}`);
-      const data = await apiRes.json();
       if (data.retorno?.status === "Erro") throw new Error(data.retorno?.erros?.[0]?.erro || "Erro API");
 
-      const contato = data.retorno?.contato || {};
-      return res.status(200).json({ contato });
+      return res.status(200).json({ contato: data.retorno?.contato || {} });
     }
 
+    // ── PUT salvar limite + análise ───────────────────────────────────────
     if (req.method === "PUT") {
       const { id, nome, limiteCredito, dataAnalise, anotacoes, ultimoUsuario } = req.body;
       if (!id || limiteCredito === undefined) return res.status(400).json({ erro: "id e limiteCredito obrigatórios." });
 
       const limiteFormatado = parseFloat(limiteCredito).toFixed(2);
-
-      // Atualiza limite no Olist
       const xml = `<contatos><contato><id>${id}</id><nome>${nome}</nome><limite_credito>${limiteFormatado}</limite_credito></contato></contatos>`;
+
       const params = new URLSearchParams({ token: TOKEN, contato: xml, formato: "JSON" });
-      const apiRes = await fetch(`${API}/contato.alterar.php`, {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: params.toString(),
-      });
 
-      // Captura resposta bruta para diagnóstico
-      const textoOlist = await apiRes.text();
+      const { data: dataOlist } = await axios.post(
+        `${API}/contato.alterar.php`,
+        params.toString(),
+        { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
+      );
 
-      // Tenta parsear mas não bloqueia se falhar
-      let dataOlist = {};
-      try { dataOlist = JSON.parse(textoOlist); } catch {}
       if (dataOlist.retorno?.status === "Erro") {
         throw new Error(dataOlist.retorno?.erros?.[0]?.erro || "Erro Olist");
       }
 
-      // Salva análise no Supabase
       await salvarAnalise(id, dataAnalise, anotacoes, ultimoUsuario);
 
-      return res.status(200).json({ ok: true, olistResposta: textoOlist });
+      return res.status(200).json({ ok: true });
     }
 
     return res.status(405).json({ erro: "Método não permitido." });
 
   } catch (e) {
-    return res.status(500).json({ erro: e.message, stack: e.stack });
+    return res.status(500).json({
+      erro: e.message,
+      detalhe: e.response?.data || null,
+    });
   }
 };
