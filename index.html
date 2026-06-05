@@ -170,6 +170,7 @@
   <div class="nav-tabs">
     <button class="nav-tab active" id="tab-clientes" onclick="mudarAba('clientes')">👥 Clientes</button>
     <button class="nav-tab hidden" id="tab-usuarios" onclick="mudarAba('usuarios')">⚙️ Usuários</button>
+    <button class="nav-tab hidden" id="tab-importar" onclick="mudarAba('importar')">📥 Importar</button>
   </div>
 
   <!-- ABA CLIENTES -->
@@ -196,6 +197,67 @@
       <button class="btn-sec" id="btn-ant" onclick="mudarPagina(-1)" disabled>← Anterior</button>
       <span class="pag-inf" id="pag-inf">Página 1 · 100 por página</span>
       <button class="btn-sec" id="btn-prox" onclick="mudarPagina(1)">Próxima →</button>
+    </div>
+  </div>
+
+  <!-- ABA IMPORTAR -->
+  <div id="aba-importar" class="hidden">
+    <div class="table-wrap" style="padding:24px;">
+      <h3 style="font-size:15px;font-weight:700;margin-bottom:6px;">📥 Importar Base de Clientes</h3>
+      <p style="font-size:13px;color:var(--mt);margin-bottom:20px;">Selecione uma planilha Excel (.xlsx) ou CSV com as colunas: <strong>cnpj, limite, data_analise, anotacoes</strong></p>
+
+      <div style="margin-bottom:16px;">
+        <a href="#" onclick="baixarModelo()" style="font-size:13px;color:var(--ac);text-decoration:none;font-weight:600;">⬇ Baixar planilha modelo</a>
+      </div>
+
+      <div class="fg">
+        <label>Selecionar arquivo</label>
+        <input type="file" id="inp-arquivo" accept=".xlsx,.csv" onchange="lerArquivo(this)" style="font-size:13px;font-weight:400;color:var(--tx);" />
+      </div>
+
+      <div id="preview-importar" class="hidden" style="margin-top:16px;">
+        <div style="font-size:13px;color:var(--mt);margin-bottom:10px;">
+          <strong id="preview-total">0</strong> registros encontrados. Revise antes de importar:
+        </div>
+        <div style="max-height:300px;overflow-y:auto;border:1px solid var(--br);border-radius:8px;">
+          <table style="width:100%;border-collapse:collapse;font-size:13px;">
+            <thead>
+              <tr style="background:var(--s2);">
+                <th style="padding:8px 12px;text-align:left;font-size:11px;color:var(--mt);text-transform:uppercase;">CNPJ</th>
+                <th style="padding:8px 12px;text-align:left;font-size:11px;color:var(--mt);text-transform:uppercase;">Limite</th>
+                <th style="padding:8px 12px;text-align:left;font-size:11px;color:var(--mt);text-transform:uppercase;">Data Análise</th>
+                <th style="padding:8px 12px;text-align:left;font-size:11px;color:var(--mt);text-transform:uppercase;">Anotações</th>
+              </tr>
+            </thead>
+            <tbody id="preview-tbody"></tbody>
+          </table>
+        </div>
+        <div style="margin-top:16px;display:flex;gap:10px;align-items:center;">
+          <button class="btn-primary" id="btn-importar" onclick="executarImportacao()">🚀 Iniciar Importação</button>
+          <button class="btn-sec" onclick="cancelarImportacao()">Cancelar</button>
+          <span id="import-status" style="font-size:13px;color:var(--mt);"></span>
+        </div>
+      </div>
+
+      <div id="resultado-importar" class="hidden" style="margin-top:20px;">
+        <div id="resultado-resumo" style="margin-bottom:12px;"></div>
+        <div style="max-height:400px;overflow-y:auto;border:1px solid var(--br);border-radius:8px;">
+          <table style="width:100%;border-collapse:collapse;font-size:13px;">
+            <thead>
+              <tr style="background:var(--s2);">
+                <th style="padding:8px 12px;text-align:left;font-size:11px;color:var(--mt);text-transform:uppercase;">CNPJ</th>
+                <th style="padding:8px 12px;text-align:left;font-size:11px;color:var(--mt);text-transform:uppercase;">Cliente</th>
+                <th style="padding:8px 12px;text-align:left;font-size:11px;color:var(--mt);text-transform:uppercase;">Status</th>
+                <th style="padding:8px 12px;text-align:left;font-size:11px;color:var(--mt);text-transform:uppercase;">Detalhe</th>
+              </tr>
+            </thead>
+            <tbody id="resultado-tbody"></tbody>
+          </table>
+        </div>
+        <div style="margin-top:14px;">
+          <button class="btn-sec" onclick="novaImportacao()">Nova Importação</button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -318,7 +380,7 @@ function iniciarApp(u){
   const bp={admin:["Admin","bp-admin"],analista:["Analista","bp-analista"],visualizador:["Visualizador","bp-viz"]}[u.perfil]||["?","bp-viz"];
   el("usr-perfil").textContent=bp[0];el("usr-perfil").className=`bp ${bp[1]}`;
   if(u.perfil==="visualizador")el("th-analise").style.display="none";
-  if(u.perfil==="admin")el("tab-usuarios").classList.remove("hidden");
+  if(u.perfil==="admin"){el("tab-usuarios").classList.remove("hidden");el("tab-importar").classList.remove("hidden");}
   carregarClientes(1,"");
 }
 
@@ -329,8 +391,10 @@ el("inp-senha").addEventListener("keydown",e=>{if(e.key==="Enter")fazerLogin()})
 function mudarAba(aba){
   el("aba-clientes").classList.toggle("hidden",aba!=="clientes");
   el("aba-usuarios").classList.toggle("hidden",aba!=="usuarios");
+  el("aba-importar").classList.toggle("hidden",aba!=="importar");
   el("tab-clientes").classList.toggle("active",aba==="clientes");
   el("tab-usuarios").classList.toggle("active",aba==="usuarios");
+  el("tab-importar").classList.toggle("active",aba==="importar");
   if(aba==="usuarios")carregarUsuarios();
 }
 
@@ -495,6 +559,139 @@ async function excluirUsuario(id,login){
     if(!res.ok){const d=await res.json();throw new Error(d.erro);}
     carregarUsuarios();
   }catch(e){alert("Erro ao excluir: "+e.message);}
+}
+
+// IMPORTAÇÃO
+let dadosImportacao = [];
+
+function baixarModelo() {
+  const csv = "cnpj,limite,data_analise,anotacoes\n51251441000105,20000,03/06/2026,Cliente com bom histórico de pagamento\n21604056000125,5000,01/06/2026,Novo cliente limite inicial";
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "modelo_importacao.csv";
+  a.click();
+}
+
+function lerArquivo(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      const text = e.target.result;
+      const linhas = text.split(/\r?\n/).filter(l => l.trim());
+      const header = linhas[0].split(/[,;]/).map(h => h.trim().toLowerCase().replace(/"/g,""));
+      const idxCnpj = header.findIndex(h => h.includes("cnpj"));
+      const idxLimite = header.findIndex(h => h.includes("limite"));
+      const idxData = header.findIndex(h => h.includes("data"));
+      const idxAnot = header.findIndex(h => h.includes("anota") || h.includes("obs") || h.includes("texto"));
+
+      if (idxCnpj === -1) { alert("Coluna 'cnpj' não encontrada no arquivo."); return; }
+
+      dadosImportacao = [];
+      for (let i = 1; i < linhas.length; i++) {
+        const cols = linhas[i].split(/[,;]/).map(c => c.trim().replace(/^"|"$/g,""));
+        const cnpj = (cols[idxCnpj] || "").replace(/[.\-\/\s]/g,"").trim();
+        if (!cnpj) continue;
+        dadosImportacao.push({
+          cnpj,
+          limite: idxLimite >= 0 ? cols[idxLimite] : "0",
+          data_analise: idxData >= 0 ? cols[idxData] : "",
+          anotacoes: idxAnot >= 0 ? cols[idxAnot] : "",
+        });
+      }
+
+      // Mostra preview
+      el("preview-total").textContent = dadosImportacao.length;
+      const tbody = el("preview-tbody");
+      tbody.innerHTML = dadosImportacao.slice(0, 50).map(r => `
+        <tr style="border-bottom:1px solid var(--br);">
+          <td style="padding:8px 12px;">${r.cnpj}</td>
+          <td style="padding:8px 12px;">${r.limite||"—"}</td>
+          <td style="padding:8px 12px;">${r.data_analise||"—"}</td>
+          <td style="padding:8px 12px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${r.anotacoes||"—"}</td>
+        </tr>`).join("") + (dadosImportacao.length > 50 ? `<tr><td colspan="4" style="padding:8px 12px;color:var(--mt);font-size:12px;">... e mais ${dadosImportacao.length-50} registros</td></tr>` : "");
+
+      el("preview-importar").classList.remove("hidden");
+      el("resultado-importar").classList.add("hidden");
+    } catch(e) {
+      alert("Erro ao ler arquivo: " + e.message);
+    }
+  };
+  reader.readAsText(file, "UTF-8");
+}
+
+function cancelarImportacao() {
+  dadosImportacao = [];
+  el("preview-importar").classList.add("hidden");
+  el("inp-arquivo").value = "";
+}
+
+function novaImportacao() {
+  dadosImportacao = [];
+  el("preview-importar").classList.add("hidden");
+  el("resultado-importar").classList.add("hidden");
+  el("inp-arquivo").value = "";
+}
+
+async function executarImportacao() {
+  if (!dadosImportacao.length) return;
+  const btn = el("btn-importar");
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-sm"></span>Importando...';
+  el("import-status").textContent = "";
+
+  // Processa em lotes de 10 para não sobrecarregar
+  const LOTE = 10;
+  const resultados = [];
+  let processados = 0;
+
+  for (let i = 0; i < dadosImportacao.length; i += LOTE) {
+    const lote = dadosImportacao.slice(i, i + LOTE);
+    el("import-status").textContent = `Processando ${Math.min(i+LOTE, dadosImportacao.length)} de ${dadosImportacao.length}...`;
+
+    try {
+      const res = await fetch("/api/importar", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ linhas: lote, ultimoUsuario: usuarioAtual.login })
+      });
+      const data = await res.json();
+      if (data.resultados) resultados.push(...data.resultados);
+    } catch(e) {
+      lote.forEach(l => resultados.push({ cnpj: l.cnpj, status: "erro", msg: e.message }));
+    }
+    processados += lote.length;
+  }
+
+  // Mostra resultado
+  const sucesso = resultados.filter(r => r.status === "ok").length;
+  const erros = resultados.filter(r => r.status === "erro").length;
+
+  el("resultado-resumo").innerHTML = `
+    <div style="display:flex;gap:12px;flex-wrap:wrap;">
+      <span style="background:var(--gl);color:var(--g);border-radius:8px;padding:8px 16px;font-weight:600;">✓ ${sucesso} importados com sucesso</span>
+      ${erros ? `<span style="background:var(--redl);color:var(--red);border-radius:8px;padding:8px 16px;font-weight:600;">✗ ${erros} erros</span>` : ""}
+    </div>`;
+
+  el("resultado-tbody").innerHTML = resultados.map(r => `
+    <tr style="border-bottom:1px solid var(--br);">
+      <td style="padding:8px 12px;font-size:12px;">${r.cnpj}</td>
+      <td style="padding:8px 12px;font-size:12px;">${r.nome||"—"}</td>
+      <td style="padding:8px 12px;">
+        ${r.status==="ok"
+          ? '<span style="background:var(--gl);color:var(--g);border-radius:4px;padding:2px 8px;font-size:11px;font-weight:600;">✓ OK</span>'
+          : '<span style="background:var(--redl);color:var(--red);border-radius:4px;padding:2px 8px;font-size:11px;font-weight:600;">✗ Erro</span>'}
+      </td>
+      <td style="padding:8px 12px;font-size:12px;color:var(--mt);">${r.msg||(`Limite: R$ ${r.limite||0}`)}</td>
+    </tr>`).join("");
+
+  el("preview-importar").classList.add("hidden");
+  el("resultado-importar").classList.remove("hidden");
+  btn.disabled = false;
+  btn.textContent = "🚀 Iniciar Importação";
+  el("import-status").textContent = "";
 }
 
 // RESTAURAR SESSÃO
