@@ -565,11 +565,18 @@ async function excluirUsuario(id,login){
 let dadosImportacao = [];
 
 function baixarModelo() {
-  const csv = "cnpj,limite,data_analise,anotacoes\n51251441000105,20000,03/06/2026,Cliente com bom histórico de pagamento\n21604056000125,5000,01/06/2026,Novo cliente limite inicial";
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  // Gera Excel simples via HTML table (abre no Excel corretamente)
+  const html = `<html><head><meta charset="UTF-8"></head><body>
+  <table>
+    <tr><th>cnpj</th><th>limite</th><th>data_analise</th><th>anotacoes</th></tr>
+    <tr><td>51251441000105</td><td>20000</td><td>03/06/2026</td><td>Cliente com bom histórico de pagamento</td></tr>
+    <tr><td>21604056000125</td><td>5000</td><td>01/06/2026</td><td>Novo cliente limite inicial</td></tr>
+  </table>
+  </body></html>`;
+  const blob = new Blob([html], { type: "application/vnd.ms-excel;charset=utf-8;" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
-  a.download = "modelo_importacao.csv";
+  a.download = "modelo_importacao.xls";
   a.click();
 }
 
