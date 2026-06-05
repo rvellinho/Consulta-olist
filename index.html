@@ -427,7 +427,11 @@ async function carregarClientes(pagina,pesquisa){
     if(!res.ok)throw new Error(`Erro ${res.status}`);
     const data=await res.json();
     analisesBD=data.analises||{};
-    modoDemo=false;renderTabela(data.itens||[]);temProxima=(data.itens||[]).length===100;
+    modoDemo=false;
+    el("badge-demo").classList.add("hidden");
+    el("aviso").classList.add("hidden");
+    renderTabela(data.itens||[]);
+    temProxima=(data.itens||[]).length===100;
   }catch(e){
     modoDemo=true;el("badge-demo").classList.remove("hidden");
     el("aviso").textContent=`⚠️ Não foi possível conectar à API Olist. Exibindo dados demonstrativos.`;
