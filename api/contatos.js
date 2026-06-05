@@ -80,7 +80,14 @@ module.exports = async (req, res) => {
 
       const r = await post("api.tiny.com.br", "/api2/contatos.pesquisa.php", params.toString(), { "Content-Type": "application/x-www-form-urlencoded" });
       const data = parseJSON(r.text);
-      if (data.retorno && data.retorno.status === "Erro") throw new Error(data.retorno.erros[0].erro);
+      if (data.retorno && data.retorno.status === "Erro") {
+        const codigoErro = data.retorno.codigo_erro;
+        // Código 6 = nenhum registro encontrado — não é erro, é lista vazia
+        if (codigoErro === "6" || (data.retorno.erros && data.retorno.erros[0].erro.includes("não retornou"))) {
+          return res.status(200).json({ itens: [], analises: {} });
+        }
+        throw new Error(data.retorno.erros[0].erro);
+      }
 
       const lista = (data.retorno && data.retorno.contatos) ? data.retorno.contatos.map(c => c.contato) : [];
 
