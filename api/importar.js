@@ -181,7 +181,8 @@ module.exports = async (req, res) => {
         }
 
         const chave = cnpj.replace(/[.\-\/]/g, "");
-        const limiteNum = parseInt(String(limite || "0").replace(/\D/g, "")) || 0;
+        const limiteStr = String(limite || "0").replace(/\s/g, "").replace(",", ".");
+        const limiteNum = Math.ceil(parseFloat(limiteStr) || 0);
         const dataFormatada = converterData(data_analise);
 
         // Atualiza limite no Olist
