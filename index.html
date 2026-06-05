@@ -353,6 +353,10 @@ const DEMO=Array.from({length:20},(_,i)=>({id:1000+i,codigo:`C${String(1000+i).p
 async function fazerLogin(){
   const login=el("inp-login").value.trim();
   const senha=el("inp-senha").value;
+  // Limpa sessão anterior
+  sessionStorage.removeItem("sessao");
+  el("tab-usuarios").classList.add("hidden");
+  el("tab-importar").classList.add("hidden");
   if(!login||!senha){el("login-erro").textContent="Preencha login e senha.";el("login-erro").classList.remove("hidden");return;}
   const btn=el("btn-entrar");
   btn.disabled=true;btn.innerHTML='<span class="spinner-sm"></span>Verificando...';
