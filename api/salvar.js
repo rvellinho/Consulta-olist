@@ -127,8 +127,8 @@ module.exports = async (req, res) => {
     if (!id) return res.status(400).json({ erro: "id obrigatorio" });
 
     // Converte valor monetário para número inteiro
-    const limiteStr = String(limiteCredito || "0");
-    const limiteNumero = parseInt(limiteStr.replace(/\./g, "").replace(/,/g, "")) || 0;
+    const limiteStr = String(limiteCredito || "0").replace(/\s/g, "");
+    const limiteNumero = Math.ceil(parseFloat(limiteStr.replace(/\./g, "").replace(",", ".")) || 0);
     // Regra de negócio: limite zero = mínimo R$ 1,00
     const limiteFormatado = limiteNumero <= 0 ? 1 : limiteNumero;
 
