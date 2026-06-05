@@ -61,6 +61,13 @@ module.exports = async (req, res) => {
   if (req.method === "OPTIONS") return res.status(200).end();
 
   try {
+    // ── GET login ─────────────────────────────────────────────────────────
+    if (req.method === "GET" && req.query.login) {
+      const usuario = await buscarUsuario(req.query.login, req.query.senha);
+      if (!usuario) return res.status(401).json({ erro: "Usuário ou senha incorretos" });
+      return res.status(200).json({ usuario });
+    }
+
     // ── GET lista ─────────────────────────────────────────────────────────
     if (req.method === "GET" && !req.query.id) {
       const pagina = req.query.pagina || 1;
