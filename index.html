@@ -381,7 +381,13 @@ function iniciarApp(u){
   const bp={admin:["Admin","bp-admin"],analista:["Analista","bp-analista"],visualizador:["Visualizador","bp-viz"]}[u.perfil]||["?","bp-viz"];
   el("usr-perfil").textContent=bp[0];el("usr-perfil").className=`bp ${bp[1]}`;
   if(u.perfil==="visualizador")el("th-analise").style.display="none";
-  if(u.perfil==="admin"){el("tab-usuarios").classList.remove("hidden");el("tab-importar").classList.remove("hidden");}
+  // Sempre esconde primeiro, depois mostra só para admin
+  el("tab-usuarios").classList.add("hidden");
+  el("tab-importar").classList.add("hidden");
+  if(u.perfil==="admin"){
+    el("tab-usuarios").classList.remove("hidden");
+    el("tab-importar").classList.remove("hidden");
+  }
   carregarClientes(1,"");
 }
 
