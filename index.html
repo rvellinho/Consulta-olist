@@ -569,8 +569,18 @@ function baixarModelo() {
   const html = `<html><head><meta charset="UTF-8"></head><body>
   <table>
     <tr><th>cnpj</th><th>limite</th><th>data_analise</th><th>anotacoes</th></tr>
-    <tr><td>51251441000105</td><td>20000</td><td>03/06/2026</td><td>Cliente com bom histórico de pagamento</td></tr>
-    <tr><td>21604056000125</td><td>5000</td><td>01/06/2026</td><td>Novo cliente limite inicial</td></tr>
+    <tr>
+      <td style="mso-number-format:'@'">51251441000105</td>
+      <td>20000</td>
+      <td>03/06/2026</td>
+      <td>Cliente com bom histórico de pagamento</td>
+    </tr>
+    <tr>
+      <td style="mso-number-format:'@'">21604056000125</td>
+      <td>5000</td>
+      <td>01/06/2026</td>
+      <td>Novo cliente limite inicial</td>
+    </tr>
   </table>
   </body></html>`;
   const blob = new Blob([html], { type: "application/vnd.ms-excel;charset=utf-8;" });
