@@ -385,7 +385,19 @@ function iniciarApp(u){
   carregarClientes(1,"");
 }
 
-function fazerLogout(){sessionStorage.removeItem("sessao");usuarioAtual=null;el("tela-app").classList.add("hidden");el("tela-login").classList.remove("hidden");el("inp-login").value="";el("inp-senha").value="";}
+function fazerLogout(){
+  sessionStorage.removeItem("sessao");
+  usuarioAtual=null;
+  el("tela-app").classList.add("hidden");
+  el("tela-login").classList.remove("hidden");
+  el("inp-login").value="";
+  el("inp-senha").value="";
+  el("tab-usuarios").classList.add("hidden");
+  el("tab-importar").classList.add("hidden");
+  el("tab-clientes").classList.add("active");
+  el("tab-usuarios").classList.remove("active");
+  el("tab-importar").classList.remove("active");
+}
 el("inp-senha").addEventListener("keydown",e=>{if(e.key==="Enter")fazerLogin()});
 
 // ABAS
