@@ -366,11 +366,8 @@ async function fazerLogin(){
     sessionStorage.setItem("sessao",JSON.stringify(u));
     iniciarApp(u);
   }catch(e){
-    // Fallback demo
-    const DEMO_USERS=[{id:1,login:"admin",senha:"admin123",perfil:"admin"},{id:2,login:"ana",senha:"ana123",perfil:"analista"},{id:3,login:"carlos",senha:"carlos123",perfil:"visualizador"}];
-    const u=DEMO_USERS.find(x=>x.login===login&&x.senha===senha);
-    if(u){usuarioAtual=u;sessionStorage.setItem("sessao",JSON.stringify(u));iniciarApp(u);}
-    else{el("login-erro").textContent="Usuário ou senha incorretos.";el("login-erro").classList.remove("hidden");}
+    el("login-erro").textContent="Erro ao conectar ao servidor. Tente novamente.";
+    el("login-erro").classList.remove("hidden");
   }finally{btn.disabled=false;btn.textContent="Entrar";}
 }
 
