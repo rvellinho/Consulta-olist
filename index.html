@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Rampa · Gestão de Crédito</title>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Syne:wght@700;800&display=swap" rel="stylesheet" />
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
@@ -18,9 +17,9 @@
     body { background: var(--bg); color: var(--tx); font-family: 'Inter', sans-serif; min-height: 100vh; }
     .login-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: linear-gradient(135deg, #1a1a1a, #3a0008); padding: 20px; }
     .login-card { background: #fff; border-radius: 20px; padding: 40px 36px; width: 100%; max-width: 400px; box-shadow: 0 20px 60px rgba(0,0,0,.3); }
-    .login-logo { margin-bottom: 8px; text-align: center; }
+    .login-logo { margin-bottom: 8px; }
     .login-logo img { height: 48px; object-fit: contain; }
-    .login-sub { font-size: 13px; color: var(--mt); margin-bottom: 28px; margin-top: 4px; text-align: center; }
+    .login-sub { font-size: 13px; color: var(--mt); margin-bottom: 28px; margin-top: 4px; }
     .fg { margin-bottom: 16px; }
     .fg label { display: block; font-size: 11px; font-weight: 600; color: var(--tx2); margin-bottom: 6px; text-transform: uppercase; letter-spacing: .5px; }
     .fg input, .fg textarea, .fg select { width: 100%; border: 1.5px solid var(--br); border-radius: 8px; padding: 10px 14px; font-size: 14px; font-family: 'Inter', sans-serif; color: var(--tx); background: var(--s2); outline: none; transition: border .2s; }
@@ -68,13 +67,12 @@
     tbody tr:last-child { border-bottom: none; }
     tbody tr:hover { background: var(--acl); }
     tbody td { padding: 12px 15px; font-size: 14px; vertical-align: middle; }
-    .td-cod { font-size: 14px; color: var(--mt); font-family: 'Inter', sans-serif; font-weight: 500; }
+    .td-cod { font-size: 11px; color: var(--mt); font-family: 'Inter', sans-serif; }
     .td-cli { display: flex; align-items: center; gap: 10px; }
     .av { width: 32px; height: 32px; border-radius: 8px; background: linear-gradient(135deg, #c0001a, #7a0010); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; font-family: 'Inter', sans-serif; flex-shrink: 0; }
-    .td-rz { color: var(--mt); font-size: 12px; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .td-rz { color: var(--mt); font-size: 12px; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .td-cnpj { font-size: 12px; color: var(--mt); font-family: 'Inter', sans-serif; white-space: nowrap; }
     .ba { background: var(--gl); color: var(--g); border-radius: 6px; padding: 3px 9px; font-size: 11px; font-weight: 600; white-space: nowrap; }
-    .ba-vencida { background: var(--redl); color: var(--red); border-radius: 6px; padding: 3px 9px; font-size: 11px; font-weight: 600; white-space: nowrap; }
     .bp2 { background: var(--aml); color: var(--am); border-radius: 6px; padding: 3px 9px; font-size: 11px; font-weight: 600; }
     .arr { color: var(--ac); font-size: 15px; }
     .state-center { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 60px 20px; color: var(--mt); }
@@ -85,7 +83,7 @@
     .pag-inf { font-size: 13px; color: var(--mt); }
     .overlay { position: fixed; inset: 0; background: rgba(17,24,39,.5); backdrop-filter: blur(3px); z-index: 100; display: flex; align-items: center; justify-content: center; padding: 20px; animation: fi .15s; }
     @keyframes fi { from { opacity: 0; } to { opacity: 1; } }
-    .modal { background: #fff; border-radius: 16px; width: 100%; max-width: 900px; box-shadow: 0 25px 60px rgba(0,0,0,.25); animation: su .2s; overflow: hidden; }
+    .modal { background: #fff; border-radius: 16px; width: 100%; max-width: 580px; box-shadow: 0 25px 60px rgba(0,0,0,.25); animation: su .2s; overflow: hidden; }
     .modal-sm { max-width: 440px; }
     @keyframes su { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
     .modal-hdr { display: flex; align-items: flex-start; gap: 12px; padding: 18px 20px 14px; border-bottom: 1px solid var(--br); background: #fff; }
@@ -173,6 +171,7 @@
     <button class="nav-tab active" id="tab-clientes" onclick="mudarAba('clientes')">👥 Clientes</button>
     <button class="nav-tab hidden" id="tab-usuarios" onclick="mudarAba('usuarios')">⚙️ Usuários</button>
     <button class="nav-tab hidden" id="tab-importar" onclick="mudarAba('importar')">📥 Importar</button>
+    <button class="nav-tab hidden" id="tab-estoque" onclick="mudarAba('estoque')">📦 Estoque</button>
   </div>
 
   <!-- ABA CLIENTES -->
@@ -260,6 +259,42 @@
           <button class="btn-sec" onclick="novaImportacao()">Nova Importação</button>
         </div>
       </div>
+    </div>
+  </div>
+
+  <!-- ABA ESTOQUE -->
+  <div id="aba-estoque" class="hidden">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px;">
+      <div style="font-size:13px;color:var(--mt);">Produtos físicos com controle de estoque. Atualizado ao carregar.</div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn-sec" id="btn-exportar-estoque" onclick="exportarEstoque()" disabled>⬇ Exportar Excel</button>
+        <button class="btn-primary" id="btn-carregar-estoque" onclick="carregarEstoque()">🔄 Carregar Relatório</button>
+      </div>
+    </div>
+    <div id="estado-estoque" class="hidden">
+      <div class="state-center"><div class="spinner"></div><p id="msg-estoque">Carregando dados do Olist...</p></div>
+    </div>
+    <div id="tabela-estoque-wrap" class="hidden">
+      <div class="table-wrap" style="overflow-x:auto;">
+        <table id="tabela-estoque" style="width:100%;border-collapse:collapse;min-width:900px;">
+          <thead>
+            <tr>
+              <th style="padding:10px 12px;font-size:11px;font-weight:700;text-transform:uppercase;color:var(--mt);background:var(--s2);text-align:left;border-bottom:1px solid var(--br);white-space:nowrap;">SKU</th>
+              <th style="padding:10px 12px;font-size:11px;font-weight:700;text-transform:uppercase;color:var(--mt);background:var(--s2);text-align:left;border-bottom:1px solid var(--br);">Produto</th>
+              <th style="padding:10px 12px;font-size:11px;font-weight:700;text-transform:uppercase;color:var(--mt);background:var(--s2);text-align:center;border-bottom:1px solid var(--br);white-space:nowrap;">Un</th>
+              <th style="padding:10px 12px;font-size:11px;font-weight:700;text-transform:uppercase;color:var(--mt);background:var(--s2);text-align:right;border-bottom:1px solid var(--br);white-space:nowrap;">Est. Físico</th>
+              <th style="padding:10px 12px;font-size:11px;font-weight:700;text-transform:uppercase;color:var(--mt);background:var(--s2);text-align:right;border-bottom:1px solid var(--br);white-space:nowrap;">Reservado</th>
+              <th style="padding:10px 12px;font-size:11px;font-weight:700;text-transform:uppercase;color:var(--mt);background:var(--s2);text-align:right;border-bottom:1px solid var(--br);white-space:nowrap;">Disponível</th>
+              <th style="padding:10px 12px;font-size:11px;font-weight:700;text-transform:uppercase;color:var(--mt);background:var(--s2);text-align:right;border-bottom:1px solid var(--br);white-space:nowrap;">Em Compra</th>
+              <th style="padding:10px 12px;font-size:11px;font-weight:700;text-transform:uppercase;color:var(--mt);background:var(--s2);text-align:right;border-bottom:1px solid var(--br);white-space:nowrap;">Disp.+Compras</th>
+              <th style="padding:10px 12px;font-size:11px;font-weight:700;text-transform:uppercase;color:var(--mt);background:var(--s2);text-align:right;border-bottom:1px solid var(--br);white-space:nowrap;">Est. Mínimo</th>
+              <th style="padding:10px 12px;font-size:11px;font-weight:700;text-transform:uppercase;color:var(--mt);background:var(--s2);text-align:right;border-bottom:1px solid var(--br);white-space:nowrap;">Necessidade</th>
+            </tr>
+          </thead>
+          <tbody id="tbody-estoque"></tbody>
+        </table>
+      </div>
+      <div style="margin-top:10px;font-size:12px;color:var(--mt);" id="estoque-rodape"></div>
     </div>
   </div>
 
@@ -355,10 +390,6 @@ const DEMO=Array.from({length:20},(_,i)=>({id:1000+i,codigo:`C${String(1000+i).p
 async function fazerLogin(){
   const login=el("inp-login").value.trim();
   const senha=el("inp-senha").value;
-  // Limpa sessão anterior
-  sessionStorage.removeItem("sessao");
-  el("tab-usuarios").classList.add("hidden");
-  el("tab-importar").classList.add("hidden");
   if(!login||!senha){el("login-erro").textContent="Preencha login e senha.";el("login-erro").classList.remove("hidden");return;}
   const btn=el("btn-entrar");
   btn.disabled=true;btn.innerHTML='<span class="spinner-sm"></span>Verificando...';
@@ -372,40 +403,39 @@ async function fazerLogin(){
     sessionStorage.setItem("sessao",JSON.stringify(u));
     iniciarApp(u);
   }catch(e){
-    el("login-erro").textContent="Erro ao conectar ao servidor. Tente novamente.";
-    el("login-erro").classList.remove("hidden");
+    // Fallback demo
+    const DEMO_USERS=[{id:1,login:"admin",senha:"admin123",perfil:"admin"},{id:2,login:"ana",senha:"ana123",perfil:"analista"},{id:3,login:"carlos",senha:"carlos123",perfil:"visualizador"}];
+    const u=DEMO_USERS.find(x=>x.login===login&&x.senha===senha);
+    if(u){usuarioAtual=u;sessionStorage.setItem("sessao",JSON.stringify(u));iniciarApp(u);}
+    else{el("login-erro").textContent="Usuário ou senha incorretos.";el("login-erro").classList.remove("hidden");}
   }finally{btn.disabled=false;btn.textContent="Entrar";}
 }
 
 function iniciarApp(u){
   el("tela-login").classList.add("hidden");el("tela-app").classList.remove("hidden");
   el("usr-nome").textContent=u.login;
-  el("usr-perfil").style.display="none";
   const bp={admin:["Admin","bp-admin"],analista:["Analista","bp-analista"],visualizador:["Visualizador","bp-viz"]}[u.perfil]||["?","bp-viz"];
   el("usr-perfil").textContent=bp[0];el("usr-perfil").className=`bp ${bp[1]}`;
   if(u.perfil==="visualizador")el("th-analise").style.display="none";
-  // Sempre esconde primeiro, depois mostra só para admin
+  // Sempre esconde abas admin primeiro
   el("tab-usuarios").classList.add("hidden");
   el("tab-importar").classList.add("hidden");
+  el("tab-estoque").classList.add("hidden");
   if(u.perfil==="admin"){
     el("tab-usuarios").classList.remove("hidden");
     el("tab-importar").classList.remove("hidden");
+    el("tab-estoque").classList.remove("hidden");
   }
   carregarClientes(1,"");
 }
 
 function fazerLogout(){
-  sessionStorage.removeItem("sessao");
-  usuarioAtual=null;
-  el("tela-app").classList.add("hidden");
-  el("tela-login").classList.remove("hidden");
-  el("inp-login").value="";
-  el("inp-senha").value="";
+  sessionStorage.removeItem("sessao");usuarioAtual=null;
+  el("tela-app").classList.add("hidden");el("tela-login").classList.remove("hidden");
+  el("inp-login").value="";el("inp-senha").value="";
   el("tab-usuarios").classList.add("hidden");
   el("tab-importar").classList.add("hidden");
-  el("tab-clientes").classList.add("active");
-  el("tab-usuarios").classList.remove("active");
-  el("tab-importar").classList.remove("active");
+  el("tab-estoque").classList.add("hidden");
 }
 el("inp-senha").addEventListener("keydown",e=>{if(e.key==="Enter")fazerLogin()});
 
@@ -414,9 +444,11 @@ function mudarAba(aba){
   el("aba-clientes").classList.toggle("hidden",aba!=="clientes");
   el("aba-usuarios").classList.toggle("hidden",aba!=="usuarios");
   el("aba-importar").classList.toggle("hidden",aba!=="importar");
+  el("aba-estoque").classList.toggle("hidden",aba!=="estoque");
   el("tab-clientes").classList.toggle("active",aba==="clientes");
   el("tab-usuarios").classList.toggle("active",aba==="usuarios");
   el("tab-importar").classList.toggle("active",aba==="importar");
+  el("tab-estoque").classList.toggle("active",aba==="estoque");
   if(aba==="usuarios")carregarUsuarios();
 }
 
@@ -430,11 +462,7 @@ async function carregarClientes(pagina,pesquisa){
     if(!res.ok)throw new Error(`Erro ${res.status}`);
     const data=await res.json();
     analisesBD=data.analises||{};
-    modoDemo=false;
-    el("badge-demo").classList.add("hidden");
-    el("aviso").classList.add("hidden");
-    renderTabela(data.itens||[]);
-    temProxima=(data.itens||[]).length===100;
+    modoDemo=false;renderTabela(data.itens||[]);temProxima=(data.itens||[]).length===100;
   }catch(e){
     modoDemo=true;el("badge-demo").classList.remove("hidden");
     el("aviso").textContent=`⚠️ Não foi possível conectar à API Olist. Exibindo dados demonstrativos.`;
@@ -453,16 +481,8 @@ function renderTabela(lista){
     const id=c.id,nome=c.nome||"",fantasia=c.fantasia||"",cnpj=c.cpf_cnpj||"";
     const chave=limparDoc(cnpj)||String(id);
     const an=analisesBD[chave];
-    const analiseFreshness = () => {
-      if (!an || !an.data_analise) return 'vencida';
-      const dataAnalise = new Date(an.data_analise);
-      const seisM = new Date();
-      seisM.setMonth(seisM.getMonth() - 6);
-      return dataAnalise >= seisM ? 'ok' : 'vencida';
-    };
-    const status = analiseFreshness();
     const tr=document.createElement("tr");
-    tr.innerHTML=`<td class="td-cod">${c.codigo||id}</td><td><div class="td-cli"><span class="av">${ini(fantasia||nome)}</span><span>${fantasia||"—"}</span></div></td><td class="td-rz">${nome}</td><td class="td-cnpj">${cnpj||"—"}</td>${podeVer?`<td>${an && status==='ok' ? `<span class="ba">✓ ${fmtData(an.data_analise)}</span>` : an ? `<span class="ba-vencida">⚠ ${fmtData(an.data_analise)||'Sem data'}</span>` : `<span class="ba-vencida">Pendente</span>`}</td>`:""}<td><span class="arr">→</span></td>`;
+    tr.innerHTML=`<td class="td-cod">${c.codigo||id}</td><td><div class="td-cli"><span class="av">${ini(fantasia||nome)}</span><span>${fantasia||"—"}</span></div></td><td class="td-rz">${nome}</td><td class="td-cnpj">${cnpj||"—"}</td>${podeVer?`<td>${an?`<span class="ba">✓ ${fmtData(an.data_analise)}</span>`:`<span class="bp2">Pendente</span>`}</td>`:""}<td><span class="arr">→</span></td>`;
     tr.onclick=()=>abrirModal(c);tbody.appendChild(tr);
   });
 }
@@ -487,7 +507,7 @@ async function abrirModal(c){
   else{limite=Math.round(c.limiteCredito||0);}
   let html=`<div class="sec-title">💳 Limite &amp; Análise de Crédito</div>`;
   if(podeEditar){
-    html+=`<div class="modal-row"><div class="fg-sm"><label>Limite de Crédito (R$)</label><input id="m-limite" value="${fmtLimiteInput(limite)}" placeholder="0" oninput="mascaraLimite(this)" /></div><div class="fg-sm"><label>Data da Última Análise</label><input type="date" id="m-data" value="${an?.data_analise||''}" /></div></div><div class="modal-row-full fg-sm"><label>Anotações da Análise</label><textarea id="m-anotacoes" rows="10" placeholder="Descreva a análise realizada, documentos consultados, score, observações...">${an?.anotacoes||''}</textarea></div>`;
+    html+=`<div class="modal-row"><div class="fg-sm"><label>Limite de Crédito (R$)</label><input id="m-limite" value="${fmtLimiteInput(limite)}" placeholder="0" oninput="mascaraLimite(this)" /></div><div class="fg-sm"><label>Data da Última Análise</label><input type="date" id="m-data" value="${an?.data_analise||''}" /></div></div><div class="modal-row-full fg-sm"><label>Anotações da Análise</label><textarea id="m-anotacoes" rows="4" placeholder="Descreva a análise realizada, documentos consultados, score, observações...">${an?.anotacoes||''}</textarea></div>`;
   }else{
     html+=`<div class="modal-row"><div class="ro-block"><span class="ro-label">Limite de Crédito</span><span class="ro-val">${fmtBRL(limite)}</span></div>${an?`<div class="ro-block"><span class="ro-label">Data da Análise</span><span class="ro-val">${fmtData(an.data_analise)}</span></div>`:`<div></div>`}</div>${an?`<div class="modal-row-full ro-block"><span class="ro-label">Anotações</span><p class="anot-txt">${an.anotacoes||'—'}</p></div>`:`<p class="sem-analise">Nenhuma análise registrada.</p>`}`;
   }
@@ -599,28 +619,11 @@ async function excluirUsuario(id,login){
 let dadosImportacao = [];
 
 function baixarModelo() {
-  // Gera Excel simples via HTML table (abre no Excel corretamente)
-  const html = `<html><head><meta charset="UTF-8"></head><body>
-  <table>
-    <tr><th>cnpj</th><th>limite</th><th>data_analise</th><th>anotacoes</th></tr>
-    <tr>
-      <td style="mso-number-format:'@'">51251441000105</td>
-      <td>20000</td>
-      <td>03/06/2026</td>
-      <td>Cliente com bom histórico de pagamento</td>
-    </tr>
-    <tr>
-      <td style="mso-number-format:'@'">21604056000125</td>
-      <td>5000</td>
-      <td>01/06/2026</td>
-      <td>Novo cliente limite inicial</td>
-    </tr>
-  </table>
-  </body></html>`;
-  const blob = new Blob([html], { type: "application/vnd.ms-excel;charset=utf-8;" });
+  const csv = "cnpj,limite,data_analise,anotacoes\n51251441000105,20000,03/06/2026,Cliente com bom histórico de pagamento\n21604056000125,5000,01/06/2026,Novo cliente limite inicial";
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
-  a.download = "modelo_importacao.xls";
+  a.download = "modelo_importacao.csv";
   a.click();
 }
 
@@ -630,14 +633,9 @@ function lerArquivo(input) {
   const reader = new FileReader();
   reader.onload = function(e) {
     try {
-      const data = new Uint8Array(e.target.result);
-      const wb = XLSX.read(data, { type: 'array', cellDates: true });
-      const ws = wb.Sheets[wb.SheetNames[0]];
-      const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
-
-      if (!rows.length) { alert("Arquivo vazio."); return; }
-
-      const header = rows[0].map(h => String(h).trim().toLowerCase());
+      const text = e.target.result;
+      const linhas = text.split(/\r?\n/).filter(l => l.trim());
+      const header = linhas[0].split(/[,;]/).map(h => h.trim().toLowerCase().replace(/"/g,""));
       const idxCnpj = header.findIndex(h => h.includes("cnpj"));
       const idxLimite = header.findIndex(h => h.includes("limite"));
       const idxData = header.findIndex(h => h.includes("data"));
@@ -646,33 +644,19 @@ function lerArquivo(input) {
       if (idxCnpj === -1) { alert("Coluna 'cnpj' não encontrada no arquivo."); return; }
 
       dadosImportacao = [];
-      for (let i = 1; i < rows.length; i++) {
-        const cols = rows[i];
-        const cnpj = String(cols[idxCnpj] || "").replace(/[.\-\/\s]/g,"").trim();
+      for (let i = 1; i < linhas.length; i++) {
+        const cols = linhas[i].split(/[,;]/).map(c => c.trim().replace(/^"|"$/g,""));
+        const cnpj = (cols[idxCnpj] || "").replace(/[.\-\/\s]/g,"").trim();
         if (!cnpj) continue;
-
-        // Trata data — pode vir como objeto Date ou string
-        let dataStr = "";
-        if (idxData >= 0 && cols[idxData]) {
-          const d = cols[idxData];
-          if (d instanceof Date) {
-            const dd = String(d.getDate()).padStart(2,"0");
-            const mm = String(d.getMonth()+1).padStart(2,"0");
-            const yyyy = d.getFullYear();
-            dataStr = `${dd}/${mm}/${yyyy}`;
-          } else {
-            dataStr = String(d).trim();
-          }
-        }
-
         dadosImportacao.push({
           cnpj,
-          limite: idxLimite >= 0 ? String(cols[idxLimite] || "0") : "0",
-          data_analise: dataStr,
-          anotacoes: idxAnot >= 0 ? String(cols[idxAnot] || "") : "",
+          limite: idxLimite >= 0 ? cols[idxLimite] : "0",
+          data_analise: idxData >= 0 ? cols[idxData] : "",
+          anotacoes: idxAnot >= 0 ? cols[idxAnot] : "",
         });
       }
 
+      // Mostra preview
       el("preview-total").textContent = dadosImportacao.length;
       const tbody = el("preview-tbody");
       tbody.innerHTML = dadosImportacao.slice(0, 50).map(r => `
@@ -689,7 +673,7 @@ function lerArquivo(input) {
       alert("Erro ao ler arquivo: " + e.message);
     }
   };
-  reader.readAsArrayBuffer(file);
+  reader.readAsText(file, "UTF-8");
 }
 
 function cancelarImportacao() {
@@ -762,6 +746,84 @@ async function executarImportacao() {
   btn.disabled = false;
   btn.textContent = "🚀 Iniciar Importação";
   el("import-status").textContent = "";
+}
+
+// ESTOQUE
+let dadosEstoque = [];
+
+async function carregarEstoque() {
+  el("estado-estoque").classList.remove("hidden");
+  el("tabela-estoque-wrap").classList.add("hidden");
+  el("btn-carregar-estoque").disabled = true;
+  el("btn-exportar-estoque").disabled = true;
+  el("msg-estoque").textContent = "Buscando produtos e estoques do Olist...";
+
+  try {
+    const res = await fetch("/api/estoque");
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.erro || "Erro ao carregar estoque");
+
+    dadosEstoque = data.relatorio || [];
+    renderTabelaEstoque(dadosEstoque);
+
+    el("estado-estoque").classList.add("hidden");
+    el("tabela-estoque-wrap").classList.remove("hidden");
+    el("btn-exportar-estoque").disabled = false;
+    el("estoque-rodape").textContent = `${dadosEstoque.length} produtos · ${dadosEstoque.filter(p=>p.necessidade>0).length} precisam de reposição`;
+  } catch(e) {
+    el("msg-estoque").textContent = "Erro: " + e.message;
+  } finally {
+    el("btn-carregar-estoque").disabled = false;
+  }
+}
+
+function renderTabelaEstoque(lista) {
+  const tbody = el("tbody-estoque");
+  tbody.innerHTML = lista.map(p => {
+    const urgente = p.necessidade > 0;
+    const bg = urgente ? "background:var(--redl);" : "";
+    const cor = urgente ? "color:var(--red);font-weight:700;" : "";
+    return `<tr style="border-bottom:1px solid var(--br);${bg}">
+      <td style="padding:10px 12px;font-size:12px;font-family:monospace;">${p.sku||"—"}</td>
+      <td style="padding:10px 12px;font-size:13px;">${p.nome}</td>
+      <td style="padding:10px 12px;font-size:12px;text-align:center;color:var(--mt);">${p.unidade||"—"}</td>
+      <td style="padding:10px 12px;font-size:13px;text-align:right;">${fmtQtd(p.estoqueFisico)}</td>
+      <td style="padding:10px 12px;font-size:13px;text-align:right;color:var(--am);">${fmtQtd(p.estoqueReservado)}</td>
+      <td style="padding:10px 12px;font-size:13px;text-align:right;">${fmtQtd(p.estoqueDisponivel)}</td>
+      <td style="padding:10px 12px;font-size:13px;text-align:right;color:var(--g);">${fmtQtd(p.emCompra)}</td>
+      <td style="padding:10px 12px;font-size:13px;text-align:right;font-weight:600;">${fmtQtd(p.dispMaisCompras)}</td>
+      <td style="padding:10px 12px;font-size:13px;text-align:right;color:var(--mt);">${fmtQtd(p.estoqueMinimo)}</td>
+      <td style="padding:10px 12px;font-size:13px;text-align:right;${cor}">${urgente ? fmtQtd(p.necessidade) : "—"}</td>
+    </tr>`;
+  }).join("");
+}
+
+function fmtQtd(v) {
+  const n = parseFloat(v) || 0;
+  return n % 1 === 0 ? n.toLocaleString("pt-BR") : n.toLocaleString("pt-BR", {minimumFractionDigits:2, maximumFractionDigits:2});
+}
+
+function exportarEstoque() {
+  if (!dadosEstoque.length) return;
+  const html = `<html><head><meta charset="UTF-8"></head><body><table>
+    <tr>
+      <th>SKU</th><th>Produto</th><th>Unidade</th>
+      <th>Est. Físico</th><th>Reservado</th><th>Disponível</th>
+      <th>Em Compra</th><th>Disp.+Compras</th><th>Est. Mínimo</th><th>Necessidade</th>
+    </tr>
+    ${dadosEstoque.map(p=>`<tr>
+      <td style="mso-number-format:'@'">${p.sku||""}</td>
+      <td>${p.nome}</td><td>${p.unidade||""}</td>
+      <td>${p.estoqueFisico}</td><td>${p.estoqueReservado}</td><td>${p.estoqueDisponivel}</td>
+      <td>${p.emCompra}</td><td>${p.dispMaisCompras}</td><td>${p.estoqueMinimo}</td>
+      <td>${p.necessidade}</td>
+    </tr>`).join("")}
+  </table></body></html>`;
+  const blob = new Blob([html], { type: "application/vnd.ms-excel;charset=utf-8;" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `estoque_${new Date().toISOString().slice(0,10)}.xls`;
+  a.click();
 }
 
 // RESTAURAR SESSÃO
