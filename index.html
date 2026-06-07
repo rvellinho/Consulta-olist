@@ -814,7 +814,7 @@ async function carregarEstoque() {
 
       const r = await fetch(`/api/estoque?acao=produto&id=${prod.id}`);
       const d = await r.json();
-      if (d.ignorar) continue;
+      if (d.ignorar) { console.log("ignorado:", prod.id, prod.nome, d.motivo); continue; }
 
       const estoqueDisponivel = d.estoqueFisico - d.estoqueReservado;
       const emCompra = ordensMap[Number(prod.id)] || 0;
