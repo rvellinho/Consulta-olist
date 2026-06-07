@@ -90,7 +90,11 @@ module.exports = async (req, res) => {
       const prod = parseJSON(r1.text).retorno?.produto;
       if (!prod) return res.status(200).json({ ignorar: true, motivo: "produto não encontrado" });
 
-     // Sem filtro — traz todos os produtos ativos
+     // Filtra produtos de representação
+      if ((prod.localizacao || "").toUpperCase().includes("REPRESENTAÇÃO") ||
+          (prod.localizacao || "").toUpperCase().includes("REPRESENTACAO")) {
+        return res.status(200).json({ ignorar: true, motivo: "representação" });
+      }
 
       await sleep(400);
 
