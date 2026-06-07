@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Rampa · Gestão de Crédito</title>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Syne:wght@700;800&display=swap" rel="stylesheet" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
@@ -619,9 +620,14 @@ function lerArquivo(input) {
   const reader = new FileReader();
   reader.onload = function(e) {
     try {
-      const text = e.target.result;
-      const linhas = text.split(/\r?\n/).filter(l => l.trim());
-      const header = linhas[0].split(/[,;]/).map(h => h.trim().toLowerCase().replace(/"/g,""));
+      const data = new Uint8Array(e.target.result);
+      const wb = XLSX.read(data, { type: 'array', cellDates: true });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+
+      if (!rows.length) { alert("Arquivo vazio."); return; }
+
+      const header = rows[0].map(h => String(h).trim().toLowerCase());
       const idxCnpj = header.findIndex(h => h.includes("cnpj"));
       const idxLimite = header.findIndex(h => h.includes("limite"));
       const idxData = header.findIndex(h => h.includes("data"));
@@ -630,19 +636,33 @@ function lerArquivo(input) {
       if (idxCnpj === -1) { alert("Coluna 'cnpj' não encontrada no arquivo."); return; }
 
       dadosImportacao = [];
-      for (let i = 1; i < linhas.length; i++) {
-        const cols = linhas[i].split(/[,;]/).map(c => c.trim().replace(/^"|"$/g,""));
-        const cnpj = (cols[idxCnpj] || "").replace(/[.\-\/\s]/g,"").trim();
+      for (let i = 1; i < rows.length; i++) {
+        const cols = rows[i];
+        const cnpj = String(cols[idxCnpj] || "").replace(/[.\-\/\s]/g,"").trim();
         if (!cnpj) continue;
+
+        // Trata data — pode vir como objeto Date ou string
+        let dataStr = "";
+        if (idxData >= 0 && cols[idxData]) {
+          const d = cols[idxData];
+          if (d instanceof Date) {
+            const dd = String(d.getDate()).padStart(2,"0");
+            const mm = String(d.getMonth()+1).padStart(2,"0");
+            const yyyy = d.getFullYear();
+            dataStr = `${dd}/${mm}/${yyyy}`;
+          } else {
+            dataStr = String(d).trim();
+          }
+        }
+
         dadosImportacao.push({
           cnpj,
-          limite: idxLimite >= 0 ? cols[idxLimite] : "0",
-          data_analise: idxData >= 0 ? cols[idxData] : "",
-          anotacoes: idxAnot >= 0 ? cols[idxAnot] : "",
+          limite: idxLimite >= 0 ? String(cols[idxLimite] || "0") : "0",
+          data_analise: dataStr,
+          anotacoes: idxAnot >= 0 ? String(cols[idxAnot] || "") : "",
         });
       }
 
-      // Mostra preview
       el("preview-total").textContent = dadosImportacao.length;
       const tbody = el("preview-tbody");
       tbody.innerHTML = dadosImportacao.slice(0, 50).map(r => `
@@ -659,7 +679,7 @@ function lerArquivo(input) {
       alert("Erro ao ler arquivo: " + e.message);
     }
   };
-  reader.readAsText(file, "UTF-8");
+  reader.readAsArrayBuffer(file);
 }
 
 function cancelarImportacao() {
