@@ -68,12 +68,13 @@
     tbody tr:last-child { border-bottom: none; }
     tbody tr:hover { background: var(--acl); }
     tbody td { padding: 12px 15px; font-size: 14px; vertical-align: middle; }
-    .td-cod { font-size: 11px; color: var(--mt); font-family: 'Inter', sans-serif; }
+    .td-cod { font-size: 14px; color: var(--mt); font-family: 'Inter', sans-serif; font-weight: 500; }
     .td-cli { display: flex; align-items: center; gap: 10px; }
     .av { width: 32px; height: 32px; border-radius: 8px; background: linear-gradient(135deg, #c0001a, #7a0010); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; font-family: 'Inter', sans-serif; flex-shrink: 0; }
-    .td-rz { color: var(--mt); font-size: 12px; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .td-rz { color: var(--mt); font-size: 12px; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .td-cnpj { font-size: 12px; color: var(--mt); font-family: 'Inter', sans-serif; white-space: nowrap; }
     .ba { background: var(--gl); color: var(--g); border-radius: 6px; padding: 3px 9px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+    .ba-vencida { background: var(--redl); color: var(--red); border-radius: 6px; padding: 3px 9px; font-size: 11px; font-weight: 600; white-space: nowrap; }
     .bp2 { background: var(--aml); color: var(--am); border-radius: 6px; padding: 3px 9px; font-size: 11px; font-weight: 600; }
     .arr { color: var(--ac); font-size: 15px; }
     .state-center { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 60px 20px; color: var(--mt); }
@@ -379,6 +380,7 @@ async function fazerLogin(){
 function iniciarApp(u){
   el("tela-login").classList.add("hidden");el("tela-app").classList.remove("hidden");
   el("usr-nome").textContent=u.login;
+  el("usr-perfil").style.display="none";
   const bp={admin:["Admin","bp-admin"],analista:["Analista","bp-analista"],visualizador:["Visualizador","bp-viz"]}[u.perfil]||["?","bp-viz"];
   el("usr-perfil").textContent=bp[0];el("usr-perfil").className=`bp ${bp[1]}`;
   if(u.perfil==="visualizador")el("th-analise").style.display="none";
@@ -451,8 +453,16 @@ function renderTabela(lista){
     const id=c.id,nome=c.nome||"",fantasia=c.fantasia||"",cnpj=c.cpf_cnpj||"";
     const chave=limparDoc(cnpj)||String(id);
     const an=analisesBD[chave];
+    const analiseFreshness = () => {
+      if (!an || !an.data_analise) return 'vencida';
+      const dataAnalise = new Date(an.data_analise);
+      const seisM = new Date();
+      seisM.setMonth(seisM.getMonth() - 6);
+      return dataAnalise >= seisM ? 'ok' : 'vencida';
+    };
+    const status = analiseFreshness();
     const tr=document.createElement("tr");
-    tr.innerHTML=`<td class="td-cod">${c.codigo||id}</td><td><div class="td-cli"><span class="av">${ini(fantasia||nome)}</span><span>${fantasia||"—"}</span></div></td><td class="td-rz">${nome}</td><td class="td-cnpj">${cnpj||"—"}</td>${podeVer?`<td>${an?`<span class="ba">✓ ${fmtData(an.data_analise)}</span>`:`<span class="bp2">Pendente</span>`}</td>`:""}<td><span class="arr">→</span></td>`;
+    tr.innerHTML=`<td class="td-cod">${c.codigo||id}</td><td><div class="td-cli"><span class="av">${ini(fantasia||nome)}</span><span>${fantasia||"—"}</span></div></td><td class="td-rz">${nome}</td><td class="td-cnpj">${cnpj||"—"}</td>${podeVer?`<td>${an && status==='ok' ? `<span class="ba">✓ ${fmtData(an.data_analise)}</span>` : an ? `<span class="ba-vencida">⚠ ${fmtData(an.data_analise)||'Sem data'}</span>` : `<span class="ba-vencida">Pendente</span>`}</td>`:""}<td><span class="arr">→</span></td>`;
     tr.onclick=()=>abrirModal(c);tbody.appendChild(tr);
   });
 }
