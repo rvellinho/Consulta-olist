@@ -52,12 +52,18 @@ module.exports = async (req, res) => {
     const dProd = JSON.parse(rProd.text);
     const produtos = dProd.retorno?.produtos?.slice(0, 2) || [];
 
-    // Testa 2: buscar ordens de compra V3
-    // Tenta diferentes URLs para ordens de compra
-    const rOC = await httpsRequest("GET", "api.tiny.com.br",
-      "/public-api/v3/ordens-de-compra?limit=5&pagina=1",
-      null, { Authorization: "Bearer " + token, "Content-Type": "application/json" }
-    );
+        // Testa URLs possíveis para ordens de compra
+    const urls = [
+      "/public-api/v3/ordens-de-compra?limit=5",
+      "/public-api/v3/ordem-compra?limit=5",
+      "/public-api/v3/compras/ordens?limit=5",
+    ];
+    const ocResults = {};
+    for (const url of urls) {
+      const r = await httpsRequest("GET", "api.tiny.com.br", url, null,
+        { Authorization: "Bearer " + token });
+      ocResults[url] = { status: r.status, body: r.text.substring(0, 200) };
+    }
 
     // Testa também obter produto completo para ver campo controlarEstoque
     const p2 = new URLSearchParams({ token: TOKEN_V2, id: produtos[0]?.produto?.id, formato: "JSON" });
@@ -76,8 +82,7 @@ module.exports = async (req, res) => {
 
     return res.status(200).json({
       produtos_amostra: produtos.slice(0, 2),
-      ordens_compra_raw: JSON.parse(rOC.text),
-      ordens_compra_status: rOC.status,
+      ordens_compra_testes: ocResults,
       estoque_amostra: estoque,
       produto_completo: JSON.parse(rProdCompleto.text),
     });
