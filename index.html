@@ -812,6 +812,8 @@ async function carregarEstoque() {
       const pct = 20 + ((i + 1) / total) * 80;
       atualizarProgresso(pct, `Produto ${i + 1} de ${total}: ${prod.nome}`);
 
+      // Pausa entre chamadas para respeitar rate limit do Olist
+      await new Promise(r => setTimeout(r, 600));
       const r = await fetch(`/api/estoque?acao=produto&id=${prod.id}`);
       const d = await r.json();
       if (d.ignorar) { console.log("ignorado:", prod.id, prod.nome, d.motivo); continue; }
