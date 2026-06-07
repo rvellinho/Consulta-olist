@@ -113,6 +113,8 @@ module.exports = async (req, res) => {
         sku: prod.codigo || "",
         nome: prod.nome,
         unidade: prod.unidade || "",
+        tipo: prod.tipo || "",
+        classe_produto: prod.classe_produto || "",
         estoqueFisico,
         estoqueReservado,
         estoqueMinimo: parseFloat(prod.estoque_minimo || 0),
