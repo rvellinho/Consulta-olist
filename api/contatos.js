@@ -73,10 +73,22 @@ module.exports = async (req, res) => {
       const pagina = req.query.pagina || 1;
       const pesquisa = req.query.pesquisa || " ";
 
+      // Detecta se a busca é por CNPJ/CPF (só números)
+      const somenteNumeros = pesquisa.replace(/[.\-\/\s]/g, "");
+      const isCnpj = /^\d{11,14}$/.test(somenteNumeros);
+
       const params = new URLSearchParams({
-        token: TOKEN, pesquisa, situacao: "A",
-        pagina: String(pagina), formato: "JSON",
+        token: TOKEN,
+        situacao: "A",
+        pagina: String(pagina),
+        formato: "JSON",
       });
+
+      if (isCnpj) {
+        params.append("cpf_cnpj", somenteNumeros);
+      } else {
+        params.append("pesquisa", pesquisa);
+      }
 
       const r = await post("api.tiny.com.br", "/api2/contatos.pesquisa.php", params.toString(), { "Content-Type": "application/x-www-form-urlencoded" });
       const data = parseJSON(r.text);
