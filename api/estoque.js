@@ -90,9 +90,9 @@ module.exports = async (req, res) => {
       const prod = parseJSON(r1.text).retorno?.produto;
       if (!prod) return res.status(200).json({ ignorar: true, motivo: "produto não encontrado" });
 
-      // Filtra apenas produtos físicos
-      if (prod.classe_produto !== "P") {
-        return res.status(200).json({ ignorar: true, motivo: "não é produto físico" });
+      // Ignora apenas serviços puros (tipo S no cadastro)
+      if (prod.tipo === "S") {
+        return res.status(200).json({ ignorar: true, motivo: "serviço" });
       }
 
       await sleep(400);
