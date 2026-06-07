@@ -90,9 +90,13 @@ module.exports = async (req, res) => {
       const prod = parseJSON(r1.text).retorno?.produto;
       if (!prod) return res.status(200).json({ ignorar: true, motivo: "produto não encontrado" });
 
-     // Filtra produtos de representação
-      if ((prod.localizacao || "").toUpperCase().includes("REPRESENTAÇÃO") ||
-          (prod.localizacao || "").toUpperCase().includes("REPRESENTACAO")) {
+     // Filtra serviços (tipo S ou classe_produto S)
+      if (prod.tipo === "S" || prod.classe_produto === "S") {
+        return res.status(200).json({ ignorar: true, motivo: "serviço" });
+      }
+
+      // Filtra produtos de representação
+      if ((prod.localizacao || "").toUpperCase().includes("REPRESENTA")) {
         return res.status(200).json({ ignorar: true, motivo: "representação" });
       }
 
