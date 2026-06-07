@@ -27,12 +27,10 @@ async function getAccessToken() {
   );
   const data = JSON.parse(r.text);
   const refreshToken = data[0].token;
-
   const body = "grant_type=refresh_token"
     + "&client_id=" + encodeURIComponent(CLIENT_ID)
     + "&client_secret=" + encodeURIComponent(CLIENT_SECRET)
     + "&refresh_token=" + encodeURIComponent(refreshToken);
-
   const tr = await httpsRequest("POST", "accounts.tiny.com.br",
     "/realms/tiny/protocol/openid-connect/token", body,
     { "Content-Type": "application/x-www-form-urlencoded", "Content-Length": Buffer.byteLength(body) }
@@ -40,51 +38,44 @@ async function getAccessToken() {
   return JSON.parse(tr.text).access_token;
 }
 
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
 module.exports = async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   try {
     const token = await getAccessToken();
 
-    // Testa 1: buscar produtos (com controle de estoque)
-    const p1 = new URLSearchParams({ token: TOKEN_V2, pesquisa: " ", controlarEstoque: "S", pagina: "1", formato: "JSON" });
+    // Teste 1: buscar produtos tipo P (produto físico)
+    const p1 = new URLSearchParams({ token: TOKEN_V2, pesquisa: " ", tipo: "P", pagina: "1", formato: "JSON" });
     const rProd = await httpsRequest("POST", "api.tiny.com.br", "/api2/produtos.pesquisa.php",
       p1.toString(), { "Content-Type": "application/x-www-form-urlencoded" });
     const dProd = JSON.parse(rProd.text);
-    const produtos = dProd.retorno?.produtos?.slice(0, 2) || [];
+    const produtos = dProd.retorno?.produtos?.slice(0, 3) || [];
 
-        // Testa URLs possíveis para ordens de compra
-    const urls = [
-      "/public-api/v3/ordens-de-compra?limit=5",
-      "/public-api/v3/ordem-compra?limit=5",
-      "/public-api/v3/compras/ordens?limit=5",
-    ];
-    const ocResults = {};
-    for (const url of urls) {
-      const r = await httpsRequest("GET", "api.tiny.com.br", url, null,
-        { Authorization: "Bearer " + token });
-      ocResults[url] = { status: r.status, body: r.text.substring(0, 200) };
-    }
+    await sleep(700);
 
-    // Testa também obter produto completo para ver campo controlarEstoque
-    const p2 = new URLSearchParams({ token: TOKEN_V2, id: produtos[0]?.produto?.id, formato: "JSON" });
-    const rProdCompleto = await httpsRequest("POST", "api.tiny.com.br", "/api2/produto.obter.php",
-      p2.toString(), { "Content-Type": "application/x-www-form-urlencoded" });
+    // Teste 2: ordens de compra V3 — URL sem "s"
+    const rOC = await httpsRequest("GET", "api.tiny.com.br",
+      "/public-api/v3/ordem-compra?limit=3",
+      null, { Authorization: "Bearer " + token }
+    );
 
-    // Testa 3: buscar estoque de um produto
-    let estoque = null;
+    await sleep(700);
+
+    // Teste 3: produto completo para ver campo controlarEstoque
+    let prodCompleto = null;
     if (produtos.length > 0) {
       const idProd = produtos[0].produto?.id;
       const p3 = new URLSearchParams({ token: TOKEN_V2, id: idProd, formato: "JSON" });
-      const rEst = await httpsRequest("POST", "api.tiny.com.br", "/api2/produto.obter.estoque.php",
+      const rPC = await httpsRequest("POST", "api.tiny.com.br", "/api2/produto.obter.php",
         p3.toString(), { "Content-Type": "application/x-www-form-urlencoded" });
-      estoque = JSON.parse(rEst.text);
+      prodCompleto = JSON.parse(rPC.text);
     }
 
     return res.status(200).json({
-      produtos_amostra: produtos.slice(0, 2),
-      ordens_compra_testes: ocResults,
-      estoque_amostra: estoque,
-      produto_completo: JSON.parse(rProdCompleto.text),
+      produtos_tipo_P: produtos,
+      ordens_compra: { status: rOC.status, body: JSON.parse(rOC.text) },
+      produto_completo: prodCompleto,
     });
 
   } catch (e) {
