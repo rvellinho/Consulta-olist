@@ -814,10 +814,11 @@ async function carregarEstoque() {
 
       // Pausa entre chamadas para respeitar rate limit do Olist
       await new Promise(r => setTimeout(r, 600));
+     await new Promise(r => setTimeout(r, 600));
       const r = await fetch(`/api/estoque?acao=produto&id=${prod.id}`);
       const d = await r.json();
-      if (d.ignorar) { console.log("ignorado:", prod.id, prod.nome, d.motivo); continue; }
-
+      if (d.ignorar) continue;
+      
       const estoqueDisponivel = d.estoqueFisico - d.estoqueReservado;
       const emCompra = ordensMap[Number(prod.id)] || 0;
       const dispMaisCompras = estoqueDisponivel + emCompra;
