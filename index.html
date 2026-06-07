@@ -752,25 +752,98 @@ async function executarImportacao() {
 let dadosEstoque = [];
 
 async function carregarEstoque() {
-  el("estado-estoque").classList.remove("hidden");
-  el("tabela-estoque-wrap").classList.add("hidden");
+  // Mostra modal de progresso
+  document.body.insertAdjacentHTML("beforeend", `
+    <div id="modal-progresso" style="position:fixed;inset:0;background:rgba(17,24,39,.6);backdrop-filter:blur(4px);z-index:200;display:flex;align-items:center;justify-content:center;padding:20px;">
+      <div style="background:#fff;border-radius:16px;padding:32px;width:100%;max-width:460px;box-shadow:0 25px 60px rgba(0,0,0,.25);">
+        <h3 style="font-size:16px;font-weight:700;margin-bottom:6px;">📦 Carregando Relatório de Estoque</h3>
+        <p id="prog-msg" style="font-size:13px;color:var(--mt);margin-bottom:20px;">Iniciando...</p>
+        <div style="background:var(--s2);border-radius:99px;height:10px;overflow:hidden;margin-bottom:10px;">
+          <div id="prog-barra" style="height:100%;background:linear-gradient(90deg,var(--ac),#ff4d6d);border-radius:99px;width:0%;transition:width .4s ease;"></div>
+        </div>
+        <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--mt);">
+          <span id="prog-pct">0%</span>
+          <span id="prog-tempo">Calculando...</span>
+        </div>
+      </div>
+    </div>`);
+
   el("btn-carregar-estoque").disabled = true;
   el("btn-exportar-estoque").disabled = true;
-  el("msg-estoque").textContent = "Buscando produtos e estoques do Olist...";
+  el("tabela-estoque-wrap").classList.add("hidden");
+  el("estado-estoque").classList.add("hidden");
+
+  const inicio = Date.now();
+
+  function atualizarProgresso(pct, msg) {
+    el("prog-barra").style.width = pct + "%";
+    el("prog-pct").textContent = Math.round(pct) + "%";
+    el("prog-msg").textContent = msg;
+    const decorrido = (Date.now() - inicio) / 1000;
+    if (pct > 2) {
+      const total = decorrido / (pct / 100);
+      const restante = Math.max(0, Math.round(total - decorrido));
+      el("prog-tempo").textContent = restante > 0 ? `~${restante}s restantes` : "Finalizando...";
+    }
+  }
 
   try {
-    const res = await fetch("/api/estoque");
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.erro || "Erro ao carregar estoque");
+    // ETAPA 1 — Ordens de compra (0-10%)
+    atualizarProgresso(2, "Buscando ordens de compra pendentes...");
+    const resOrdens = await fetch("/api/estoque?acao=ordens");
+    const dataOrdens = await resOrdens.json();
+    if (!resOrdens.ok) throw new Error(dataOrdens.erro || "Erro ao buscar ordens");
+    const ordensMap = dataOrdens.ordensMap || {};
+    atualizarProgresso(10, "Ordens carregadas. Buscando lista de produtos...");
 
-    dadosEstoque = data.relatorio || [];
+    // ETAPA 2 — Lista de produtos (10-20%)
+    const resProd = await fetch("/api/estoque?acao=produtos");
+    const dataProd = await resProd.json();
+    if (!resProd.ok) throw new Error(dataProd.erro || "Erro ao buscar produtos");
+    const listaProdutos = dataProd.produtos || [];
+    atualizarProgresso(20, `${listaProdutos.length} produtos encontrados. Buscando estoque...`);
+
+    // ETAPA 3 — Dados de cada produto (20-100%)
+    const relatorio = [];
+    const total = listaProdutos.length;
+
+    for (let i = 0; i < total; i++) {
+      const prod = listaProdutos[i];
+      const pct = 20 + ((i + 1) / total) * 80;
+      atualizarProgresso(pct, `Produto ${i + 1} de ${total}: ${prod.nome}`);
+
+      const r = await fetch(`/api/estoque?acao=produto&id=${prod.id}`);
+      const d = await r.json();
+      if (d.ignorar) continue;
+
+      const estoqueDisponivel = d.estoqueFisico - d.estoqueReservado;
+      const emCompra = ordensMap[Number(prod.id)] || 0;
+      const dispMaisCompras = estoqueDisponivel + emCompra;
+      const necessidade = Math.max(0, d.estoqueMinimo - dispMaisCompras);
+
+      relatorio.push({
+        id: prod.id, sku: d.sku, nome: d.nome, unidade: d.unidade,
+        estoqueFisico: d.estoqueFisico, estoqueReservado: d.estoqueReservado,
+        estoqueDisponivel, emCompra, dispMaisCompras,
+        estoqueMinimo: d.estoqueMinimo, necessidade,
+      });
+    }
+
+    relatorio.sort((a, b) => b.necessidade - a.necessidade || a.nome.localeCompare(b.nome));
+    dadosEstoque = relatorio;
+
+    atualizarProgresso(100, "Concluído!");
+    await new Promise(r => setTimeout(r, 600));
+
+    document.getElementById("modal-progresso")?.remove();
     renderTabelaEstoque(dadosEstoque);
-
-    el("estado-estoque").classList.add("hidden");
     el("tabela-estoque-wrap").classList.remove("hidden");
     el("btn-exportar-estoque").disabled = false;
-    el("estoque-rodape").textContent = `${dadosEstoque.length} produtos · ${dadosEstoque.filter(p=>p.necessidade>0).length} precisam de reposição`;
+    el("estoque-rodape").textContent = `${dadosEstoque.length} produtos · ${dadosEstoque.filter(p => p.necessidade > 0).length} precisam de reposição`;
+
   } catch(e) {
+    document.getElementById("modal-progresso")?.remove();
+    el("estado-estoque").classList.remove("hidden");
     el("msg-estoque").textContent = "Erro: " + e.message;
   } finally {
     el("btn-carregar-estoque").disabled = false;
@@ -808,8 +881,8 @@ function exportarEstoque() {
   const html = `<html><head><meta charset="UTF-8"></head><body><table>
     <tr>
       <th>SKU</th><th>Produto</th><th>Unidade</th>
-      <th>Est. Físico</th><th>Reservado</th><th>Disponível</th>
-      <th>Em Compra</th><th>Disp.+Compras</th><th>Est. Mínimo</th><th>Necessidade</th>
+      <th>Est. Fisico</th><th>Reservado</th><th>Disponivel</th>
+      <th>Em Compra</th><th>Disp.+Compras</th><th>Est. Minimo</th><th>Necessidade</th>
     </tr>
     ${dadosEstoque.map(p=>`<tr>
       <td style="mso-number-format:'@'">${p.sku||""}</td>
@@ -825,6 +898,7 @@ function exportarEstoque() {
   a.download = `estoque_${new Date().toISOString().slice(0,10)}.xls`;
   a.click();
 }
+
 
 // RESTAURAR SESSÃO
 (function(){
