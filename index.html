@@ -264,8 +264,22 @@
 
   <!-- ABA ESTOQUE -->
   <div id="aba-estoque" class="hidden">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px;">
-      <div style="font-size:13px;color:var(--mt);">Produtos físicos com controle de estoque. Atualizado ao carregar.</div>
+    <!-- Filtros -->
+    <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:12px;align-items:center;">
+      <input id="est-busca" placeholder="🔍 Buscar produto ou SKU..." oninput="filtrarEstoque()" style="border:1.5px solid var(--br);border-radius:8px;padding:8px 12px;font-size:13px;font-family:Inter,sans-serif;outline:none;min-width:200px;flex:1;" />
+      <select id="est-categoria" onchange="filtrarEstoque()" style="border:1.5px solid var(--br);border-radius:8px;padding:8px 12px;font-size:13px;font-family:Inter,sans-serif;outline:none;background:#fff;">
+        <option value="">Todas as categorias</option>
+      </select>
+      <select id="est-fornecedor" onchange="filtrarEstoque()" style="border:1.5px solid var(--br);border-radius:8px;padding:8px 12px;font-size:13px;font-family:Inter,sans-serif;outline:none;background:#fff;">
+        <option value="">Todos os fornecedores</option>
+      </select>
+      <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;white-space:nowrap;padding:8px 12px;border:1.5px solid var(--br);border-radius:8px;background:#fff;">
+        <input type="checkbox" id="est-agrupar" onchange="filtrarEstoque()" style="width:14px;height:14px;accent-color:var(--ac);" />
+        Agrupar produtos iguais
+      </label>
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
+      <div style="font-size:12px;color:var(--mt);" id="estoque-rodape"></div>
       <div style="display:flex;gap:8px;">
         <button class="btn-sec" id="btn-exportar-estoque" onclick="exportarEstoque()" disabled>⬇ Exportar Excel</button>
         <button class="btn-primary" id="btn-carregar-estoque" onclick="carregarEstoque()">🔄 Carregar Relatório</button>
@@ -275,26 +289,16 @@
       <div class="state-center"><div class="spinner"></div><p id="msg-estoque">Carregando dados do Olist...</p></div>
     </div>
     <div id="tabela-estoque-wrap" class="hidden">
-      <div class="table-wrap" style="overflow-x:auto;">
-        <table id="tabela-estoque" style="width:100%;border-collapse:collapse;min-width:900px;">
-          <thead>
-            <tr>
-              <th style="padding:10px 12px;font-size:11px;font-weight:700;text-transform:uppercase;color:var(--mt);background:var(--s2);text-align:left;border-bottom:1px solid var(--br);white-space:nowrap;">SKU</th>
-              <th style="padding:10px 12px;font-size:11px;font-weight:700;text-transform:uppercase;color:var(--mt);background:var(--s2);text-align:left;border-bottom:1px solid var(--br);">Produto</th>
-              <th style="padding:10px 12px;font-size:11px;font-weight:700;text-transform:uppercase;color:var(--mt);background:var(--s2);text-align:center;border-bottom:1px solid var(--br);white-space:nowrap;">Un</th>
-              <th style="padding:10px 12px;font-size:11px;font-weight:700;text-transform:uppercase;color:var(--mt);background:var(--s2);text-align:right;border-bottom:1px solid var(--br);white-space:nowrap;">Est. Físico</th>
-              <th style="padding:10px 12px;font-size:11px;font-weight:700;text-transform:uppercase;color:var(--mt);background:var(--s2);text-align:right;border-bottom:1px solid var(--br);white-space:nowrap;">Reservado</th>
-              <th style="padding:10px 12px;font-size:11px;font-weight:700;text-transform:uppercase;color:var(--mt);background:var(--s2);text-align:right;border-bottom:1px solid var(--br);white-space:nowrap;">Disponível</th>
-              <th style="padding:10px 12px;font-size:11px;font-weight:700;text-transform:uppercase;color:var(--mt);background:var(--s2);text-align:right;border-bottom:1px solid var(--br);white-space:nowrap;">Em Compra</th>
-              <th style="padding:10px 12px;font-size:11px;font-weight:700;text-transform:uppercase;color:var(--mt);background:var(--s2);text-align:right;border-bottom:1px solid var(--br);white-space:nowrap;">Disp.+Compras</th>
-              <th style="padding:10px 12px;font-size:11px;font-weight:700;text-transform:uppercase;color:var(--mt);background:var(--s2);text-align:right;border-bottom:1px solid var(--br);white-space:nowrap;">Est. Mínimo</th>
-              <th style="padding:10px 12px;font-size:11px;font-weight:700;text-transform:uppercase;color:var(--mt);background:var(--s2);text-align:right;border-bottom:1px solid var(--br);white-space:nowrap;">Necessidade</th>
-            </tr>
-          </thead>
-          <tbody id="tbody-estoque"></tbody>
-        </table>
+      <div style="border:1px solid var(--br);border-radius:var(--r);overflow:hidden;box-shadow:var(--sh);">
+        <div style="overflow-x:auto;max-height:65vh;overflow-y:auto;">
+          <table id="tabela-estoque" style="width:100%;border-collapse:collapse;min-width:1100px;">
+            <thead id="thead-estoque" style="position:sticky;top:0;z-index:10;">
+              <tr id="thead-row"></tr>
+            </thead>
+            <tbody id="tbody-estoque"></tbody>
+          </table>
+        </div>
       </div>
-      <div style="margin-top:10px;font-size:12px;color:var(--mt);" id="estoque-rodape"></div>
     </div>
   </div>
 
@@ -750,9 +754,52 @@ async function executarImportacao() {
 
 // ESTOQUE
 let dadosEstoque = [];
+let dadosEstoqueFiltrado = [];
+let estoqueSortCol = null;
+let estoqueSortDir = 1;
+
+const COLUNAS_ESTOQUE = [
+  { key: "sku",             label: "SKU",            align: "left",   num: false },
+  { key: "nome",            label: "Produto",        align: "left",   num: false },
+  { key: "categoria",       label: "Categoria",      align: "left",   num: false },
+  { key: "fornecedor",      label: "Fornecedor",     align: "left",   num: false },
+  { key: "unidade",         label: "Un",             align: "center", num: false },
+  { key: "estoqueFisico",   label: "Est. Físico",    align: "right",  num: true  },
+  { key: "estoqueReservado",label: "Reservado",      align: "right",  num: true  },
+  { key: "estoqueDisponivel",label:"Disponível",     align: "right",  num: true  },
+  { key: "emCompra",        label: "Em Compra",      align: "right",  num: true  },
+  { key: "dispMaisCompras", label: "Disp.+Compras",  align: "right",  num: true  },
+  { key: "estoqueMinimo",   label: "Est. Mínimo",    align: "right",  num: true  },
+  { key: "necessidade",     label: "Necessidade",    align: "right",  num: true  },
+];
+
+function buildTheadEstoque() {
+  const tr = el("thead-row");
+  tr.innerHTML = COLUNAS_ESTOQUE.map((c,i) => `
+    <th onclick="sortEstoque(${i})" style="padding:10px 12px;font-size:11px;font-weight:700;text-transform:uppercase;color:var(--mt);background:var(--s2);text-align:${c.align};border-bottom:1px solid var(--br);white-space:nowrap;cursor:pointer;user-select:none;">
+      ${c.label} <span id="sort-icon-${i}" style="opacity:.4;">↕</span>
+    </th>`).join("");
+}
+
+function sortEstoque(colIdx) {
+  const col = COLUNAS_ESTOQUE[colIdx];
+  if (estoqueSortCol === colIdx) estoqueSortDir *= -1;
+  else { estoqueSortCol = colIdx; estoqueSortDir = 1; }
+  COLUNAS_ESTOQUE.forEach((_,i) => {
+    const ic = el(`sort-icon-${i}`);
+    if (ic) ic.textContent = "↕", ic.style.opacity = ".4";
+  });
+  const ic = el(`sort-icon-${colIdx}`);
+  if (ic) { ic.textContent = estoqueSortDir === 1 ? "↑" : "↓"; ic.style.opacity = "1"; }
+  dadosEstoqueFiltrado.sort((a,b) => {
+    const va = a[col.key] ?? ""; const vb = b[col.key] ?? "";
+    if (col.num) return (parseFloat(va)||0 - (parseFloat(vb)||0)) * estoqueSortDir;
+    return String(va).localeCompare(String(vb)) * estoqueSortDir;
+  });
+  renderTabelaEstoque(dadosEstoqueFiltrado);
+}
 
 async function carregarEstoque() {
-  // Mostra modal de progresso
   document.body.insertAdjacentHTML("beforeend", `
     <div id="modal-progresso" style="position:fixed;inset:0;background:rgba(17,24,39,.6);backdrop-filter:blur(4px);z-index:200;display:flex;align-items:center;justify-content:center;padding:20px;">
       <div style="background:#fff;border-radius:16px;padding:32px;width:100%;max-width:460px;box-shadow:0 25px 60px rgba(0,0,0,.25);">
@@ -767,28 +814,25 @@ async function carregarEstoque() {
         </div>
       </div>
     </div>`);
-
   el("btn-carregar-estoque").disabled = true;
   el("btn-exportar-estoque").disabled = true;
   el("tabela-estoque-wrap").classList.add("hidden");
   el("estado-estoque").classList.add("hidden");
-
   const inicio = Date.now();
 
   function atualizarProgresso(pct, msg) {
     el("prog-barra").style.width = pct + "%";
     el("prog-pct").textContent = Math.round(pct) + "%";
     el("prog-msg").textContent = msg;
-    const decorrido = (Date.now() - inicio) / 1000;
+    const dec = (Date.now() - inicio) / 1000;
     if (pct > 2) {
-      const total = decorrido / (pct / 100);
-      const restante = Math.max(0, Math.round(total - decorrido));
-      el("prog-tempo").textContent = restante > 0 ? `~${restante}s restantes` : "Finalizando...";
+      const tot = dec / (pct / 100);
+      const rest = Math.max(0, Math.round(tot - dec));
+      el("prog-tempo").textContent = rest > 0 ? `~${rest}s restantes` : "Finalizando...";
     }
   }
 
   try {
-    // ETAPA 1 — Ordens de compra (0-10%)
     atualizarProgresso(2, "Buscando ordens de compra pendentes...");
     const resOrdens = await fetch("/api/estoque?acao=ordens");
     const dataOrdens = await resOrdens.json();
@@ -796,36 +840,29 @@ async function carregarEstoque() {
     const ordensMap = dataOrdens.ordensMap || {};
     atualizarProgresso(10, "Ordens carregadas. Buscando lista de produtos...");
 
-    // ETAPA 2 — Lista de produtos (10-20%)
     const resProd = await fetch("/api/estoque?acao=produtos");
     const dataProd = await resProd.json();
     if (!resProd.ok) throw new Error(dataProd.erro || "Erro ao buscar produtos");
     const listaProdutos = dataProd.produtos || [];
     atualizarProgresso(20, `${listaProdutos.length} produtos encontrados. Buscando estoque...`);
 
-    // ETAPA 3 — Dados de cada produto (20-100%)
     const relatorio = [];
     const total = listaProdutos.length;
-
     for (let i = 0; i < total; i++) {
       const prod = listaProdutos[i];
       const pct = 20 + ((i + 1) / total) * 80;
       atualizarProgresso(pct, `Produto ${i + 1} de ${total}: ${prod.nome}`);
-
-      // Pausa entre chamadas para respeitar rate limit do Olist
       await new Promise(r => setTimeout(r, 600));
-     await new Promise(r => setTimeout(r, 600));
       const r = await fetch(`/api/estoque?acao=produto&id=${prod.id}`);
       const d = await r.json();
       if (d.ignorar) continue;
-      
       const estoqueDisponivel = d.estoqueFisico - d.estoqueReservado;
       const emCompra = ordensMap[Number(prod.id)] || 0;
       const dispMaisCompras = estoqueDisponivel + emCompra;
       const necessidade = Math.max(0, d.estoqueMinimo - dispMaisCompras);
-
       relatorio.push({
         id: prod.id, sku: d.sku, nome: d.nome, unidade: d.unidade,
+        categoria: d.categoria || "—", fornecedor: d.fornecedor || "—",
         estoqueFisico: d.estoqueFisico, estoqueReservado: d.estoqueReservado,
         estoqueDisponivel, emCompra, dispMaisCompras,
         estoqueMinimo: d.estoqueMinimo, necessidade,
@@ -835,14 +872,22 @@ async function carregarEstoque() {
     relatorio.sort((a, b) => b.necessidade - a.necessidade || a.nome.localeCompare(b.nome));
     dadosEstoque = relatorio;
 
+    // Popula filtros de categoria e fornecedor
+    const cats = [...new Set(relatorio.map(p=>p.categoria).filter(Boolean).sort())];
+    const fors = [...new Set(relatorio.map(p=>p.fornecedor).filter(f=>f&&f!=="—").sort())];
+    const selCat = el("est-categoria");
+    const selFor = el("est-fornecedor");
+    selCat.innerHTML = '<option value="">Todas as categorias</option>' + cats.map(c=>`<option>${c}</option>`).join("");
+    selFor.innerHTML = '<option value="">Todos os fornecedores</option>' + fors.map(f=>`<option>${f}</option>`).join("");
+
     atualizarProgresso(100, "Concluído!");
     await new Promise(r => setTimeout(r, 600));
-
     document.getElementById("modal-progresso")?.remove();
-    renderTabelaEstoque(dadosEstoque);
+
+    buildTheadEstoque();
+    filtrarEstoque();
     el("tabela-estoque-wrap").classList.remove("hidden");
     el("btn-exportar-estoque").disabled = false;
-    el("estoque-rodape").textContent = `${dadosEstoque.length} produtos · ${dadosEstoque.filter(p => p.necessidade > 0).length} precisam de reposição`;
 
   } catch(e) {
     document.getElementById("modal-progresso")?.remove();
@@ -853,15 +898,64 @@ async function carregarEstoque() {
   }
 }
 
+function filtrarEstoque() {
+  const busca = (el("est-busca")?.value || "").toLowerCase();
+  const cat = el("est-categoria")?.value || "";
+  const forn = el("est-fornecedor")?.value || "";
+  const agrupar = el("est-agrupar")?.checked || false;
+
+  let lista = dadosEstoque.filter(p => {
+    if (cat && p.categoria !== cat) return false;
+    if (forn && p.fornecedor !== forn) return false;
+    if (busca && !p.nome.toLowerCase().includes(busca) && !p.sku.toLowerCase().includes(busca)) return false;
+    return true;
+  });
+
+  if (agrupar) {
+    const mapa = {};
+    lista.forEach(p => {
+      const key = p.nome.trim().toLowerCase();
+      if (!mapa[key]) {
+        mapa[key] = { ...p };
+      } else {
+        mapa[key].estoqueFisico    += p.estoqueFisico;
+        mapa[key].estoqueReservado += p.estoqueReservado;
+        mapa[key].estoqueDisponivel+= p.estoqueDisponivel;
+        mapa[key].emCompra         += p.emCompra;
+        mapa[key].dispMaisCompras  += p.dispMaisCompras;
+        mapa[key].estoqueMinimo    += p.estoqueMinimo;
+        // fornecedor e categoria — junta se diferentes
+        if (mapa[key].fornecedor !== p.fornecedor) mapa[key].fornecedor = "Múltiplos";
+        if (mapa[key].categoria !== p.categoria) mapa[key].categoria = "Múltiplas";
+      }
+    });
+    lista = Object.values(mapa).map(p => ({
+      ...p,
+      necessidade: Math.max(0, p.estoqueMinimo - p.dispMaisCompras)
+    }));
+    lista.sort((a,b) => b.necessidade - a.necessidade || a.nome.localeCompare(b.nome));
+  }
+
+  dadosEstoqueFiltrado = lista;
+  estoqueSortCol = null;
+  renderTabelaEstoque(lista);
+  el("estoque-rodape").textContent = `${lista.length} produtos · ${lista.filter(p=>p.necessidade>0).length} precisam de reposição`;
+}
+
 function renderTabelaEstoque(lista) {
   const tbody = el("tbody-estoque");
+  if (!lista.length) {
+    tbody.innerHTML = `<tr><td colspan="${COLUNAS_ESTOQUE.length}" style="padding:40px;text-align:center;color:var(--mt);">Nenhum produto encontrado.</td></tr>`;
+    return;
+  }
   tbody.innerHTML = lista.map(p => {
     const urgente = p.necessidade > 0;
     const bg = urgente ? "background:var(--redl);" : "";
-    const cor = urgente ? "color:var(--red);font-weight:700;" : "";
     return `<tr style="border-bottom:1px solid var(--br);${bg}">
-      <td style="padding:10px 12px;font-size:12px;font-family:monospace;">${p.sku||"—"}</td>
+      <td style="padding:10px 12px;font-size:12px;font-family:monospace;white-space:nowrap;">${p.sku||"—"}</td>
       <td style="padding:10px 12px;font-size:13px;">${p.nome}</td>
+      <td style="padding:10px 12px;font-size:12px;color:var(--mt);">${p.categoria||"—"}</td>
+      <td style="padding:10px 12px;font-size:12px;color:var(--mt);white-space:nowrap;">${p.fornecedor||"—"}</td>
       <td style="padding:10px 12px;font-size:12px;text-align:center;color:var(--mt);">${p.unidade||"—"}</td>
       <td style="padding:10px 12px;font-size:13px;text-align:right;">${fmtQtd(p.estoqueFisico)}</td>
       <td style="padding:10px 12px;font-size:13px;text-align:right;color:var(--am);">${fmtQtd(p.estoqueReservado)}</td>
@@ -869,7 +963,7 @@ function renderTabelaEstoque(lista) {
       <td style="padding:10px 12px;font-size:13px;text-align:right;color:var(--g);">${fmtQtd(p.emCompra)}</td>
       <td style="padding:10px 12px;font-size:13px;text-align:right;font-weight:600;">${fmtQtd(p.dispMaisCompras)}</td>
       <td style="padding:10px 12px;font-size:13px;text-align:right;color:var(--mt);">${fmtQtd(p.estoqueMinimo)}</td>
-      <td style="padding:10px 12px;font-size:13px;text-align:right;${cor}">${urgente ? fmtQtd(p.necessidade) : "—"}</td>
+      <td style="padding:10px 12px;font-size:13px;text-align:right;${urgente?"color:var(--red);font-weight:700;":""}">${urgente?fmtQtd(p.necessidade):"—"}</td>
     </tr>`;
   }).join("");
 }
@@ -880,19 +974,17 @@ function fmtQtd(v) {
 }
 
 function exportarEstoque() {
-  if (!dadosEstoque.length) return;
+  const lista = dadosEstoqueFiltrado.length ? dadosEstoqueFiltrado : dadosEstoque;
+  if (!lista.length) return;
   const html = `<html><head><meta charset="UTF-8"></head><body><table>
-    <tr>
-      <th>SKU</th><th>Produto</th><th>Unidade</th>
-      <th>Est. Fisico</th><th>Reservado</th><th>Disponivel</th>
-      <th>Em Compra</th><th>Disp.+Compras</th><th>Est. Minimo</th><th>Necessidade</th>
-    </tr>
-    ${dadosEstoque.map(p=>`<tr>
+    <tr><th>SKU</th><th>Produto</th><th>Categoria</th><th>Fornecedor</th><th>Unidade</th>
+    <th>Est. Fisico</th><th>Reservado</th><th>Disponivel</th>
+    <th>Em Compra</th><th>Disp.+Compras</th><th>Est. Minimo</th><th>Necessidade</th></tr>
+    ${lista.map(p=>`<tr>
       <td style="mso-number-format:'@'">${p.sku||""}</td>
-      <td>${p.nome}</td><td>${p.unidade||""}</td>
+      <td>${p.nome}</td><td>${p.categoria||""}</td><td>${p.fornecedor||""}</td><td>${p.unidade||""}</td>
       <td>${p.estoqueFisico}</td><td>${p.estoqueReservado}</td><td>${p.estoqueDisponivel}</td>
-      <td>${p.emCompra}</td><td>${p.dispMaisCompras}</td><td>${p.estoqueMinimo}</td>
-      <td>${p.necessidade}</td>
+      <td>${p.emCompra}</td><td>${p.dispMaisCompras}</td><td>${p.estoqueMinimo}</td><td>${p.necessidade}</td>
     </tr>`).join("")}
   </table></body></html>`;
   const blob = new Blob([html], { type: "application/vnd.ms-excel;charset=utf-8;" });
