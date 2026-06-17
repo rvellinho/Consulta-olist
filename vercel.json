@@ -7,5 +7,11 @@
     "api/contatos.js": {
       "memory": 256
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/ping",
+      "schedule": "0 10 * * *"
+    }
+  ]
 }
