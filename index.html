@@ -83,7 +83,7 @@
     .pag-inf { font-size: 13px; color: var(--mt); }
     .overlay { position: fixed; inset: 0; background: rgba(17,24,39,.5); backdrop-filter: blur(3px); z-index: 100; display: flex; align-items: center; justify-content: center; padding: 20px; animation: fi .15s; }
     @keyframes fi { from { opacity: 0; } to { opacity: 1; } }
-    .modal { background: #fff; border-radius: 16px; width: 100%; max-width: 580px; box-shadow: 0 25px 60px rgba(0,0,0,.25); animation: su .2s; overflow: hidden; }
+    .modal { background: #fff; border-radius: 16px; width: 100%; max-width: 780px; box-shadow: 0 25px 60px rgba(0,0,0,.25); animation: su .2s; overflow: hidden; }
     .modal-sm { max-width: 440px; }
     @keyframes su { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
     .modal-hdr { display: flex; align-items: flex-start; gap: 12px; padding: 18px 20px 14px; border-bottom: 1px solid var(--br); background: #fff; }
@@ -96,7 +96,7 @@
     .c-cnpj { font-size: 10px; font-weight: 600; color: var(--mt); background: var(--s2); border-radius: 4px; padding: 2px 6px; border: 1px solid var(--br); }
     .close-btn { background: var(--s2); border: 1px solid var(--br); border-radius: 8px; width: 30px; height: 30px; cursor: pointer; font-size: 13px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; transition: all .15s; }
     .close-btn:hover { background: var(--redl); color: var(--red); border-color: var(--red); }
-    .modal-body { padding: 16px 20px; }
+    .modal-body { padding: 16px 20px; max-height: calc(100vh - 220px); overflow-y: auto; }
     .modal-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
     .modal-row-full { margin-bottom: 12px; }
     .sec-title { font-size: 10px; font-weight: 700; color: var(--mt); text-transform: uppercase; letter-spacing: .6px; margin-bottom: 10px; padding-bottom: 6px; border-bottom: 1px solid var(--br); }
@@ -511,7 +511,7 @@ async function abrirModal(c){
   else{limite=Math.round(c.limiteCredito||0);}
   let html=`<div class="sec-title">💳 Limite &amp; Análise de Crédito</div>`;
   if(podeEditar){
-    html+=`<div class="modal-row"><div class="fg-sm"><label>Limite de Crédito (R$)</label><input id="m-limite" value="${fmtLimiteInput(limite)}" placeholder="0" oninput="mascaraLimite(this)" /></div><div class="fg-sm"><label>Data da Última Análise</label><input type="date" id="m-data" value="${an?.data_analise||''}" /></div></div><div class="modal-row-full fg-sm"><label>Anotações da Análise</label><textarea id="m-anotacoes" rows="4" placeholder="Descreva a análise realizada, documentos consultados, score, observações...">${an?.anotacoes||''}</textarea></div>`;
+    html+=`<div class="modal-row"><div class="fg-sm"><label>Limite de Crédito (R$)</label><input id="m-limite" value="${fmtLimiteInput(limite)}" placeholder="0" oninput="mascaraLimite(this)" /></div><div class="fg-sm"><label>Data da Última Análise</label><input type="date" id="m-data" value="${an?.data_analise||''}" /></div></div><div class="modal-row-full fg-sm"><label>Anotações da Análise</label><textarea id="m-anotacoes" rows="7" placeholder="Descreva a análise realizada, documentos consultados, score, observações...">${an?.anotacoes||''}</textarea></div>`;
   }else{
     html+=`<div class="modal-row"><div class="ro-block"><span class="ro-label">Limite de Crédito</span><span class="ro-val">${fmtBRL(limite)}</span></div>${an?`<div class="ro-block"><span class="ro-label">Data da Análise</span><span class="ro-val">${fmtData(an.data_analise)}</span></div>`:`<div></div>`}</div>${an?`<div class="modal-row-full ro-block"><span class="ro-label">Anotações</span><p class="anot-txt">${an.anotacoes||'—'}</p></div>`:`<p class="sem-analise">Nenhuma análise registrada.</p>`}`;
   }
