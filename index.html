@@ -172,6 +172,7 @@
     <button class="nav-tab hidden" id="tab-usuarios" onclick="mudarAba('usuarios')">⚙️ Usuários</button>
     <button class="nav-tab hidden" id="tab-importar" onclick="mudarAba('importar')">📥 Importar</button>
     <button class="nav-tab hidden" id="tab-estoque" onclick="mudarAba('estoque')">📦 Estoque</button>
+    <button class="nav-tab hidden" id="tab-relatorios" onclick="mudarAba('relatorios')">📊 Relatórios</button>
   </div>
 
   <!-- ABA CLIENTES -->
@@ -302,6 +303,43 @@
     </div>
   </div>
 
+  <!-- ABA RELATÓRIOS -->
+  <div id="aba-relatorios" class="hidden">
+    <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:12px;align-items:flex-end;">
+      <div class="fg-sm" style="min-width:150px;">
+        <label>Data inicial</label>
+        <input type="date" id="rel-data-inicial" />
+      </div>
+      <div class="fg-sm" style="min-width:150px;">
+        <label>Data final</label>
+        <input type="date" id="rel-data-final" />
+      </div>
+      <button class="btn-primary" id="btn-gerar-relatorio" onclick="gerarRelatorioVendas()">📊 Gerar Relatório</button>
+    </div>
+    <div id="estado-relatorios" class="hidden">
+      <div class="state-center"><div class="spinner"></div><p id="msg-relatorios">Carregando dados do Olist...</p></div>
+    </div>
+    <div id="resultado-relatorios" class="hidden">
+      <div style="display:flex;flex-wrap:wrap;gap:14px;">
+        <div style="flex:1;min-width:200px;background:#fff;border:1px solid var(--br);border-radius:var(--r);box-shadow:var(--sh);padding:18px;">
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--mt);margin-bottom:6px;">Total de Vendas</div>
+          <div id="rel-total-vendas" style="font-size:24px;font-weight:700;color:var(--tx);"></div>
+          <div id="rel-qtd-vendas" style="font-size:12px;color:var(--mt);margin-top:4px;"></div>
+        </div>
+        <div style="flex:1;min-width:200px;background:#fff;border:1px solid var(--br);border-radius:var(--r);box-shadow:var(--sh);padding:18px;">
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--mt);margin-bottom:6px;">Total de Devoluções</div>
+          <div id="rel-total-devolucoes" style="font-size:24px;font-weight:700;color:var(--red);"></div>
+          <div id="rel-qtd-devolucoes" style="font-size:12px;color:var(--mt);margin-top:4px;"></div>
+        </div>
+        <div style="flex:1;min-width:200px;background:#fff;border:1px solid var(--br);border-radius:var(--r);box-shadow:var(--sh);padding:18px;">
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--mt);margin-bottom:6px;">Líquido</div>
+          <div id="rel-liquido" style="font-size:24px;font-weight:700;color:var(--ac);"></div>
+          <div id="rel-periodo" style="font-size:12px;color:var(--mt);margin-top:4px;"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- ABA USUÁRIOS -->
   <div id="aba-usuarios" class="hidden">
     <div style="display:flex;justify-content:flex-end;margin-bottom:14px;">
@@ -417,6 +455,7 @@ async function fazerLogin(){
 
 function iniciarApp(u){
   el("tela-login").classList.add("hidden");el("tela-app").classList.remove("hidden");
+  mudarAba("clientes");
   el("usr-nome").textContent=u.login;
   const bp={admin:["Admin","bp-admin"],analista:["Analista","bp-analista"],visualizador:["Visualizador","bp-viz"]}[u.perfil]||["?","bp-viz"];
   el("usr-perfil").textContent=bp[0];el("usr-perfil").className=`bp ${bp[1]}`;
@@ -425,10 +464,12 @@ function iniciarApp(u){
   el("tab-usuarios").classList.add("hidden");
   el("tab-importar").classList.add("hidden");
   el("tab-estoque").classList.add("hidden");
+  el("tab-relatorios").classList.add("hidden");
   if(u.perfil==="admin"){
     el("tab-usuarios").classList.remove("hidden");
     el("tab-importar").classList.remove("hidden");
     el("tab-estoque").classList.remove("hidden");
+    el("tab-relatorios").classList.remove("hidden");
   }
   carregarClientes(1,"");
 }
@@ -440,6 +481,8 @@ function fazerLogout(){
   el("tab-usuarios").classList.add("hidden");
   el("tab-importar").classList.add("hidden");
   el("tab-estoque").classList.add("hidden");
+  el("tab-relatorios").classList.add("hidden");
+  mudarAba("clientes");
 }
 el("inp-senha").addEventListener("keydown",e=>{if(e.key==="Enter")fazerLogin()});
 
@@ -449,11 +492,23 @@ function mudarAba(aba){
   el("aba-usuarios").classList.toggle("hidden",aba!=="usuarios");
   el("aba-importar").classList.toggle("hidden",aba!=="importar");
   el("aba-estoque").classList.toggle("hidden",aba!=="estoque");
+  el("aba-relatorios").classList.toggle("hidden",aba!=="relatorios");
   el("tab-clientes").classList.toggle("active",aba==="clientes");
   el("tab-usuarios").classList.toggle("active",aba==="usuarios");
   el("tab-importar").classList.toggle("active",aba==="importar");
   el("tab-estoque").classList.toggle("active",aba==="estoque");
+  el("tab-relatorios").classList.toggle("active",aba==="relatorios");
   if(aba==="usuarios")carregarUsuarios();
+  if(aba==="relatorios")inicializarDatasRelatorio();
+}
+
+function inicializarDatasRelatorio(){
+  if(el("rel-data-inicial").value)return;
+  const hoje=new Date();
+  const primeiroDia=new Date(hoje.getFullYear(),hoje.getMonth(),1);
+  const fmt=d=>d.toISOString().slice(0,10);
+  el("rel-data-inicial").value=fmt(primeiroDia);
+  el("rel-data-final").value=fmt(hoje);
 }
 
 // CLIENTES
@@ -895,6 +950,107 @@ async function carregarEstoque() {
     el("msg-estoque").textContent = "Erro: " + e.message;
   } finally {
     el("btn-carregar-estoque").disabled = false;
+  }
+}
+
+function paraDataBR(isoStr){
+  const [ano,mes,dia]=isoStr.split("-");
+  return `${dia}/${mes}/${ano}`;
+}
+
+function formatarMoeda(v){
+  return v.toLocaleString("pt-BR",{style:"currency",currency:"BRL"});
+}
+
+async function gerarRelatorioVendas() {
+  const dataInicialIso = el("rel-data-inicial").value;
+  const dataFinalIso = el("rel-data-final").value;
+  if (!dataInicialIso || !dataFinalIso) {
+    alert("Selecione a data inicial e a data final.");
+    return;
+  }
+  const dataInicial = paraDataBR(dataInicialIso);
+  const dataFinal = paraDataBR(dataFinalIso);
+
+  document.body.insertAdjacentHTML("beforeend", `
+    <div id="modal-progresso" style="position:fixed;inset:0;background:rgba(17,24,39,.6);backdrop-filter:blur(4px);z-index:200;display:flex;align-items:center;justify-content:center;padding:20px;">
+      <div style="background:#fff;border-radius:16px;padding:32px;width:100%;max-width:460px;box-shadow:0 25px 60px rgba(0,0,0,.25);">
+        <h3 style="font-size:16px;font-weight:700;margin-bottom:6px;">📊 Gerando Relatório de Vendas</h3>
+        <p id="prog-msg" style="font-size:13px;color:var(--mt);margin-bottom:20px;">Iniciando...</p>
+        <div style="background:var(--s2);border-radius:99px;height:10px;overflow:hidden;margin-bottom:10px;">
+          <div id="prog-barra" style="height:100%;background:linear-gradient(90deg,var(--ac),#ff4d6d);border-radius:99px;width:0%;transition:width .4s ease;"></div>
+        </div>
+        <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--mt);">
+          <span id="prog-pct">0%</span>
+          <span id="prog-tempo">Calculando...</span>
+        </div>
+      </div>
+    </div>`);
+  el("btn-gerar-relatorio").disabled = true;
+  el("resultado-relatorios").classList.add("hidden");
+  el("estado-relatorios").classList.add("hidden");
+  const inicio = Date.now();
+
+  function atualizarProgresso(pct, msg) {
+    el("prog-barra").style.width = pct + "%";
+    el("prog-pct").textContent = Math.round(pct) + "%";
+    el("prog-msg").textContent = msg;
+    const dec = (Date.now() - inicio) / 1000;
+    if (pct > 2) {
+      const tot = dec / (pct / 100);
+      const rest = Math.max(0, Math.round(tot - dec));
+      el("prog-tempo").textContent = rest > 0 ? `~${rest}s restantes` : "Finalizando...";
+    }
+  }
+
+  try {
+    atualizarProgresso(2, "Buscando notas de venda do período...");
+    const resVendas = await fetch(`/api/relatorios?acao=vendas&dataInicial=${dataInicial}&dataFinal=${dataFinal}`);
+    const dataVendas = await resVendas.json();
+    if (!resVendas.ok) throw new Error(dataVendas.erro || "Erro ao buscar vendas");
+    const totalVendas = dataVendas.total || 0;
+    const qtdVendas = dataVendas.quantidade || 0;
+
+    atualizarProgresso(15, "Buscando notas de entrada do período...");
+    const resEntradas = await fetch(`/api/relatorios?acao=entradas&dataInicial=${dataInicial}&dataFinal=${dataFinal}`);
+    const dataEntradas = await resEntradas.json();
+    if (!resEntradas.ok) throw new Error(dataEntradas.erro || "Erro ao buscar entradas");
+    const notasEntrada = dataEntradas.notas || [];
+
+    let totalDevolucoes = 0;
+    let qtdDevolucoes = 0;
+    const total = notasEntrada.length;
+    for (let i = 0; i < total; i++) {
+      const nota = notasEntrada[i];
+      const pct = 15 + ((i + 1) / Math.max(total, 1)) * 85;
+      atualizarProgresso(pct, `Conferindo nota de entrada ${i + 1} de ${total}...`);
+      await new Promise(r => setTimeout(r, 600));
+      const r = await fetch(`/api/relatorios?acao=nota&id=${nota.id}`);
+      const d = await r.json();
+      if (d.ehDevolucao) {
+        totalDevolucoes += d.valor || nota.valor || 0;
+        qtdDevolucoes++;
+      }
+    }
+
+    atualizarProgresso(100, "Concluído!");
+    await new Promise(r => setTimeout(r, 600));
+    document.getElementById("modal-progresso")?.remove();
+
+    el("rel-total-vendas").textContent = formatarMoeda(totalVendas);
+    el("rel-qtd-vendas").textContent = `${qtdVendas} nota(s)`;
+    el("rel-total-devolucoes").textContent = formatarMoeda(totalDevolucoes);
+    el("rel-qtd-devolucoes").textContent = `${qtdDevolucoes} nota(s) de ${total} de entrada verificada(s)`;
+    el("rel-liquido").textContent = formatarMoeda(totalVendas - totalDevolucoes);
+    el("rel-periodo").textContent = `${dataInicial} a ${dataFinal}`;
+    el("resultado-relatorios").classList.remove("hidden");
+
+  } catch(e) {
+    document.getElementById("modal-progresso")?.remove();
+    el("estado-relatorios").classList.remove("hidden");
+    el("msg-relatorios").textContent = "Erro: " + e.message;
+  } finally {
+    el("btn-gerar-relatorio").disabled = false;
   }
 }
 
