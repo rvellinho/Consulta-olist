@@ -319,22 +319,13 @@
     <div id="estado-relatorios" class="hidden">
       <div class="state-center"><div class="spinner"></div><p id="msg-relatorios">Carregando dados do Olist...</p></div>
     </div>
-    <div id="resultado-relatorios" class="hidden">
-      <div style="display:flex;flex-wrap:wrap;gap:14px;">
-        <div style="flex:1;min-width:200px;background:#fff;border:1px solid var(--br);border-radius:var(--r);box-shadow:var(--sh);padding:18px;">
-          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--mt);margin-bottom:6px;">Total de Vendas</div>
-          <div id="rel-total-vendas" style="font-size:24px;font-weight:700;color:var(--tx);"></div>
-          <div id="rel-qtd-vendas" style="font-size:12px;color:var(--mt);margin-top:4px;"></div>
-        </div>
-        <div style="flex:1;min-width:200px;background:#fff;border:1px solid var(--br);border-radius:var(--r);box-shadow:var(--sh);padding:18px;">
-          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--mt);margin-bottom:6px;">Total de Devoluções</div>
-          <div id="rel-total-devolucoes" style="font-size:24px;font-weight:700;color:var(--red);"></div>
-          <div id="rel-qtd-devolucoes" style="font-size:12px;color:var(--mt);margin-top:4px;"></div>
-        </div>
-        <div style="flex:1;min-width:200px;background:#fff;border:1px solid var(--br);border-radius:var(--r);box-shadow:var(--sh);padding:18px;">
-          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--mt);margin-bottom:6px;">Líquido</div>
-          <div id="rel-liquido" style="font-size:24px;font-weight:700;color:var(--ac);"></div>
-          <div id="rel-periodo" style="font-size:12px;color:var(--mt);margin-top:4px;"></div>
+    <div id="tabela-relatorios-wrap" class="hidden">
+      <div style="border:1px solid var(--br);border-radius:var(--r);overflow:hidden;box-shadow:var(--sh);">
+        <div style="overflow-x:auto;max-height:65vh;overflow-y:auto;">
+          <table id="tabela-relatorios" style="width:100%;border-collapse:collapse;min-width:600px;">
+            <thead id="thead-relatorios" style="position:sticky;top:0;z-index:10;"></thead>
+            <tbody id="tbody-relatorios"></tbody>
+          </table>
         </div>
       </div>
     </div>
@@ -987,7 +978,7 @@ async function gerarRelatorioVendas() {
       </div>
     </div>`);
   el("btn-gerar-relatorio").disabled = true;
-  el("resultado-relatorios").classList.add("hidden");
+  el("tabela-relatorios-wrap").classList.add("hidden");
   el("estado-relatorios").classList.add("hidden");
   const inicio = Date.now();
 
@@ -1008,8 +999,7 @@ async function gerarRelatorioVendas() {
     const resVendas = await fetch(`/api/relatorios?acao=vendas&dataInicial=${dataInicial}&dataFinal=${dataFinal}`);
     const dataVendas = await resVendas.json();
     if (!resVendas.ok) throw new Error(dataVendas.erro || "Erro ao buscar vendas");
-    const totalVendas = dataVendas.total || 0;
-    const qtdVendas = dataVendas.quantidade || 0;
+    const notasVenda = dataVendas.notas || [];
 
     atualizarProgresso(15, "Buscando notas de entrada do período...");
     const resEntradas = await fetch(`/api/relatorios?acao=entradas&dataInicial=${dataInicial}&dataFinal=${dataFinal}`);
@@ -1018,32 +1008,23 @@ async function gerarRelatorioVendas() {
     const notasEntrada = dataEntradas.notas || [];
 
     let totalDevolucoes = 0;
-    let qtdDevolucoes = 0;
-    const total = notasEntrada.length;
-    for (let i = 0; i < total; i++) {
+    const totalEntradas = notasEntrada.length;
+    for (let i = 0; i < totalEntradas; i++) {
       const nota = notasEntrada[i];
-      const pct = 15 + ((i + 1) / Math.max(total, 1)) * 85;
-      atualizarProgresso(pct, `Conferindo nota de entrada ${i + 1} de ${total}...`);
+      const pct = 15 + ((i + 1) / Math.max(totalEntradas, 1)) * 85;
+      atualizarProgresso(pct, `Conferindo nota de entrada ${i + 1} de ${totalEntradas}...`);
       await new Promise(r => setTimeout(r, 600));
       const r = await fetch(`/api/relatorios?acao=nota&id=${nota.id}`);
       const d = await r.json();
-      if (d.ehDevolucao) {
-        totalDevolucoes += d.valor || nota.valor || 0;
-        qtdDevolucoes++;
-      }
+      if (d.ehDevolucao) totalDevolucoes += d.valor || nota.valor || 0;
     }
 
     atualizarProgresso(100, "Concluído!");
     await new Promise(r => setTimeout(r, 600));
     document.getElementById("modal-progresso")?.remove();
 
-    el("rel-total-vendas").textContent = formatarMoeda(totalVendas);
-    el("rel-qtd-vendas").textContent = `${qtdVendas} nota(s)`;
-    el("rel-total-devolucoes").textContent = formatarMoeda(totalDevolucoes);
-    el("rel-qtd-devolucoes").textContent = `${qtdDevolucoes} nota(s) de ${total} de entrada verificada(s)`;
-    el("rel-liquido").textContent = formatarMoeda(totalVendas - totalDevolucoes);
-    el("rel-periodo").textContent = `${dataInicial} a ${dataFinal}`;
-    el("resultado-relatorios").classList.remove("hidden");
+    renderTabelaRelatorios(notasVenda, totalDevolucoes, dataInicialIso, dataFinalIso);
+    el("tabela-relatorios-wrap").classList.remove("hidden");
 
   } catch(e) {
     document.getElementById("modal-progresso")?.remove();
@@ -1052,6 +1033,77 @@ async function gerarRelatorioVendas() {
   } finally {
     el("btn-gerar-relatorio").disabled = false;
   }
+}
+
+function renderTabelaRelatorios(notasVenda, totalDevolucoes, dataInicialIso, dataFinalIso) {
+  const dias = [];
+  const cursor = new Date(dataInicialIso + "T00:00:00");
+  const fim = new Date(dataFinalIso + "T00:00:00");
+  while (cursor <= fim) {
+    const dd = String(cursor.getDate()).padStart(2, "0");
+    const mm = String(cursor.getMonth() + 1).padStart(2, "0");
+    dias.push(`${dd}/${mm}`);
+    cursor.setDate(cursor.getDate() + 1);
+  }
+
+  const vendedores = [...new Set(notasVenda.map(n => n.vendedor))].sort((a, b) => a.localeCompare(b));
+
+  const matriz = {};
+  dias.forEach(d => { matriz[d] = {}; vendedores.forEach(v => matriz[d][v] = 0); });
+  notasVenda.forEach(n => {
+    const [dd, mm] = n.data.split("/");
+    const diaLabel = `${dd}/${mm}`;
+    if (!matriz[diaLabel]) return;
+    matriz[diaLabel][n.vendedor] = (matriz[diaLabel][n.vendedor] || 0) + n.valor;
+  });
+
+  const totalBrutoPorVendedor = {};
+  vendedores.forEach(v => totalBrutoPorVendedor[v] = 0);
+  let totalBrutoGeral = 0;
+  dias.forEach(d => vendedores.forEach(v => {
+    totalBrutoPorVendedor[v] += matriz[d][v];
+    totalBrutoGeral += matriz[d][v];
+  }));
+
+  const fmtCel = v => v ? formatarMoeda(v) : "—";
+  const thBase = "padding:10px 12px;font-size:11px;font-weight:700;text-transform:uppercase;color:var(--mt);background:var(--s2);border-bottom:1px solid var(--br);white-space:nowrap;";
+  const tdSticky = "position:sticky;left:0;background:#fff;font-weight:600;";
+
+  el("thead-relatorios").innerHTML = `
+    <tr>
+      <th style="${thBase}position:sticky;left:0;z-index:11;text-align:left;">Dia</th>
+      ${vendedores.map(v => `<th style="${thBase}text-align:right;">${v}</th>`).join("")}
+      <th style="${thBase}text-align:right;">Total</th>
+    </tr>`;
+
+  let linhas = dias.map(d => {
+    const totalLinha = vendedores.reduce((s, v) => s + matriz[d][v], 0);
+    return `<tr style="border-bottom:1px solid var(--br);">
+      <td style="padding:10px 12px;font-size:13px;${tdSticky}">${d}</td>
+      ${vendedores.map(v => `<td style="padding:10px 12px;font-size:13px;text-align:right;">${fmtCel(matriz[d][v])}</td>`).join("")}
+      <td style="padding:10px 12px;font-size:13px;text-align:right;font-weight:600;">${fmtCel(totalLinha)}</td>
+    </tr>`;
+  }).join("");
+
+  const fechBase = "padding:10px 12px;font-size:13px;font-weight:700;background:var(--s2);";
+  linhas += `
+    <tr style="border-top:2px solid var(--br);">
+      <td style="${fechBase}position:sticky;left:0;">Total Bruto</td>
+      ${vendedores.map(v => `<td style="${fechBase}text-align:right;">${formatarMoeda(totalBrutoPorVendedor[v])}</td>`).join("")}
+      <td style="${fechBase}text-align:right;">${formatarMoeda(totalBrutoGeral)}</td>
+    </tr>
+    <tr>
+      <td style="${fechBase}position:sticky;left:0;color:var(--red);">Devoluções</td>
+      ${vendedores.map(() => `<td style="${fechBase}text-align:right;">—</td>`).join("")}
+      <td style="${fechBase}text-align:right;color:var(--red);">${formatarMoeda(totalDevolucoes)}</td>
+    </tr>
+    <tr>
+      <td style="${fechBase}position:sticky;left:0;color:var(--ac);">Líquido</td>
+      ${vendedores.map(v => `<td style="${fechBase}text-align:right;">${formatarMoeda(totalBrutoPorVendedor[v])}</td>`).join("")}
+      <td style="${fechBase}text-align:right;color:var(--ac);">${formatarMoeda(totalBrutoGeral - totalDevolucoes)}</td>
+    </tr>`;
+
+  el("tbody-relatorios").innerHTML = linhas;
 }
 
 function filtrarEstoque() {

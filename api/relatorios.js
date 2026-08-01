@@ -66,12 +66,17 @@ module.exports = async (req, res) => {
   const { dataInicial, dataFinal } = req.query;
 
   try {
-    // ── AÇÃO: total de vendas (notas de saída) no período ────────────
+    // ── AÇÃO: notas de venda (saída) no período, detalhadas por dia/vendedor ─
     if (acao === "vendas") {
       if (!dataInicial || !dataFinal) return res.status(400).json({ erro: "dataInicial e dataFinal obrigatórios" });
       const notas = await buscarTodasNotas("S", dataInicial, dataFinal);
-      const total = notas.reduce((s, n) => s + parseFloat(n.valor || 0), 0);
-      return res.status(200).json({ total, quantidade: notas.length });
+      return res.status(200).json({
+        notas: notas.map(n => ({
+          data: n.data_emissao,
+          vendedor: n.nome_vendedor || "Sem vendedor",
+          valor: parseFloat(n.valor || 0),
+        })),
+      });
     }
 
     // ── AÇÃO: notas de entrada candidatas a devolução no período ─────
