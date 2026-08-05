@@ -56,6 +56,35 @@ async function buscarTodasNotas(tipoNota, dataInicial, dataFinal) {
   return todas.filter(n => !SITUACOES_INVALIDAS.includes(String(n.situacao)));
 }
 
+// Quando a devolução é lançada referenciando a NF-e de venda original, a Olist
+// grava esse texto padrão no campo "obs" da nota de devolução — usamos isso
+// pra descobrir qual foi a nota de venda original e puxar o vendedor dela.
+function extrairReferenciaOrigem(obs) {
+  const mNumero = (obs || "").match(/N[uú]mero da NF-e referenciada:\s*(\d+)/i);
+  const mData = (obs || "").match(/Data de emiss[ãa]o da NF-e referenciada:\s*(\d{2}\/\d{2}\/\d{4})/i);
+  const mChave = (obs || "").match(/Chave de acesso da NF-e referenciada:\s*(\d+)/i);
+  if (!mNumero || !mData) return null;
+  return { numero: mNumero[1], data: mData[1], chave: mChave ? mChave[1] : null };
+}
+
+async function buscarVendedorDaNotaOrigem(referencia) {
+  const body = new URLSearchParams({
+    token: TOKEN_V2, formato: "JSON",
+    tipoNota: "S", numero: referencia.numero,
+    dataInicial: referencia.data, dataFinal: referencia.data,
+  }).toString();
+  const r = await httpsRequest("POST", "api.tiny.com.br",
+    "/api2/notas.fiscais.pesquisa.php", body,
+    { "Content-Type": "application/x-www-form-urlencoded" });
+  const data = parseJSON(r.text);
+  if (data.retorno?.status === "Erro") return null;
+  const candidatas = (data.retorno?.notas_fiscais || []).map(n => n.nota_fiscal);
+  const origem = referencia.chave
+    ? candidatas.find(n => n.chave_acesso === referencia.chave)
+    : candidatas[0];
+  return origem?.nome_vendedor || null;
+}
+
 module.exports = async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
@@ -97,10 +126,22 @@ module.exports = async (req, res) => {
         body, { "Content-Type": "application/x-www-form-urlencoded" });
       const nota = parseJSON(r.text).retorno?.nota_fiscal;
       if (!nota) return res.status(200).json({ finalidade: null, valor: 0 });
+
+      const ehDevolucao = FINALIDADES_DEVOLUCAO.includes(String(nota.finalidade));
+      let vendedor = null;
+      if (ehDevolucao) {
+        const referencia = extrairReferenciaOrigem(nota.obs);
+        if (referencia) {
+          await sleep(400);
+          vendedor = await buscarVendedorDaNotaOrigem(referencia);
+        }
+      }
+
       return res.status(200).json({
         finalidade: String(nota.finalidade ?? ""),
         valor: parseFloat(nota.valor_nota || 0),
-        ehDevolucao: FINALIDADES_DEVOLUCAO.includes(String(nota.finalidade)),
+        ehDevolucao,
+        vendedor,
       });
     }
 

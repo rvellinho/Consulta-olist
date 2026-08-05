@@ -1008,6 +1008,7 @@ async function gerarRelatorioVendas() {
     const notasEntrada = dataEntradas.notas || [];
 
     let totalDevolucoes = 0;
+    const devolucoesPorVendedor = {};
     const totalEntradas = notasEntrada.length;
     for (let i = 0; i < totalEntradas; i++) {
       const nota = notasEntrada[i];
@@ -1016,14 +1017,18 @@ async function gerarRelatorioVendas() {
       await new Promise(r => setTimeout(r, 600));
       const r = await fetch(`/api/relatorios?acao=nota&id=${nota.id}`);
       const d = await r.json();
-      if (d.ehDevolucao) totalDevolucoes += d.valor || nota.valor || 0;
+      if (d.ehDevolucao) {
+        const valor = d.valor || nota.valor || 0;
+        totalDevolucoes += valor;
+        if (d.vendedor) devolucoesPorVendedor[d.vendedor] = (devolucoesPorVendedor[d.vendedor] || 0) + valor;
+      }
     }
 
     atualizarProgresso(100, "Concluído!");
     await new Promise(r => setTimeout(r, 600));
     document.getElementById("modal-progresso")?.remove();
 
-    renderTabelaRelatorios(notasVenda, totalDevolucoes, dataInicialIso, dataFinalIso);
+    renderTabelaRelatorios(notasVenda, totalDevolucoes, devolucoesPorVendedor, dataInicialIso, dataFinalIso);
     el("tabela-relatorios-wrap").classList.remove("hidden");
 
   } catch(e) {
@@ -1035,7 +1040,7 @@ async function gerarRelatorioVendas() {
   }
 }
 
-function renderTabelaRelatorios(notasVenda, totalDevolucoes, dataInicialIso, dataFinalIso) {
+function renderTabelaRelatorios(notasVenda, totalDevolucoes, devolucoesPorVendedor, dataInicialIso, dataFinalIso) {
   const dias = [];
   const cursor = new Date(dataInicialIso + "T00:00:00");
   const fim = new Date(dataFinalIso + "T00:00:00");
@@ -1094,12 +1099,12 @@ function renderTabelaRelatorios(notasVenda, totalDevolucoes, dataInicialIso, dat
     </tr>
     <tr>
       <td style="${fechBase}position:sticky;left:0;color:var(--red);">Devoluções</td>
-      ${vendedores.map(() => `<td style="${fechBase}text-align:right;">—</td>`).join("")}
+      ${vendedores.map(v => `<td style="${fechBase}text-align:right;color:var(--red);">${devolucoesPorVendedor[v] ? formatarMoeda(devolucoesPorVendedor[v]) : "—"}</td>`).join("")}
       <td style="${fechBase}text-align:right;color:var(--red);">${formatarMoeda(totalDevolucoes)}</td>
     </tr>
     <tr>
       <td style="${fechBase}position:sticky;left:0;color:var(--ac);">Líquido</td>
-      ${vendedores.map(v => `<td style="${fechBase}text-align:right;">${formatarMoeda(totalBrutoPorVendedor[v])}</td>`).join("")}
+      ${vendedores.map(v => `<td style="${fechBase}text-align:right;">${formatarMoeda(totalBrutoPorVendedor[v] - (devolucoesPorVendedor[v] || 0))}</td>`).join("")}
       <td style="${fechBase}text-align:right;color:var(--ac);">${formatarMoeda(totalBrutoGeral - totalDevolucoes)}</td>
     </tr>`;
 
