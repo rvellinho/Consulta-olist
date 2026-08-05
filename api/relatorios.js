@@ -9,6 +9,9 @@ const TOKEN_V2 = process.env.OLIST_TOKEN;
 const SITUACOES_INVALIDAS = ["1", "3", "5", "10"];
 // finalidade: 4, 7, 8 = Devolução/Retorno
 const FINALIDADES_DEVOLUCAO = ["4", "7", "8"];
+// situação de nota de serviço: 1=Pendente, 3=Cancelada — nunca contam.
+// 2=Emitida, 4=Enviada (aguardando recibo) contam como válidas.
+const SITUACOES_INVALIDAS_SERVICO = ["1", "3"];
 
 function httpsRequest(method, hostname, path, body, headers) {
   return new Promise((resolve, reject) => {
@@ -54,6 +57,37 @@ async function buscarTodasNotas(tipoNota, dataInicial, dataFinal) {
     await sleep(600);
   }
   return todas.filter(n => !SITUACOES_INVALIDAS.includes(String(n.situacao)));
+}
+
+async function buscarPaginaNotasServico(dataInicial, dataFinal, pagina) {
+  const body = new URLSearchParams({
+    token: TOKEN_V2, formato: "JSON",
+    dataInicial, dataFinal, pagina: String(pagina),
+  }).toString();
+  const r = await httpsRequest("POST", "api.tiny.com.br",
+    "/api2/notas.servico.pesquisa.php", body,
+    { "Content-Type": "application/x-www-form-urlencoded" });
+  const data = parseJSON(r.text);
+  if (data.retorno && data.retorno.status === "Erro") {
+    const codigoErro = data.retorno.codigo_erro;
+    // Código 6 = nenhum registro encontrado — não é erro, é lista vazia
+    if (codigoErro === "6") return [];
+    throw new Error(data.retorno.erros?.[0]?.erro || "Erro ao pesquisar notas de serviço");
+  }
+  return data.retorno?.notas_servico || [];
+}
+
+async function buscarTodasNotasServico(dataInicial, dataFinal) {
+  const todas = [];
+  let pagina = 1;
+  while (true) {
+    const lista = await buscarPaginaNotasServico(dataInicial, dataFinal, pagina);
+    lista.forEach(n => { if (n.nota_servico) todas.push(n.nota_servico); });
+    if (lista.length < 100) break;
+    pagina++;
+    await sleep(600);
+  }
+  return todas.filter(n => !SITUACOES_INVALIDAS_SERVICO.includes(String(n.situacao)));
 }
 
 // Quando a devolução é lançada referenciando a NF-e de venda original, a Olist
@@ -117,6 +151,18 @@ module.exports = async (req, res) => {
       });
     }
 
+    // ── AÇÃO: notas de serviço emitidas no período, total por vendedor ─
+    if (acao === "servicos") {
+      if (!dataInicial || !dataFinal) return res.status(400).json({ erro: "dataInicial e dataFinal obrigatórios" });
+      const notas = await buscarTodasNotasServico(dataInicial, dataFinal);
+      return res.status(200).json({
+        notas: notas.map(n => ({
+          vendedor: n.nome_vendedor || "Sem vendedor",
+          valor: parseFloat(n.valor || 0),
+        })),
+      });
+    }
+
     // ── AÇÃO: detalhe de uma nota (pra checar a finalidade) ──────────
     if (acao === "nota") {
       const id = req.query.id;
@@ -145,7 +191,7 @@ module.exports = async (req, res) => {
       });
     }
 
-    return res.status(400).json({ erro: "acao invalida. Use: vendas, entradas, nota" });
+    return res.status(400).json({ erro: "acao invalida. Use: vendas, entradas, nota, servicos" });
 
   } catch (e) {
     return res.status(500).json({ erro: e.message, stack: e.stack });

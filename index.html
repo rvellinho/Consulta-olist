@@ -1012,7 +1012,7 @@ async function gerarRelatorioVendas() {
     const totalEntradas = notasEntrada.length;
     for (let i = 0; i < totalEntradas; i++) {
       const nota = notasEntrada[i];
-      const pct = 15 + ((i + 1) / Math.max(totalEntradas, 1)) * 85;
+      const pct = 15 + ((i + 1) / Math.max(totalEntradas, 1)) * 80;
       atualizarProgresso(pct, `Conferindo nota de entrada ${i + 1} de ${totalEntradas}...`);
       await new Promise(r => setTimeout(r, 600));
       const r = await fetch(`/api/relatorios?acao=nota&id=${nota.id}`);
@@ -1024,11 +1024,17 @@ async function gerarRelatorioVendas() {
       }
     }
 
+    atualizarProgresso(97, "Buscando notas de serviço do período...");
+    const resServicos = await fetch(`/api/relatorios?acao=servicos&dataInicial=${dataInicial}&dataFinal=${dataFinal}`);
+    const dataServicos = await resServicos.json();
+    if (!resServicos.ok) throw new Error(dataServicos.erro || "Erro ao buscar notas de serviço");
+    const notasServico = dataServicos.notas || [];
+
     atualizarProgresso(100, "Concluído!");
     await new Promise(r => setTimeout(r, 600));
     document.getElementById("modal-progresso")?.remove();
 
-    renderTabelaRelatorios(notasVenda, totalDevolucoes, devolucoesPorVendedor, dataInicialIso, dataFinalIso);
+    renderTabelaRelatorios(notasVenda, totalDevolucoes, devolucoesPorVendedor, notasServico, dataInicialIso, dataFinalIso);
     el("tabela-relatorios-wrap").classList.remove("hidden");
 
   } catch(e) {
@@ -1040,7 +1046,7 @@ async function gerarRelatorioVendas() {
   }
 }
 
-function renderTabelaRelatorios(notasVenda, totalDevolucoes, devolucoesPorVendedor, dataInicialIso, dataFinalIso) {
+function renderTabelaRelatorios(notasVenda, totalDevolucoes, devolucoesPorVendedor, notasServico, dataInicialIso, dataFinalIso) {
   const dias = [];
   const cursor = new Date(dataInicialIso + "T00:00:00");
   const fim = new Date(dataFinalIso + "T00:00:00");
@@ -1051,7 +1057,17 @@ function renderTabelaRelatorios(notasVenda, totalDevolucoes, devolucoesPorVended
     cursor.setDate(cursor.getDate() + 1);
   }
 
-  const vendedores = [...new Set(notasVenda.map(n => n.vendedor))].sort((a, b) => a.localeCompare(b));
+  const vendedores = [...new Set([
+    ...notasVenda.map(n => n.vendedor),
+    ...notasServico.map(n => n.vendedor),
+  ])].sort((a, b) => a.localeCompare(b));
+
+  const servicoPorVendedor = {};
+  let totalServicoGeral = 0;
+  notasServico.forEach(n => {
+    servicoPorVendedor[n.vendedor] = (servicoPorVendedor[n.vendedor] || 0) + n.valor;
+    totalServicoGeral += n.valor;
+  });
 
   const matriz = {};
   dias.forEach(d => { matriz[d] = {}; vendedores.forEach(v => matriz[d][v] = 0); });
@@ -1106,6 +1122,11 @@ function renderTabelaRelatorios(notasVenda, totalDevolucoes, devolucoesPorVended
       <td style="${fechBase}position:sticky;left:0;color:var(--ac);">Líquido</td>
       ${vendedores.map(v => `<td style="${fechBase}text-align:right;">${formatarMoeda(totalBrutoPorVendedor[v] - (devolucoesPorVendedor[v] || 0))}</td>`).join("")}
       <td style="${fechBase}text-align:right;color:var(--ac);">${formatarMoeda(totalBrutoGeral - totalDevolucoes)}</td>
+    </tr>
+    <tr>
+      <td style="${fechBase}position:sticky;left:0;">Notas de Serviço</td>
+      ${vendedores.map(v => `<td style="${fechBase}text-align:right;">${servicoPorVendedor[v] ? formatarMoeda(servicoPorVendedor[v]) : "—"}</td>`).join("")}
+      <td style="${fechBase}text-align:right;">${formatarMoeda(totalServicoGeral)}</td>
     </tr>`;
 
   el("tbody-relatorios").innerHTML = linhas;
