@@ -314,6 +314,8 @@
         <label>Data final</label>
         <input type="date" id="rel-data-final" />
       </div>
+      <button class="btn-sec" onclick="definirPeriodoMesAtual()">Mês atual</button>
+      <button class="btn-sec" onclick="definirPeriodoMesAnterior()">Mês anterior</button>
       <button class="btn-primary" id="btn-gerar-relatorio" onclick="gerarRelatorioVendas()">📊 Gerar Relatório</button>
       <button class="btn-sec" onclick="abrirModalAlteracoes()">🔧 Alterações</button>
     </div>
@@ -535,11 +537,24 @@ function mudarAba(aba){
 
 function inicializarDatasRelatorio(){
   if(el("rel-data-inicial").value)return;
+  definirPeriodoMesAtual();
+}
+
+function definirPeriodoMesAtual(){
   const hoje=new Date();
   const primeiroDia=new Date(hoje.getFullYear(),hoje.getMonth(),1);
   const fmt=d=>d.toISOString().slice(0,10);
   el("rel-data-inicial").value=fmt(primeiroDia);
   el("rel-data-final").value=fmt(hoje);
+}
+
+function definirPeriodoMesAnterior(){
+  const hoje=new Date();
+  const primeiroDia=new Date(hoje.getFullYear(),hoje.getMonth()-1,1);
+  const ultimoDia=new Date(hoje.getFullYear(),hoje.getMonth(),0);
+  const fmt=d=>d.toISOString().slice(0,10);
+  el("rel-data-inicial").value=fmt(primeiroDia);
+  el("rel-data-final").value=fmt(ultimoDia);
 }
 
 // CLIENTES
