@@ -30,6 +30,15 @@ function parseBody(reqBody) {
   return {};
 }
 
+// A Olist grava vendedor como "Rafael Vellinho" (só a primeira letra maiúscula).
+// Normalizamos aqui pra "RAFAEL VELLINHO" ou "rafael vellinho" digitado na tela
+// de Alterações caírem na mesma coluna do relatório, e não virarem vendedor novo.
+function normalizarVendedor(nome) {
+  if (!nome) return nome;
+  return nome.trim().replace(/\s+/g, " ").toLowerCase()
+    .replace(/(^|\s)(\S)/g, (m, sep, c) => sep + c.toUpperCase());
+}
+
 const supaHeaders = {
   apikey: SUPABASE_KEY,
   Authorization: "Bearer " + SUPABASE_KEY,
@@ -67,7 +76,7 @@ module.exports = async (req, res) => {
 
       const payload = JSON.stringify({
         tipo_nota, numero_nota: String(numero_nota).trim(),
-        vendedor: vendedor || null, data_emissao: data_emissao || null, observacao: observacao || null,
+        vendedor: normalizarVendedor(vendedor) || null, data_emissao: data_emissao || null, observacao: observacao || null,
       });
       const r = await httpsRequest("POST", supaHost,
         "/rest/v1/alteracoes_relatorio",
@@ -88,7 +97,7 @@ module.exports = async (req, res) => {
       const { id, vendedor, data_emissao, observacao } = parseBody(req.body);
       if (!id) return res.status(400).json({ erro: "id obrigatório" });
 
-      const updates = { vendedor: vendedor || null, data_emissao: data_emissao || null, observacao: observacao || null, atualizado_em: new Date().toISOString() };
+      const updates = { vendedor: normalizarVendedor(vendedor) || null, data_emissao: data_emissao || null, observacao: observacao || null, atualizado_em: new Date().toISOString() };
       const payload = JSON.stringify(updates);
       const r = await httpsRequest("PATCH", supaHost,
         "/rest/v1/alteracoes_relatorio?id=eq." + id,
