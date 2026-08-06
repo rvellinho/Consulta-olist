@@ -315,6 +315,7 @@
         <input type="date" id="rel-data-final" />
       </div>
       <button class="btn-primary" id="btn-gerar-relatorio" onclick="gerarRelatorioVendas()">📊 Gerar Relatório</button>
+      <button class="btn-sec" onclick="abrirModalAlteracoes()">🔧 Alterações</button>
     </div>
     <div id="estado-relatorios" class="hidden">
       <div class="state-center"><div class="spinner"></div><p id="msg-relatorios">Carregando dados do Olist...</p></div>
@@ -396,6 +397,45 @@
     <div class="modal-ftr">
       <button class="btn-sec" onclick="document.getElementById('modal-usr-overlay').classList.add('hidden')">Cancelar</button>
       <button class="btn-primary" id="btn-salvar-usr" onclick="salvarUsuario()">Salvar</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL ALTERAÇÕES DO RELATÓRIO -->
+<div id="modal-alt-overlay" class="overlay hidden" onclick="fecharModalAlt(event)">
+  <div class="modal">
+    <div class="modal-hdr">
+      <div class="modal-av">🔧</div>
+      <div class="modal-hdr-info">
+        <h2>Alterações do Relatório</h2>
+        <p class="c-razao">Corrija vendedor ou data de emissão de notas de produto, serviço ou devolução</p>
+      </div>
+      <button class="close-btn" onclick="document.getElementById('modal-alt-overlay').classList.add('hidden')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--br);">
+        <div class="fg-sm">
+          <label>Tipo de nota</label>
+          <select id="alt-tipo">
+            <option value="produto">Produto (venda)</option>
+            <option value="servico">Serviço</option>
+            <option value="devolucao">Devolução</option>
+          </select>
+        </div>
+        <div class="fg-sm"><label>Número da nota</label><input type="text" id="alt-numero" placeholder="ex: 012662" /></div>
+        <div class="fg-sm"><label>Vendedor correto</label><input type="text" id="alt-vendedor" placeholder="deixe em branco pra não alterar" /></div>
+        <div class="fg-sm"><label>Data de emissão correta</label><input type="date" id="alt-data" /></div>
+        <div class="fg-sm modal-row-full" style="grid-column:1 / -1;"><label>Observação (opcional)</label><input type="text" id="alt-obs" placeholder="ex: confirmado com o financeiro" /></div>
+      </div>
+      <div id="alt-msg" class="modal-msg hidden"></div>
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:20px;">
+        <button class="btn-sec" id="btn-cancelar-alt" onclick="cancelarEdicaoAlt()" style="display:none;">Cancelar edição</button>
+        <button class="btn-primary" id="btn-salvar-alt" onclick="salvarAlteracao()">Salvar</button>
+      </div>
+      <div id="lista-alteracoes"><div class="state-center"><div class="spinner"></div></div></div>
+    </div>
+    <div class="modal-ftr">
+      <button class="btn-sec" onclick="document.getElementById('modal-alt-overlay').classList.add('hidden')">Fechar</button>
     </div>
   </div>
 </div>
@@ -663,6 +703,117 @@ async function excluirUsuario(id,login){
     if(!res.ok){const d=await res.json();throw new Error(d.erro);}
     carregarUsuarios();
   }catch(e){alert("Erro ao excluir: "+e.message);}
+}
+
+// ALTERAÇÕES DO RELATÓRIO (correção manual de vendedor/data por nota)
+let alteracoesCache = {}, alteracaoEditandoId = null;
+
+function fecharModalAlt(e){ if(e.target===el("modal-alt-overlay")) el("modal-alt-overlay").classList.add("hidden"); }
+
+async function abrirModalAlteracoes(){
+  limparFormAlt();
+  el("modal-alt-overlay").classList.remove("hidden");
+  await carregarAlteracoes();
+}
+
+function limparFormAlt(){
+  alteracaoEditandoId = null;
+  el("alt-tipo").value = "produto";
+  el("alt-tipo").disabled = false;
+  el("alt-numero").value = "";
+  el("alt-numero").disabled = false;
+  el("alt-vendedor").value = "";
+  el("alt-data").value = "";
+  el("alt-obs").value = "";
+  el("alt-msg").classList.add("hidden");
+  el("btn-cancelar-alt").style.display = "none";
+  el("btn-salvar-alt").textContent = "Salvar";
+}
+
+async function carregarAlteracoes(){
+  el("lista-alteracoes").innerHTML = '<div class="state-center"><div class="spinner"></div></div>';
+  try{
+    const res = await fetch("/api/alteracoes");
+    const lista = await res.json();
+    alteracoesCache = {};
+    lista.forEach(a => alteracoesCache[a.id] = a);
+    if(!lista.length){ el("lista-alteracoes").innerHTML = '<div class="state-center">Nenhuma alteração cadastrada.</div>'; return; }
+    const rotuloTipo = { produto: "Produto", servico: "Serviço", devolucao: "Devolução" };
+    el("lista-alteracoes").innerHTML = lista.map(a => `
+      <div class="usr-card">
+        <div class="usr-info">
+          <div>
+            <div class="usr-login">Nº ${a.numero_nota} <span class="bp bp-viz">${rotuloTipo[a.tipo_nota]||a.tipo_nota}</span></div>
+            <div style="font-size:12px;color:var(--mt);margin-top:4px;">
+              ${a.vendedor ? `Vendedor: <strong>${a.vendedor}</strong>` : ""}
+              ${a.data_emissao ? `${a.vendedor?" · ":""}Data: <strong>${fmtData(a.data_emissao)}</strong>` : ""}
+              ${a.observacao ? `<br>${a.observacao}` : ""}
+            </div>
+          </div>
+        </div>
+        <div class="usr-actions">
+          <button class="btn-sec" onclick="abrirEdicaoAlt(${a.id})">Editar</button>
+          <button class="btn-danger" onclick="excluirAlteracao(${a.id})">Excluir</button>
+        </div>
+      </div>`).join("");
+  }catch(e){ el("lista-alteracoes").innerHTML = '<div class="state-center">Erro ao carregar alterações.</div>'; }
+}
+
+function abrirEdicaoAlt(id){
+  const a = alteracoesCache[id];
+  if(!a) return;
+  alteracaoEditandoId = id;
+  el("alt-tipo").value = a.tipo_nota;
+  el("alt-tipo").disabled = true;
+  el("alt-numero").value = a.numero_nota;
+  el("alt-numero").disabled = true;
+  el("alt-vendedor").value = a.vendedor || "";
+  el("alt-data").value = a.data_emissao || "";
+  el("alt-obs").value = a.observacao || "";
+  el("alt-msg").classList.add("hidden");
+  el("btn-cancelar-alt").style.display = "inline-block";
+  el("btn-salvar-alt").textContent = "Salvar edição";
+}
+
+function cancelarEdicaoAlt(){ limparFormAlt(); }
+
+async function salvarAlteracao(){
+  const btn = el("btn-salvar-alt");
+  btn.disabled = true;
+  el("alt-msg").classList.add("hidden");
+  try{
+    const tipo_nota = el("alt-tipo").value;
+    const numero_nota = el("alt-numero").value.trim();
+    const vendedor = el("alt-vendedor").value.trim();
+    const data_emissao = el("alt-data").value;
+    const observacao = el("alt-obs").value.trim();
+    if(!numero_nota) throw new Error("Informe o número da nota.");
+    if(!vendedor && !data_emissao) throw new Error("Informe ao menos o vendedor ou a data corrigida.");
+
+    const body = alteracaoEditandoId
+      ? { id: alteracaoEditandoId, vendedor: vendedor||null, data_emissao: data_emissao||null, observacao: observacao||null }
+      : { tipo_nota, numero_nota, vendedor: vendedor||null, data_emissao: data_emissao||null, observacao: observacao||null };
+    const res = await fetch("/api/alteracoes", {
+      method: alteracaoEditandoId ? "PUT" : "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.erro || "Erro ao salvar");
+    limparFormAlt();
+    await carregarAlteracoes();
+  }catch(e){
+    const d = el("alt-msg"); d.textContent = e.message; d.className = "modal-msg msg-err"; d.classList.remove("hidden");
+  }finally{ btn.disabled = false; }
+}
+
+async function excluirAlteracao(id){
+  if(!confirm("Excluir essa alteração?")) return;
+  try{
+    const res = await fetch("/api/alteracoes", { method:"DELETE", headers:{"Content-Type":"application/json"}, body: JSON.stringify({id}) });
+    if(!res.ok){ const d = await res.json(); throw new Error(d.erro); }
+    carregarAlteracoes();
+  }catch(e){ alert("Erro ao excluir: " + e.message); }
 }
 
 // IMPORTAÇÃO
@@ -1012,7 +1163,7 @@ async function gerarRelatorioVendas() {
     const totalEntradas = notasEntrada.length;
     for (let i = 0; i < totalEntradas; i++) {
       const nota = notasEntrada[i];
-      const pct = 15 + ((i + 1) / Math.max(totalEntradas, 1)) * 80;
+      const pct = 15 + ((i + 1) / Math.max(totalEntradas, 1)) * 55;
       atualizarProgresso(pct, `Conferindo nota de entrada ${i + 1} de ${totalEntradas}...`);
       await new Promise(r => setTimeout(r, 600));
       const r = await fetch(`/api/relatorios?acao=nota&id=${nota.id}`);
@@ -1024,11 +1175,23 @@ async function gerarRelatorioVendas() {
       }
     }
 
-    atualizarProgresso(97, "Buscando notas de serviço do período...");
+    atualizarProgresso(70, "Buscando notas de serviço do período...");
     const resServicos = await fetch(`/api/relatorios?acao=servicos&dataInicial=${dataInicial}&dataFinal=${dataFinal}`);
     const dataServicos = await resServicos.json();
     if (!resServicos.ok) throw new Error(dataServicos.erro || "Erro ao buscar notas de serviço");
-    const notasServico = dataServicos.notas || [];
+    const candidatasServico = dataServicos.notas || [];
+
+    const notasServico = [];
+    const totalCandidatas = candidatasServico.length;
+    for (let i = 0; i < totalCandidatas; i++) {
+      const nota = candidatasServico[i];
+      const pct = 70 + ((i + 1) / Math.max(totalCandidatas, 1)) * 28;
+      atualizarProgresso(pct, `Conferindo nota de serviço ${i + 1} de ${totalCandidatas}...`);
+      await new Promise(r => setTimeout(r, 600));
+      const r = await fetch(`/api/relatorios?acao=servico-detalhe&id=${nota.id}`);
+      const d = await r.json();
+      if (!d.excluir) notasServico.push(nota);
+    }
 
     atualizarProgresso(100, "Concluído!");
     await new Promise(r => setTimeout(r, 600));

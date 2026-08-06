@@ -2,6 +2,16 @@
 const https = require("https");
 
 const TOKEN_V2 = process.env.OLIST_TOKEN;
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_KEY = process.env.SUPABASE_KEY;
+const supaHeaders = {
+  apikey: SUPABASE_KEY,
+  Authorization: "Bearer " + SUPABASE_KEY,
+  "Content-Type": "application/json",
+};
+
+// Serviços que não devem entrar no relatório (ex: cobrança interna, não é venda)
+const DESCRICOES_SERVICO_EXCLUIDAS = ["serviço de apoio na área de vendas"];
 
 // situação: 1=Pendente, 3=Cancelada, 5=Rejeitada, 10=Denegada — nunca contam.
 // Tudo mais (2=Emitida, 6=Autorizada, 7=Emitida DANFE, 8=Registrada, etc) conta como válida —
@@ -27,6 +37,31 @@ function httpsRequest(method, hostname, path, body, headers) {
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 function parseJSON(text) { try { return JSON.parse(text); } catch { return {}; } }
+
+// Normaliza número de nota pra comparação (remove zeros à esquerda) —
+// assim "012662" cadastrado numa alteração casa com "12662" digitado por engano.
+function normalizarNumero(numero) {
+  const n = parseInt(String(numero).replace(/\D/g, ""), 10);
+  return Number.isNaN(n) ? String(numero).trim() : String(n);
+}
+
+function formatarDataBR(isoDate) {
+  const [y, m, d] = isoDate.split("-");
+  return `${d}/${m}/${y}`;
+}
+
+// Busca as correções manuais cadastradas em "Alterações" pra um tipo de nota,
+// já indexadas por número de nota normalizado.
+async function buscarAlteracoes(tipoNota) {
+  const supaHost = SUPABASE_URL.replace("https://", "");
+  const r = await httpsRequest("GET", supaHost,
+    `/rest/v1/alteracoes_relatorio?tipo_nota=eq.${tipoNota}&select=numero_nota,vendedor,data_emissao`,
+    null, supaHeaders);
+  const data = parseJSON(r.text);
+  const mapa = {};
+  (Array.isArray(data) ? data : []).forEach(a => { mapa[normalizarNumero(a.numero_nota)] = a; });
+  return mapa;
+}
 
 async function buscarPaginaNotas(tipoNota, dataInicial, dataFinal, pagina) {
   const body = new URLSearchParams({
@@ -133,12 +168,17 @@ module.exports = async (req, res) => {
     if (acao === "vendas") {
       if (!dataInicial || !dataFinal) return res.status(400).json({ erro: "dataInicial e dataFinal obrigatórios" });
       const notas = await buscarTodasNotas("S", dataInicial, dataFinal);
+      const alteracoes = await buscarAlteracoes("produto");
       return res.status(200).json({
-        notas: notas.map(n => ({
-          data: n.data_emissao,
-          vendedor: n.nome_vendedor || "Sem vendedor",
-          valor: parseFloat(n.valor || 0),
-        })),
+        notas: notas.map(n => {
+          const alt = alteracoes[normalizarNumero(n.numero)];
+          return {
+            numero: n.numero,
+            data: alt?.data_emissao ? formatarDataBR(alt.data_emissao) : n.data_emissao,
+            vendedor: alt?.vendedor || n.nome_vendedor || "Sem vendedor",
+            valor: parseFloat(n.valor || 0),
+          };
+        }),
       });
     }
 
@@ -151,16 +191,38 @@ module.exports = async (req, res) => {
       });
     }
 
-    // ── AÇÃO: notas de serviço emitidas no período, total por vendedor ─
+    // ── AÇÃO: notas de serviço emitidas no período (lista bruta) ─────
+    // A exclusão de "Serviço de apoio na área de vendas" é checada nota a nota
+    // pelo frontend via acao=servico-detalhe, pra não fazer loop pesado aqui
+    // dentro do serverless (timeout).
     if (acao === "servicos") {
       if (!dataInicial || !dataFinal) return res.status(400).json({ erro: "dataInicial e dataFinal obrigatórios" });
       const notas = await buscarTodasNotasServico(dataInicial, dataFinal);
+      const alteracoes = await buscarAlteracoes("servico");
       return res.status(200).json({
-        notas: notas.map(n => ({
-          vendedor: n.nome_vendedor || "Sem vendedor",
-          valor: parseFloat(n.valor || 0),
-        })),
+        notas: notas.map(n => {
+          const alt = alteracoes[normalizarNumero(n.numero)];
+          return {
+            id: n.id,
+            numero: n.numero,
+            vendedor: alt?.vendedor || n.nome_vendedor || "Sem vendedor",
+            valor: parseFloat(n.valor || 0),
+          };
+        }),
       });
+    }
+
+    // ── AÇÃO: verifica se a nota de serviço é do tipo excluído do relatório ─
+    if (acao === "servico-detalhe") {
+      const id = req.query.id;
+      if (!id) return res.status(400).json({ erro: "id obrigatorio" });
+      const body = new URLSearchParams({ token: TOKEN_V2, id: String(id), formato: "JSON" }).toString();
+      const r = await httpsRequest("POST", "api.tiny.com.br", "/api2/nota.servico.obter.php",
+        body, { "Content-Type": "application/x-www-form-urlencoded" });
+      const nota = parseJSON(r.text).retorno?.nota_fiscal;
+      const descricao = nota?.servico?.descricao || "";
+      const excluir = DESCRICOES_SERVICO_EXCLUIDAS.some(d => descricao.toLowerCase().includes(d));
+      return res.status(200).json({ descricao, excluir });
     }
 
     // ── AÇÃO: detalhe de uma nota (pra checar a finalidade) ──────────
@@ -181,6 +243,9 @@ module.exports = async (req, res) => {
           await sleep(400);
           vendedor = await buscarVendedorDaNotaOrigem(referencia);
         }
+        const alteracoes = await buscarAlteracoes("devolucao");
+        const alt = alteracoes[normalizarNumero(nota.numero)];
+        if (alt?.vendedor) vendedor = alt.vendedor;
       }
 
       return res.status(200).json({
@@ -191,7 +256,7 @@ module.exports = async (req, res) => {
       });
     }
 
-    return res.status(400).json({ erro: "acao invalida. Use: vendas, entradas, nota, servicos" });
+    return res.status(400).json({ erro: "acao invalida. Use: vendas, entradas, nota, servicos, servico-detalhe" });
 
   } catch (e) {
     return res.status(500).json({ erro: e.message, stack: e.stack });
