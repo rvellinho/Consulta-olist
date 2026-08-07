@@ -316,9 +316,11 @@
       </div>
       <button class="btn-sec" onclick="definirPeriodoMesAtual()">Mês atual</button>
       <button class="btn-sec" onclick="definirPeriodoMesAnterior()">Mês anterior</button>
-      <button class="btn-primary" id="btn-gerar-relatorio" onclick="gerarRelatorioVendas()">📊 Gerar Relatório</button>
+      <button class="btn-primary" id="btn-gerar-relatorio" onclick="buscarRelatorioDoCache()">🔍 Buscar</button>
+      <button class="btn-sec" id="btn-atualizar-olist" onclick="atualizarDadosOlist()">🔄 Atualizar dados (Olist)</button>
       <button class="btn-sec" onclick="abrirModalAlteracoes()">🔧 Alterações</button>
     </div>
+    <p id="rel-status-cache" style="font-size:12px;color:var(--mt);margin-bottom:12px;"></p>
     <div id="estado-relatorios" class="hidden">
       <div class="state-center"><div class="spinner"></div><p id="msg-relatorios">Carregando dados do Olist...</p></div>
     </div>
@@ -540,6 +542,7 @@ function mudarAba(aba){
 function inicializarDatasRelatorio(){
   if(el("rel-data-inicial").value)return;
   definirPeriodoMesAtual();
+  buscarRelatorioDoCache();
 }
 
 function definirPeriodoMesAtual(){
@@ -1121,7 +1124,31 @@ function formatarMoeda(v){
   return v.toLocaleString("pt-BR",{style:"currency",currency:"BRL"});
 }
 
-async function gerarRelatorioVendas() {
+// Código do cliente (pro cache) — memoizado por CNPJ pra não repetir a mesma
+// busca dezenas de vezes quando o cliente aparece em várias notas.
+const codigoClientePorCnpj = {};
+async function buscarCodigoCliente(cnpj) {
+  const limpo = String(cnpj || "").replace(/\D/g, "");
+  if (!limpo) return null;
+  if (limpo in codigoClientePorCnpj) return codigoClientePorCnpj[limpo];
+  try {
+    await new Promise(r => setTimeout(r, 300));
+    const resp = await fetch(`/api/contatos?pesquisa=${limpo}`);
+    const d = await resp.json();
+    const codigo = d.itens?.[0]?.codigo || null;
+    codigoClientePorCnpj[limpo] = codigo;
+    return codigo;
+  } catch { codigoClientePorCnpj[limpo] = null; return null; }
+}
+
+function formatarDataHora(iso) {
+  if (!iso) return "nunca";
+  const d = new Date(iso);
+  return d.toLocaleDateString("pt-BR") + " às " + d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+}
+
+// ── Leitura rápida (do Supabase, sem tocar na Olist) ─────────────────────
+async function buscarRelatorioDoCache() {
   const dataInicialIso = el("rel-data-inicial").value;
   const dataFinalIso = el("rel-data-final").value;
   if (!dataInicialIso || !dataFinalIso) {
@@ -1131,10 +1158,62 @@ async function gerarRelatorioVendas() {
   const dataInicial = paraDataBR(dataInicialIso);
   const dataFinal = paraDataBR(dataFinalIso);
 
+  el("estado-relatorios").classList.remove("hidden");
+  el("msg-relatorios").textContent = "Buscando dados salvos...";
+  el("tabela-relatorios-wrap").classList.add("hidden");
+
+  try {
+    const r = await fetch(`/api/relatorios?acao=cache&dataInicial=${dataInicial}&dataFinal=${dataFinal}`);
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.erro || "Erro ao buscar relatório");
+
+    const porTipo = { produto: [], aguia: [], servico: [], devolucao: [], representacao: [] };
+    (d.linhas || []).forEach(l => (porTipo[l.tipo] || []).push(l));
+
+    const converter = l => ({ data: paraDataBR(l.data), vendedor: l.vendedor, valor: parseFloat(l.valor) || 0 });
+    const notasVenda = porTipo.produto.map(converter).concat(porTipo.aguia.map(converter));
+    const notasServico = porTipo.servico.map(l => ({ vendedor: l.vendedor, valor: parseFloat(l.valor) || 0 }));
+    const notasRepresentacao = porTipo.representacao.map(l => ({ vendedor: l.vendedor, valor: parseFloat(l.valor) || 0 }));
+
+    let totalDevolucoes = 0;
+    const devolucoesPorVendedor = {};
+    porTipo.devolucao.forEach(l => {
+      const valor = parseFloat(l.valor) || 0;
+      totalDevolucoes += valor;
+      devolucoesPorVendedor[l.vendedor] = (devolucoesPorVendedor[l.vendedor] || 0) + valor;
+    });
+
+    let statusHtml = `Última atualização: <strong>${formatarDataHora(d.ultimaAtualizacao)}</strong>`;
+    if (d.sincronizadoDesde && dataInicialIso < d.sincronizadoDesde) {
+      statusHtml += ` — ⚠️ esse período é anterior à primeira sincronização (a partir de ${paraDataBR(d.sincronizadoDesde)}); pode estar incompleto.`;
+    }
+    el("rel-status-cache").innerHTML = statusHtml;
+
+    el("estado-relatorios").classList.add("hidden");
+    renderTabelaRelatorios(notasVenda, totalDevolucoes, devolucoesPorVendedor, notasServico, notasRepresentacao, dataInicialIso, dataFinalIso);
+    el("tabela-relatorios-wrap").classList.remove("hidden");
+  } catch (e) {
+    el("estado-relatorios").classList.remove("hidden");
+    el("msg-relatorios").textContent = "Erro: " + e.message;
+  }
+}
+
+// ── Atualização (busca ao vivo na Olist e grava no cache) ────────────────
+// Sempre cobre os últimos 3 meses, independente do período selecionado na
+// tela — é pra "manter o cache em dia", não pra olhar um período específico.
+async function atualizarDadosOlist() {
+  const hoje = new Date();
+  const inicio3Meses = new Date(hoje.getFullYear(), hoje.getMonth() - 3, hoje.getDate());
+  const fmt = d => d.toISOString().slice(0, 10);
+  const dataInicialIso = fmt(inicio3Meses);
+  const dataFinalIso = fmt(hoje);
+  const dataInicial = paraDataBR(dataInicialIso);
+  const dataFinal = paraDataBR(dataFinalIso);
+
   document.body.insertAdjacentHTML("beforeend", `
     <div id="modal-progresso" style="position:fixed;inset:0;background:rgba(17,24,39,.6);backdrop-filter:blur(4px);z-index:200;display:flex;align-items:center;justify-content:center;padding:20px;">
       <div style="background:#fff;border-radius:16px;padding:32px;width:100%;max-width:460px;box-shadow:0 25px 60px rgba(0,0,0,.25);">
-        <h3 style="font-size:16px;font-weight:700;margin-bottom:6px;">📊 Gerando Relatório de Vendas</h3>
+        <h3 style="font-size:16px;font-weight:700;margin-bottom:6px;">🔄 Atualizando dados (últimos 3 meses)</h3>
         <p id="prog-msg" style="font-size:13px;color:var(--mt);margin-bottom:20px;">Iniciando...</p>
         <div style="background:var(--s2);border-radius:99px;height:10px;overflow:hidden;margin-bottom:10px;">
           <div id="prog-barra" style="height:100%;background:linear-gradient(90deg,var(--ac),#ff4d6d);border-radius:99px;width:0%;transition:width .4s ease;"></div>
@@ -1146,8 +1225,7 @@ async function gerarRelatorioVendas() {
       </div>
     </div>`);
   el("btn-gerar-relatorio").disabled = true;
-  el("tabela-relatorios-wrap").classList.add("hidden");
-  el("estado-relatorios").classList.add("hidden");
+  el("btn-atualizar-olist").disabled = true;
   const inicio = Date.now();
 
   function atualizarProgresso(pct, msg) {
@@ -1163,103 +1241,131 @@ async function gerarRelatorioVendas() {
   }
 
   try {
+    // 1. Notas de venda (produto) — exclui "vf-faturamento" (venda futura, só cobrança)
     atualizarProgresso(2, "Buscando notas de venda do período...");
     const resVendas = await fetch(`/api/relatorios?acao=vendas&dataInicial=${dataInicial}&dataFinal=${dataFinal}`);
     const dataVendas = await resVendas.json();
     if (!resVendas.ok) throw new Error(dataVendas.erro || "Erro ao buscar vendas");
-    const notasVenda = dataVendas.notas || [];
+    const candidatasVenda = dataVendas.notas || [];
 
-    atualizarProgresso(15, "Buscando notas de entrada do período...");
+    const notasVenda = [];
+    for (let i = 0; i < candidatasVenda.length; i++) {
+      const nota = candidatasVenda[i];
+      atualizarProgresso(2 + ((i + 1) / Math.max(candidatasVenda.length, 1)) * 25, `Conferindo nota de venda ${i + 1} de ${candidatasVenda.length}...`);
+      await new Promise(r => setTimeout(r, 600));
+      const r = await fetch(`/api/relatorios?acao=venda-detalhe&id=${nota.id}`);
+      const d = await r.json();
+      if (!d.excluir) notasVenda.push(nota);
+    }
+
+    // 2. Notas de entrada / devolução
+    atualizarProgresso(27, "Buscando notas de entrada do período...");
     const resEntradas = await fetch(`/api/relatorios?acao=entradas&dataInicial=${dataInicial}&dataFinal=${dataFinal}`);
     const dataEntradas = await resEntradas.json();
     if (!resEntradas.ok) throw new Error(dataEntradas.erro || "Erro ao buscar entradas");
     const notasEntrada = dataEntradas.notas || [];
 
-    let totalDevolucoes = 0;
-    const devolucoesPorVendedor = {};
-    const totalEntradas = notasEntrada.length;
-    for (let i = 0; i < totalEntradas; i++) {
+    const notasDevolucao = [];
+    for (let i = 0; i < notasEntrada.length; i++) {
       const nota = notasEntrada[i];
-      const pct = 15 + ((i + 1) / Math.max(totalEntradas, 1)) * 40;
-      atualizarProgresso(pct, `Conferindo nota de entrada ${i + 1} de ${totalEntradas}...`);
+      atualizarProgresso(27 + ((i + 1) / Math.max(notasEntrada.length, 1)) * 25, `Conferindo nota de entrada ${i + 1} de ${notasEntrada.length}...`);
       await new Promise(r => setTimeout(r, 600));
       const r = await fetch(`/api/relatorios?acao=nota&id=${nota.id}`);
       const d = await r.json();
       if (d.ehDevolucao) {
-        const valor = d.valor || nota.valor || 0;
-        totalDevolucoes += valor;
-        if (d.vendedor) devolucoesPorVendedor[d.vendedor] = (devolucoesPorVendedor[d.vendedor] || 0) + valor;
+        notasDevolucao.push({
+          numero: nota.numero, id: nota.id, data: d.data,
+          vendedor: d.vendedor || "Sem vendedor", valor: d.valor || nota.valor || 0,
+          clienteCnpj: d.clienteCnpj, clienteRazaoSocial: d.clienteRazaoSocial,
+        });
       }
     }
 
-    atualizarProgresso(55, "Buscando notas de serviço do período...");
+    // 3. Notas de serviço
+    atualizarProgresso(52, "Buscando notas de serviço do período...");
     const resServicos = await fetch(`/api/relatorios?acao=servicos&dataInicial=${dataInicial}&dataFinal=${dataFinal}`);
     const dataServicos = await resServicos.json();
     if (!resServicos.ok) throw new Error(dataServicos.erro || "Erro ao buscar notas de serviço");
     const candidatasServico = dataServicos.notas || [];
 
     const notasServico = [];
-    const totalCandidatas = candidatasServico.length;
-    for (let i = 0; i < totalCandidatas; i++) {
+    for (let i = 0; i < candidatasServico.length; i++) {
       const nota = candidatasServico[i];
-      const pct = 55 + ((i + 1) / Math.max(totalCandidatas, 1)) * 20;
-      atualizarProgresso(pct, `Conferindo nota de serviço ${i + 1} de ${totalCandidatas}...`);
+      atualizarProgresso(52 + ((i + 1) / Math.max(candidatasServico.length, 1)) * 15, `Conferindo nota de serviço ${i + 1} de ${candidatasServico.length}...`);
       await new Promise(r => setTimeout(r, 600));
       const r = await fetch(`/api/relatorios?acao=servico-detalhe&id=${nota.id}`);
       const d = await r.json();
-      if (!d.excluir) notasServico.push(nota);
+      if (!d.excluir) notasServico.push({ ...nota, clienteCnpj: d.clienteCnpj, clienteRazaoSocial: d.clienteRazaoSocial });
     }
 
-    atualizarProgresso(75, "Buscando pedidos de representação do período...");
+    // 4. Pedidos de representação
+    atualizarProgresso(67, "Buscando pedidos de representação do período...");
     const resRepresentacao = await fetch(`/api/relatorios?acao=representacao&dataInicial=${dataInicial}&dataFinal=${dataFinal}`);
     const dataRepresentacao = await resRepresentacao.json();
     if (!resRepresentacao.ok) throw new Error(dataRepresentacao.erro || "Erro ao buscar pedidos de representação");
     const candidatasRepresentacao = dataRepresentacao.notas || [];
 
     const notasRepresentacao = [];
-    const totalCandidatasRep = candidatasRepresentacao.length;
-    for (let i = 0; i < totalCandidatasRep; i++) {
+    for (let i = 0; i < candidatasRepresentacao.length; i++) {
       const pedido = candidatasRepresentacao[i];
-      const pct = 75 + ((i + 1) / Math.max(totalCandidatasRep, 1)) * 15;
-      atualizarProgresso(pct, `Conferindo pedido de representação ${i + 1} de ${totalCandidatasRep}...`);
+      atualizarProgresso(67 + ((i + 1) / Math.max(candidatasRepresentacao.length, 1)) * 13, `Conferindo pedido de representação ${i + 1} de ${candidatasRepresentacao.length}...`);
       await new Promise(r => setTimeout(r, 600));
       const r = await fetch(`/api/relatorios?acao=representacao-detalhe&id=${pedido.id}`);
       const d = await r.json();
-      if (!d.temNotaFiscal) notasRepresentacao.push(pedido);
+      if (!d.temNotaFiscal) notasRepresentacao.push({ ...pedido, clienteCnpj: d.clienteCnpj, clienteRazaoSocial: d.clienteRazaoSocial });
     }
 
-    atualizarProgresso(90, "Buscando pedidos faturados por outro CNPJ (aguia)...");
+    // 5. Pedidos "aguia" (faturados por outro CNPJ)
+    atualizarProgresso(80, "Buscando pedidos faturados por outro CNPJ (aguia)...");
     const resAguia = await fetch(`/api/relatorios?acao=aguia&dataInicial=${dataInicial}&dataFinal=${dataFinal}`);
     const dataAguia = await resAguia.json();
     if (!resAguia.ok) throw new Error(dataAguia.erro || "Erro ao buscar pedidos aguia");
     const candidatasAguia = dataAguia.notas || [];
 
     const notasAguia = [];
-    const totalCandidatasAguia = candidatasAguia.length;
-    for (let i = 0; i < totalCandidatasAguia; i++) {
+    for (let i = 0; i < candidatasAguia.length; i++) {
       const pedido = candidatasAguia[i];
-      const pct = 90 + ((i + 1) / Math.max(totalCandidatasAguia, 1)) * 8;
-      atualizarProgresso(pct, `Conferindo pedido aguia ${i + 1} de ${totalCandidatasAguia}...`);
+      atualizarProgresso(80 + ((i + 1) / Math.max(candidatasAguia.length, 1)) * 8, `Conferindo pedido aguia ${i + 1} de ${candidatasAguia.length}...`);
       await new Promise(r => setTimeout(r, 600));
       const r = await fetch(`/api/relatorios?acao=aguia-detalhe&id=${pedido.id}`);
       const d = await r.json();
-      if (!d.temNotaFiscal) notasAguia.push(pedido);
+      if (!d.temNotaFiscal) notasAguia.push({ ...pedido, clienteCnpj: d.clienteCnpj, clienteRazaoSocial: d.clienteRazaoSocial });
     }
 
+    // 6. Código do cliente pra cada nota coletada
+    atualizarProgresso(89, "Buscando código dos clientes...");
+    const todasLinhas = [].concat(notasVenda, notasDevolucao, notasServico, notasRepresentacao, notasAguia);
+    for (let i = 0; i < todasLinhas.length; i++) {
+      todasLinhas[i].clienteCodigo = await buscarCodigoCliente(todasLinhas[i].clienteCnpj);
+      atualizarProgresso(89 + ((i + 1) / Math.max(todasLinhas.length, 1)) * 8, `Buscando código do cliente ${i + 1} de ${todasLinhas.length}...`);
+    }
+
+    // 7. Grava tudo no cache (substitui o que já existia nesse período)
+    atualizarProgresso(98, "Salvando no banco de dados...");
+    const salvar = (tipo, linhas) => fetch("/api/relatorios?acao=cache-salvar", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tipo, dataInicial, dataFinal, linhas }),
+    });
+    await Promise.all([
+      salvar("produto", notasVenda),
+      salvar("aguia", notasAguia),
+      salvar("devolucao", notasDevolucao),
+      salvar("servico", notasServico),
+      salvar("representacao", notasRepresentacao),
+    ]);
+
     atualizarProgresso(100, "Concluído!");
-    await new Promise(r => setTimeout(r, 600));
+    await new Promise(r => setTimeout(r, 400));
     document.getElementById("modal-progresso")?.remove();
 
-    const notasVendaComAguia = notasVenda.concat(notasAguia);
-    renderTabelaRelatorios(notasVendaComAguia, totalDevolucoes, devolucoesPorVendedor, notasServico, notasRepresentacao, dataInicialIso, dataFinalIso);
-    el("tabela-relatorios-wrap").classList.remove("hidden");
-
-  } catch(e) {
+    await buscarRelatorioDoCache();
+  } catch (e) {
     document.getElementById("modal-progresso")?.remove();
     el("estado-relatorios").classList.remove("hidden");
     el("msg-relatorios").textContent = "Erro: " + e.message;
   } finally {
     el("btn-gerar-relatorio").disabled = false;
+    el("btn-atualizar-olist").disabled = false;
   }
 }
 

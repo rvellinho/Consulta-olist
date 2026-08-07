@@ -6,12 +6,20 @@
     },
     "api/contatos.js": {
       "memory": 256
+    },
+    "api/relatorio-sync-diario.js": {
+      "memory": 256,
+      "maxDuration": 60
     }
   },
   "crons": [
     {
       "path": "/api/ping",
       "schedule": "0 10 * * *"
+    },
+    {
+      "path": "/api/relatorio-sync-diario",
+      "schedule": "0 7 * * *"
     }
   ]
 }

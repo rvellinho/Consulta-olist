@@ -1,223 +1,24 @@
-// Relatório de Vendas por Notas Fiscais — endpoints separados para evitar timeout
-const https = require("https");
-
-const TOKEN_V2 = process.env.OLIST_TOKEN;
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_KEY = process.env.SUPABASE_KEY;
-const supaHeaders = {
-  apikey: SUPABASE_KEY,
-  Authorization: "Bearer " + SUPABASE_KEY,
-  "Content-Type": "application/json",
-};
-
-// Serviços que não devem entrar no relatório (ex: cobrança interna, não é venda)
-const DESCRICOES_SERVICO_EXCLUIDAS = ["serviço de apoio na área de vendas"];
-
-// situação: 1=Pendente, 3=Cancelada, 5=Rejeitada, 10=Denegada — nunca contam.
-// Tudo mais (2=Emitida, 6=Autorizada, 7=Emitida DANFE, 8=Registrada, etc) conta como válida —
-// a Olist usa mais códigos de "emitida com sucesso" do que a documentação lista.
-const SITUACOES_INVALIDAS = ["1", "3", "5", "10"];
-// finalidade: 4, 7, 8 = Devolução/Retorno
-const FINALIDADES_DEVOLUCAO = ["4", "7", "8"];
-// situação de nota de serviço: 1=Pendente, 3=Cancelada — nunca contam.
-// 2=Emitida, 4=Enviada (aguardando recibo) contam como válidas.
-const SITUACOES_INVALIDAS_SERVICO = ["1", "3"];
-
-function httpsRequest(method, hostname, path, body, headers) {
-  return new Promise((resolve, reject) => {
-    const req = https.request({ hostname, path, method, headers }, (res) => {
-      let d = ""; res.on("data", c => d += c);
-      res.on("end", () => resolve({ status: res.statusCode, text: d }));
-    });
-    req.on("error", reject);
-    if (body) req.write(body);
-    req.end();
-  });
-}
-
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-function parseJSON(text) { try { return JSON.parse(text); } catch { return {}; } }
-
-// Normaliza número de nota pra comparação (remove zeros à esquerda) —
-// assim "012662" cadastrado numa alteração casa com "12662" digitado por engano.
-function normalizarNumero(numero) {
-  const n = parseInt(String(numero).replace(/\D/g, ""), 10);
-  return Number.isNaN(n) ? String(numero).trim() : String(n);
-}
-
-function formatarDataBR(isoDate) {
-  const [y, m, d] = isoDate.split("-");
-  return `${d}/${m}/${y}`;
-}
-
-function parseDataBR(str) {
-  const m = String(str || "").match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-  if (!m) return null;
-  return new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]));
-}
-
-function somarDiasBR(dataStrBR, dias) {
-  const d = parseDataBR(dataStrBR);
-  d.setDate(d.getDate() + dias);
-  const dd = String(d.getDate()).padStart(2, "0");
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  return `${dd}/${mm}/${d.getFullYear()}`;
-}
-
-// Busca as correções manuais cadastradas em "Alterações" pra um tipo de nota,
-// já indexadas por número de nota normalizado.
-async function buscarAlteracoes(tipoNota) {
-  const supaHost = SUPABASE_URL.replace("https://", "");
-  const r = await httpsRequest("GET", supaHost,
-    `/rest/v1/alteracoes_relatorio?tipo_nota=eq.${tipoNota}&select=numero_nota,vendedor,data_emissao`,
-    null, supaHeaders);
-  const data = parseJSON(r.text);
-  const mapa = {};
-  (Array.isArray(data) ? data : []).forEach(a => { mapa[normalizarNumero(a.numero_nota)] = a; });
-  return mapa;
-}
-
-async function buscarPaginaNotas(tipoNota, dataInicial, dataFinal, pagina) {
-  const body = new URLSearchParams({
-    token: TOKEN_V2, formato: "JSON",
-    tipoNota, dataInicial, dataFinal, pagina: String(pagina),
-  }).toString();
-  const r = await httpsRequest("POST", "api.tiny.com.br",
-    "/api2/notas.fiscais.pesquisa.php", body,
-    { "Content-Type": "application/x-www-form-urlencoded" });
-  const data = parseJSON(r.text);
-  if (data.retorno && data.retorno.status === "Erro") {
-    const codigoErro = data.retorno.codigo_erro;
-    // Código 6 = nenhum registro encontrado — não é erro, é lista vazia
-    if (codigoErro === "6") return [];
-    throw new Error(data.retorno.erros?.[0]?.erro || "Erro ao pesquisar notas fiscais");
-  }
-  return data.retorno?.notas_fiscais || [];
-}
-
-async function buscarTodasNotas(tipoNota, dataInicial, dataFinal) {
-  const todas = [];
-  let pagina = 1;
-  while (true) {
-    const lista = await buscarPaginaNotas(tipoNota, dataInicial, dataFinal, pagina);
-    lista.forEach(n => { if (n.nota_fiscal) todas.push(n.nota_fiscal); });
-    if (lista.length < 100) break;
-    pagina++;
-    await sleep(600);
-  }
-  return todas.filter(n => !SITUACOES_INVALIDAS.includes(String(n.situacao)));
-}
-
-async function buscarPaginaNotasServico(dataInicial, dataFinal, pagina) {
-  const body = new URLSearchParams({
-    token: TOKEN_V2, formato: "JSON",
-    dataInicial, dataFinal, pagina: String(pagina),
-  }).toString();
-  const r = await httpsRequest("POST", "api.tiny.com.br",
-    "/api2/notas.servico.pesquisa.php", body,
-    { "Content-Type": "application/x-www-form-urlencoded" });
-  const data = parseJSON(r.text);
-  if (data.retorno && data.retorno.status === "Erro") {
-    const codigoErro = data.retorno.codigo_erro;
-    // Código 6 = nenhum registro encontrado — não é erro, é lista vazia
-    if (codigoErro === "6") return [];
-    throw new Error(data.retorno.erros?.[0]?.erro || "Erro ao pesquisar notas de serviço");
-  }
-  return data.retorno?.notas_servico || [];
-}
-
-async function buscarTodasNotasServico(dataInicial, dataFinal) {
-  const todas = [];
-  let pagina = 1;
-  while (true) {
-    const lista = await buscarPaginaNotasServico(dataInicial, dataFinal, pagina);
-    lista.forEach(n => { if (n.nota_servico) todas.push(n.nota_servico); });
-    if (lista.length < 100) break;
-    pagina++;
-    await sleep(600);
-  }
-  return todas.filter(n => !SITUACOES_INVALIDAS_SERVICO.includes(String(n.situacao)));
-}
-
-// Pedidos de representação: a NF é emitida pelo fornecedor, então não existe
-// nota fiscal nossa pra esse pedido (id_nota_fiscal = 0). Identificados por
-// situação "Faturado" + marcador "rep". A data de faturamento considerada é a
-// "data prevista" do pedido, não a data de cadastro (que é o que a Olist
-// permite filtrar na busca) — por isso buscamos com uma margem de dias antes/
-// depois do período e filtramos pela data prevista depois.
-const MARCADOR_REPRESENTACAO = "rep";
-const MARGEM_DIAS_REPRESENTACAO = 30;
-
-// Pedidos com a tag "aguia": vendidos por aqui mas faturados por outro CNPJ
-// nosso (outra conta na Olist), então também não têm NF nessa conta. Mesma
-// lógica de busca da representação, mas entram junto com as vendas normais
-// por dia/vendedor — não é uma categoria separada, é venda nossa mesmo.
-const MARCADOR_AGUIA = "aguia";
-const MARGEM_DIAS_AGUIA = 30;
-
-async function buscarPaginaPedidos(situacao, marcador, dataInicial, dataFinal, pagina) {
-  const body = new URLSearchParams({
-    token: TOKEN_V2, formato: "JSON",
-    situacao, marcador, dataInicial, dataFinal, pagina: String(pagina),
-  }).toString();
-  const r = await httpsRequest("POST", "api.tiny.com.br",
-    "/api2/pedidos.pesquisa.php", body,
-    { "Content-Type": "application/x-www-form-urlencoded" });
-  const data = parseJSON(r.text);
-  if (data.retorno && data.retorno.status === "Erro") {
-    const codigoErro = data.retorno.codigo_erro;
-    // Código 6 = nenhum registro encontrado — não é erro, é lista vazia
-    if (codigoErro === "6") return [];
-    throw new Error(data.retorno.erros?.[0]?.erro || "Erro ao pesquisar pedidos");
-  }
-  return data.retorno?.pedidos || [];
-}
-
-async function buscarTodosPedidos(situacao, marcador, dataInicial, dataFinal) {
-  const todos = [];
-  let pagina = 1;
-  while (true) {
-    const lista = await buscarPaginaPedidos(situacao, marcador, dataInicial, dataFinal, pagina);
-    lista.forEach(p => { if (p.pedido) todos.push(p.pedido); });
-    if (lista.length < 100) break;
-    pagina++;
-    await sleep(600);
-  }
-  return todos;
-}
-
-// Quando a devolução é lançada referenciando a NF-e de venda original, a Olist
-// grava esse texto padrão no campo "obs" da nota de devolução — usamos isso
-// pra descobrir qual foi a nota de venda original e puxar o vendedor dela.
-function extrairReferenciaOrigem(obs) {
-  const mNumero = (obs || "").match(/N[uú]mero da NF-e referenciada:\s*(\d+)/i);
-  const mData = (obs || "").match(/Data de emiss[ãa]o da NF-e referenciada:\s*(\d{2}\/\d{2}\/\d{4})/i);
-  const mChave = (obs || "").match(/Chave de acesso da NF-e referenciada:\s*(\d+)/i);
-  if (!mNumero || !mData) return null;
-  return { numero: mNumero[1], data: mData[1], chave: mChave ? mChave[1] : null };
-}
-
-async function buscarVendedorDaNotaOrigem(referencia) {
-  const body = new URLSearchParams({
-    token: TOKEN_V2, formato: "JSON",
-    tipoNota: "S", numero: referencia.numero,
-    dataInicial: referencia.data, dataFinal: referencia.data,
-  }).toString();
-  const r = await httpsRequest("POST", "api.tiny.com.br",
-    "/api2/notas.fiscais.pesquisa.php", body,
-    { "Content-Type": "application/x-www-form-urlencoded" });
-  const data = parseJSON(r.text);
-  if (data.retorno?.status === "Erro") return null;
-  const candidatas = (data.retorno?.notas_fiscais || []).map(n => n.nota_fiscal);
-  const origem = referencia.chave
-    ? candidatas.find(n => n.chave_acesso === referencia.chave)
-    : candidatas[0];
-  return origem?.nome_vendedor || null;
-}
+// Relatório de Vendas por Notas Fiscais — endpoints separados para evitar timeout.
+// A coleta de dados na Olist fica em api/_lib/relatorio-coleta.js (compartilhada
+// com o job automático em api/relatorio-sync-diario.js).
+const lib = require("./_lib/relatorio-coleta");
+const {
+  SUPABASE_URL, supaHeaders,
+  DESCRICOES_SERVICO_EXCLUIDAS, FINALIDADES_DEVOLUCAO,
+  MARCADOR_REPRESENTACAO, MARGEM_DIAS_REPRESENTACAO,
+  MARCADOR_AGUIA, MARGEM_DIAS_AGUIA, MARCADOR_VENDA_FUTURA_EXCLUIR,
+  httpsRequest, sleep, parseJSON, normalizarNumero,
+  formatarDataBR, parseDataBR, somarDiasBR, paraIso,
+  buscarAlteracoes, temMarcador,
+  buscarTodasNotas, buscarTodasNotasServico, buscarDetalheNotaServico, buscarDetalheNotaFiscal,
+  buscarTodosPedidos, buscarDetalhePedido,
+  extrairReferenciaOrigem, buscarVendedorDaNotaOrigem,
+  salvarNoCache,
+} = lib;
 
 module.exports = async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
   if (req.method === "OPTIONS") return res.status(200).end();
 
@@ -234,13 +35,27 @@ module.exports = async (req, res) => {
         notas: notas.map(n => {
           const alt = alteracoes[normalizarNumero(n.numero)];
           return {
+            id: n.id,
             numero: n.numero,
             data: alt?.data_emissao ? formatarDataBR(alt.data_emissao) : n.data_emissao,
             vendedor: alt?.vendedor || n.nome_vendedor || "Sem vendedor",
             valor: parseFloat(n.valor || 0),
+            clienteCnpj: n.cliente?.cpf_cnpj || null,
+            clienteRazaoSocial: n.cliente?.nome || null,
           };
         }),
       });
+    }
+
+    // ── AÇÃO: verifica se a nota de venda é "vf-faturamento" (excluída) ──
+    // Notas com marcador "vf-faturamento" são só a cobrança antecipada de uma
+    // venda futura — a entrega de fato vem numa nota separada (vf-entrega).
+    if (acao === "venda-detalhe") {
+      const id = req.query.id;
+      if (!id) return res.status(400).json({ erro: "id obrigatorio" });
+      const nota = await buscarDetalheNotaFiscal(id);
+      const excluir = temMarcador(nota, MARCADOR_VENDA_FUTURA_EXCLUIR);
+      return res.status(200).json({ excluir });
     }
 
     // ── AÇÃO: notas de entrada candidatas a devolução no período ─────
@@ -266,6 +81,7 @@ module.exports = async (req, res) => {
           return {
             id: n.id,
             numero: n.numero,
+            data: n.data_emissao,
             vendedor: alt?.vendedor || n.nome_vendedor || "Sem vendedor",
             valor: parseFloat(n.valor || 0),
           };
@@ -277,13 +93,14 @@ module.exports = async (req, res) => {
     if (acao === "servico-detalhe") {
       const id = req.query.id;
       if (!id) return res.status(400).json({ erro: "id obrigatorio" });
-      const body = new URLSearchParams({ token: TOKEN_V2, id: String(id), formato: "JSON" }).toString();
-      const r = await httpsRequest("POST", "api.tiny.com.br", "/api2/nota.servico.obter.php",
-        body, { "Content-Type": "application/x-www-form-urlencoded" });
-      const nota = parseJSON(r.text).retorno?.nota_fiscal;
+      const nota = await buscarDetalheNotaServico(id);
       const descricao = nota?.servico?.descricao || "";
       const excluir = DESCRICOES_SERVICO_EXCLUIDAS.some(d => descricao.toLowerCase().includes(d));
-      return res.status(200).json({ descricao, excluir });
+      return res.status(200).json({
+        descricao, excluir,
+        clienteCnpj: nota?.cliente?.cpf_cnpj || null,
+        clienteRazaoSocial: nota?.cliente?.nome || null,
+      });
     }
 
     // ── AÇÃO: pedidos de representação faturados no período (lista bruta) ─
@@ -309,6 +126,7 @@ module.exports = async (req, res) => {
           return {
             id: p.id,
             numero: p.numero,
+            data: alt?.data_emissao ? formatarDataBR(alt.data_emissao) : p.data_prevista,
             vendedor: alt?.vendedor || p.nome_vendedor || "Sem vendedor",
             valor: parseFloat(p.valor || 0),
           };
@@ -320,12 +138,13 @@ module.exports = async (req, res) => {
     if (acao === "representacao-detalhe") {
       const id = req.query.id;
       if (!id) return res.status(400).json({ erro: "id obrigatorio" });
-      const body = new URLSearchParams({ token: TOKEN_V2, id: String(id), formato: "JSON" }).toString();
-      const r = await httpsRequest("POST", "api.tiny.com.br", "/api2/pedido.obter.php",
-        body, { "Content-Type": "application/x-www-form-urlencoded" });
-      const pedido = parseJSON(r.text).retorno?.pedido;
+      const pedido = await buscarDetalhePedido(id);
       const temNotaFiscal = !!(pedido && Number(pedido.id_nota_fiscal) > 0);
-      return res.status(200).json({ temNotaFiscal });
+      return res.status(200).json({
+        temNotaFiscal,
+        clienteCnpj: pedido?.cliente?.cpf_cnpj || null,
+        clienteRazaoSocial: pedido?.cliente?.nome || null,
+      });
     }
 
     // ── AÇÃO: pedidos "aguia" (faturados por outro CNPJ nosso) no período ──
@@ -363,22 +182,20 @@ module.exports = async (req, res) => {
     if (acao === "aguia-detalhe") {
       const id = req.query.id;
       if (!id) return res.status(400).json({ erro: "id obrigatorio" });
-      const body = new URLSearchParams({ token: TOKEN_V2, id: String(id), formato: "JSON" }).toString();
-      const r = await httpsRequest("POST", "api.tiny.com.br", "/api2/pedido.obter.php",
-        body, { "Content-Type": "application/x-www-form-urlencoded" });
-      const pedido = parseJSON(r.text).retorno?.pedido;
+      const pedido = await buscarDetalhePedido(id);
       const temNotaFiscal = !!(pedido && Number(pedido.id_nota_fiscal) > 0);
-      return res.status(200).json({ temNotaFiscal });
+      return res.status(200).json({
+        temNotaFiscal,
+        clienteCnpj: pedido?.cliente?.cpf_cnpj || null,
+        clienteRazaoSocial: pedido?.cliente?.nome || null,
+      });
     }
 
     // ── AÇÃO: detalhe de uma nota (pra checar a finalidade) ──────────
     if (acao === "nota") {
       const id = req.query.id;
       if (!id) return res.status(400).json({ erro: "id obrigatorio" });
-      const body = new URLSearchParams({ token: TOKEN_V2, id: String(id), formato: "JSON" }).toString();
-      const r = await httpsRequest("POST", "api.tiny.com.br", "/api2/nota.fiscal.obter.php",
-        body, { "Content-Type": "application/x-www-form-urlencoded" });
-      const nota = parseJSON(r.text).retorno?.nota_fiscal;
+      const nota = await buscarDetalheNotaFiscal(id);
       if (!nota) return res.status(200).json({ finalidade: null, valor: 0 });
 
       const ehDevolucao = FINALIDADES_DEVOLUCAO.includes(String(nota.finalidade));
@@ -396,13 +213,71 @@ module.exports = async (req, res) => {
 
       return res.status(200).json({
         finalidade: String(nota.finalidade ?? ""),
+        data: nota.data_emissao,
         valor: parseFloat(nota.valor_nota || 0),
         ehDevolucao,
         vendedor,
+        clienteCnpj: nota.cliente?.cpf_cnpj || null,
+        clienteRazaoSocial: nota.cliente?.nome || null,
       });
     }
 
-    return res.status(400).json({ erro: "acao invalida. Use: vendas, entradas, nota, servicos, servico-detalhe, representacao, representacao-detalhe, aguia, aguia-detalhe" });
+    // ── AÇÃO: lê o relatório já processado do cache (rápido, sem Olist) ──
+    if (acao === "cache") {
+      if (!dataInicial || !dataFinal) return res.status(400).json({ erro: "dataInicial e dataFinal obrigatórios" });
+      const supaHost = SUPABASE_URL.replace("https://", "");
+      const isoInicial = paraIso(dataInicial);
+      const isoFinal = paraIso(dataFinal);
+
+      const [rLinhas, rStatus] = await Promise.all([
+        httpsRequest("GET", supaHost,
+          `/rest/v1/relatorio_cache?data=gte.${isoInicial}&data=lte.${isoFinal}&select=*`,
+          null, supaHeaders),
+        httpsRequest("GET", supaHost,
+          "/rest/v1/relatorio_cache_status?id=eq.1&select=ultima_atualizacao,sincronizado_desde",
+          null, supaHeaders),
+      ]);
+      const linhasBrutas = parseJSON(rLinhas.text);
+      const status = parseJSON(rStatus.text)?.[0] || {};
+
+      // Reaplica as correções da tela de Alterações por cima do cache — assim
+      // uma correção feita agora já aparece na hora, sem esperar o próximo
+      // "Atualizar dados".
+      const tiposPresentes = [...new Set((Array.isArray(linhasBrutas) ? linhasBrutas : []).map(l => l.tipo))];
+      const mapaAlteracoesPorTipo = {};
+      await Promise.all(tiposPresentes.map(async tipo => { mapaAlteracoesPorTipo[tipo] = await buscarAlteracoes(tipo); }));
+
+      const linhas = (Array.isArray(linhasBrutas) ? linhasBrutas : []).map(l => {
+        const alt = mapaAlteracoesPorTipo[l.tipo]?.[normalizarNumero(l.numero_nota)];
+        if (!alt) return l;
+        return {
+          ...l,
+          vendedor: alt.vendedor || l.vendedor,
+          data: alt.data_emissao || l.data,
+        };
+      });
+
+      return res.status(200).json({
+        linhas,
+        ultimaAtualizacao: status.ultima_atualizacao || null,
+        sincronizadoDesde: status.sincronizado_desde || null,
+      });
+    }
+
+    // ── AÇÃO: grava no cache um lote já coletado pela tela ───────────
+    if (acao === "cache-salvar" && req.method === "POST") {
+      const corpo = typeof req.body === "string" ? parseJSON(req.body) : (req.body || {});
+      const { tipo, dataInicial: di, dataFinal: df, linhas } = corpo;
+      if (!tipo || !di || !df || !Array.isArray(linhas)) {
+        return res.status(400).json({ erro: "tipo, dataInicial, dataFinal e linhas são obrigatórios" });
+      }
+      await salvarNoCache(tipo, di, df, linhas);
+      return res.status(200).json({ ok: true, salvos: linhas.length });
+    }
+
+    return res.status(400).json({
+      erro: "acao invalida. Use: vendas, venda-detalhe, entradas, nota, servicos, servico-detalhe, representacao, representacao-detalhe, aguia, aguia-detalhe, cache, cache-salvar",
+    });
 
   } catch (e) {
     return res.status(500).json({ erro: e.message, stack: e.stack });
