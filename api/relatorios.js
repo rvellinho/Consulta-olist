@@ -50,6 +50,20 @@ function formatarDataBR(isoDate) {
   return `${d}/${m}/${y}`;
 }
 
+function parseDataBR(str) {
+  const m = String(str || "").match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!m) return null;
+  return new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]));
+}
+
+function somarDiasBR(dataStrBR, dias) {
+  const d = parseDataBR(dataStrBR);
+  d.setDate(d.getDate() + dias);
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  return `${dd}/${mm}/${d.getFullYear()}`;
+}
+
 // Busca as correções manuais cadastradas em "Alterações" pra um tipo de nota,
 // já indexadas por número de nota normalizado.
 async function buscarAlteracoes(tipoNota) {
@@ -123,6 +137,46 @@ async function buscarTodasNotasServico(dataInicial, dataFinal) {
     await sleep(600);
   }
   return todas.filter(n => !SITUACOES_INVALIDAS_SERVICO.includes(String(n.situacao)));
+}
+
+// Pedidos de representação: a NF é emitida pelo fornecedor, então não existe
+// nota fiscal nossa pra esse pedido (id_nota_fiscal = 0). Identificados por
+// situação "Faturado" + marcador "rep". A data de faturamento considerada é a
+// "data prevista" do pedido, não a data de cadastro (que é o que a Olist
+// permite filtrar na busca) — por isso buscamos com uma margem de dias antes/
+// depois do período e filtramos pela data prevista depois.
+const MARCADOR_REPRESENTACAO = "rep";
+const MARGEM_DIAS_REPRESENTACAO = 30;
+
+async function buscarPaginaPedidos(situacao, marcador, dataInicial, dataFinal, pagina) {
+  const body = new URLSearchParams({
+    token: TOKEN_V2, formato: "JSON",
+    situacao, marcador, dataInicial, dataFinal, pagina: String(pagina),
+  }).toString();
+  const r = await httpsRequest("POST", "api.tiny.com.br",
+    "/api2/pedidos.pesquisa.php", body,
+    { "Content-Type": "application/x-www-form-urlencoded" });
+  const data = parseJSON(r.text);
+  if (data.retorno && data.retorno.status === "Erro") {
+    const codigoErro = data.retorno.codigo_erro;
+    // Código 6 = nenhum registro encontrado — não é erro, é lista vazia
+    if (codigoErro === "6") return [];
+    throw new Error(data.retorno.erros?.[0]?.erro || "Erro ao pesquisar pedidos");
+  }
+  return data.retorno?.pedidos || [];
+}
+
+async function buscarTodosPedidos(situacao, marcador, dataInicial, dataFinal) {
+  const todos = [];
+  let pagina = 1;
+  while (true) {
+    const lista = await buscarPaginaPedidos(situacao, marcador, dataInicial, dataFinal, pagina);
+    lista.forEach(p => { if (p.pedido) todos.push(p.pedido); });
+    if (lista.length < 100) break;
+    pagina++;
+    await sleep(600);
+  }
+  return todos;
 }
 
 // Quando a devolução é lançada referenciando a NF-e de venda original, a Olist
@@ -225,6 +279,48 @@ module.exports = async (req, res) => {
       return res.status(200).json({ descricao, excluir });
     }
 
+    // ── AÇÃO: pedidos de representação faturados no período (lista bruta) ─
+    // Ainda precisa checar id_nota_fiscal (acao=representacao-detalhe) pra
+    // garantir que não foi emitida NF nossa nesse meio tempo.
+    if (acao === "representacao") {
+      if (!dataInicial || !dataFinal) return res.status(400).json({ erro: "dataInicial e dataFinal obrigatórios" });
+      const inicioBuscado = somarDiasBR(dataInicial, -MARGEM_DIAS_REPRESENTACAO);
+      const fimBuscado = somarDiasBR(dataFinal, MARGEM_DIAS_REPRESENTACAO);
+      const pedidos = await buscarTodosPedidos("faturado", MARCADOR_REPRESENTACAO, inicioBuscado, fimBuscado);
+
+      const inicioPeriodo = parseDataBR(dataInicial);
+      const fimPeriodo = parseDataBR(dataFinal);
+      const noPeriodo = pedidos.filter(p => {
+        const dp = parseDataBR(p.data_prevista);
+        return dp && dp >= inicioPeriodo && dp <= fimPeriodo;
+      });
+
+      const alteracoes = await buscarAlteracoes("representacao");
+      return res.status(200).json({
+        notas: noPeriodo.map(p => {
+          const alt = alteracoes[normalizarNumero(p.numero)];
+          return {
+            id: p.id,
+            numero: p.numero,
+            vendedor: alt?.vendedor || p.nome_vendedor || "Sem vendedor",
+            valor: parseFloat(p.valor || 0),
+          };
+        }),
+      });
+    }
+
+    // ── AÇÃO: verifica se o pedido de representação já tem NF nossa ──
+    if (acao === "representacao-detalhe") {
+      const id = req.query.id;
+      if (!id) return res.status(400).json({ erro: "id obrigatorio" });
+      const body = new URLSearchParams({ token: TOKEN_V2, id: String(id), formato: "JSON" }).toString();
+      const r = await httpsRequest("POST", "api.tiny.com.br", "/api2/pedido.obter.php",
+        body, { "Content-Type": "application/x-www-form-urlencoded" });
+      const pedido = parseJSON(r.text).retorno?.pedido;
+      const temNotaFiscal = !!(pedido && Number(pedido.id_nota_fiscal) > 0);
+      return res.status(200).json({ temNotaFiscal });
+    }
+
     // ── AÇÃO: detalhe de uma nota (pra checar a finalidade) ──────────
     if (acao === "nota") {
       const id = req.query.id;
@@ -256,7 +352,7 @@ module.exports = async (req, res) => {
       });
     }
 
-    return res.status(400).json({ erro: "acao invalida. Use: vendas, entradas, nota, servicos, servico-detalhe" });
+    return res.status(400).json({ erro: "acao invalida. Use: vendas, entradas, nota, servicos, servico-detalhe, representacao, representacao-detalhe" });
 
   } catch (e) {
     return res.status(500).json({ erro: e.message, stack: e.stack });

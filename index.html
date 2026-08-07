@@ -422,6 +422,7 @@
             <option value="produto">Produto (venda)</option>
             <option value="servico">Serviço</option>
             <option value="devolucao">Devolução</option>
+            <option value="representacao">Representação</option>
           </select>
         </div>
         <div class="fg-sm"><label>Número da nota</label><input type="text" id="alt-numero" placeholder="ex: 012662" /></div>
@@ -753,7 +754,7 @@ async function carregarAlteracoes(){
     alteracoesCache = {};
     lista.forEach(a => alteracoesCache[a.id] = a);
     if(!lista.length){ el("lista-alteracoes").innerHTML = '<div class="state-center">Nenhuma alteração cadastrada.</div>'; return; }
-    const rotuloTipo = { produto: "Produto", servico: "Serviço", devolucao: "Devolução" };
+    const rotuloTipo = { produto: "Produto", servico: "Serviço", devolucao: "Devolução", representacao: "Representação" };
     el("lista-alteracoes").innerHTML = lista.map(a => `
       <div class="usr-card">
         <div class="usr-info">
@@ -1178,7 +1179,7 @@ async function gerarRelatorioVendas() {
     const totalEntradas = notasEntrada.length;
     for (let i = 0; i < totalEntradas; i++) {
       const nota = notasEntrada[i];
-      const pct = 15 + ((i + 1) / Math.max(totalEntradas, 1)) * 55;
+      const pct = 15 + ((i + 1) / Math.max(totalEntradas, 1)) * 40;
       atualizarProgresso(pct, `Conferindo nota de entrada ${i + 1} de ${totalEntradas}...`);
       await new Promise(r => setTimeout(r, 600));
       const r = await fetch(`/api/relatorios?acao=nota&id=${nota.id}`);
@@ -1190,7 +1191,7 @@ async function gerarRelatorioVendas() {
       }
     }
 
-    atualizarProgresso(70, "Buscando notas de serviço do período...");
+    atualizarProgresso(55, "Buscando notas de serviço do período...");
     const resServicos = await fetch(`/api/relatorios?acao=servicos&dataInicial=${dataInicial}&dataFinal=${dataFinal}`);
     const dataServicos = await resServicos.json();
     if (!resServicos.ok) throw new Error(dataServicos.erro || "Erro ao buscar notas de serviço");
@@ -1200,7 +1201,7 @@ async function gerarRelatorioVendas() {
     const totalCandidatas = candidatasServico.length;
     for (let i = 0; i < totalCandidatas; i++) {
       const nota = candidatasServico[i];
-      const pct = 70 + ((i + 1) / Math.max(totalCandidatas, 1)) * 28;
+      const pct = 55 + ((i + 1) / Math.max(totalCandidatas, 1)) * 20;
       atualizarProgresso(pct, `Conferindo nota de serviço ${i + 1} de ${totalCandidatas}...`);
       await new Promise(r => setTimeout(r, 600));
       const r = await fetch(`/api/relatorios?acao=servico-detalhe&id=${nota.id}`);
@@ -1208,11 +1209,29 @@ async function gerarRelatorioVendas() {
       if (!d.excluir) notasServico.push(nota);
     }
 
+    atualizarProgresso(75, "Buscando pedidos de representação do período...");
+    const resRepresentacao = await fetch(`/api/relatorios?acao=representacao&dataInicial=${dataInicial}&dataFinal=${dataFinal}`);
+    const dataRepresentacao = await resRepresentacao.json();
+    if (!resRepresentacao.ok) throw new Error(dataRepresentacao.erro || "Erro ao buscar pedidos de representação");
+    const candidatasRepresentacao = dataRepresentacao.notas || [];
+
+    const notasRepresentacao = [];
+    const totalCandidatasRep = candidatasRepresentacao.length;
+    for (let i = 0; i < totalCandidatasRep; i++) {
+      const pedido = candidatasRepresentacao[i];
+      const pct = 75 + ((i + 1) / Math.max(totalCandidatasRep, 1)) * 23;
+      atualizarProgresso(pct, `Conferindo pedido de representação ${i + 1} de ${totalCandidatasRep}...`);
+      await new Promise(r => setTimeout(r, 600));
+      const r = await fetch(`/api/relatorios?acao=representacao-detalhe&id=${pedido.id}`);
+      const d = await r.json();
+      if (!d.temNotaFiscal) notasRepresentacao.push(pedido);
+    }
+
     atualizarProgresso(100, "Concluído!");
     await new Promise(r => setTimeout(r, 600));
     document.getElementById("modal-progresso")?.remove();
 
-    renderTabelaRelatorios(notasVenda, totalDevolucoes, devolucoesPorVendedor, notasServico, dataInicialIso, dataFinalIso);
+    renderTabelaRelatorios(notasVenda, totalDevolucoes, devolucoesPorVendedor, notasServico, notasRepresentacao, dataInicialIso, dataFinalIso);
     el("tabela-relatorios-wrap").classList.remove("hidden");
 
   } catch(e) {
@@ -1224,7 +1243,7 @@ async function gerarRelatorioVendas() {
   }
 }
 
-function renderTabelaRelatorios(notasVenda, totalDevolucoes, devolucoesPorVendedor, notasServico, dataInicialIso, dataFinalIso) {
+function renderTabelaRelatorios(notasVenda, totalDevolucoes, devolucoesPorVendedor, notasServico, notasRepresentacao, dataInicialIso, dataFinalIso) {
   const dias = [];
   const cursor = new Date(dataInicialIso + "T00:00:00");
   const fim = new Date(dataFinalIso + "T00:00:00");
@@ -1238,6 +1257,7 @@ function renderTabelaRelatorios(notasVenda, totalDevolucoes, devolucoesPorVended
   const vendedores = [...new Set([
     ...notasVenda.map(n => n.vendedor),
     ...notasServico.map(n => n.vendedor),
+    ...notasRepresentacao.map(n => n.vendedor),
   ])].sort((a, b) => a.localeCompare(b));
 
   const servicoPorVendedor = {};
@@ -1245,6 +1265,13 @@ function renderTabelaRelatorios(notasVenda, totalDevolucoes, devolucoesPorVended
   notasServico.forEach(n => {
     servicoPorVendedor[n.vendedor] = (servicoPorVendedor[n.vendedor] || 0) + n.valor;
     totalServicoGeral += n.valor;
+  });
+
+  const representacaoPorVendedor = {};
+  let totalRepresentacaoGeral = 0;
+  notasRepresentacao.forEach(n => {
+    representacaoPorVendedor[n.vendedor] = (representacaoPorVendedor[n.vendedor] || 0) + n.valor;
+    totalRepresentacaoGeral += n.valor;
   });
 
   const matriz = {};
@@ -1297,7 +1324,7 @@ function renderTabelaRelatorios(notasVenda, totalDevolucoes, devolucoesPorVended
       <td style="${fechBase}text-align:right;color:var(--red);">${formatarMoeda(totalDevolucoes)}</td>
     </tr>
     <tr>
-      <td style="${fechBase}position:sticky;left:0;color:var(--ac);">Líquido</td>
+      <td style="${fechBase}position:sticky;left:0;color:var(--ac);">Notas de Produto</td>
       ${vendedores.map(v => `<td style="${fechBase}text-align:right;">${formatarMoeda(totalBrutoPorVendedor[v] - (devolucoesPorVendedor[v] || 0))}</td>`).join("")}
       <td style="${fechBase}text-align:right;color:var(--ac);">${formatarMoeda(totalBrutoGeral - totalDevolucoes)}</td>
     </tr>
@@ -1305,6 +1332,16 @@ function renderTabelaRelatorios(notasVenda, totalDevolucoes, devolucoesPorVended
       <td style="${fechBase}position:sticky;left:0;">Notas de Serviço</td>
       ${vendedores.map(v => `<td style="${fechBase}text-align:right;">${servicoPorVendedor[v] ? formatarMoeda(servicoPorVendedor[v]) : "—"}</td>`).join("")}
       <td style="${fechBase}text-align:right;">${formatarMoeda(totalServicoGeral)}</td>
+    </tr>
+    <tr>
+      <td style="${fechBase}position:sticky;left:0;">Representação</td>
+      ${vendedores.map(v => `<td style="${fechBase}text-align:right;">${representacaoPorVendedor[v] ? formatarMoeda(representacaoPorVendedor[v]) : "—"}</td>`).join("")}
+      <td style="${fechBase}text-align:right;">${formatarMoeda(totalRepresentacaoGeral)}</td>
+    </tr>
+    <tr style="border-top:2px solid var(--br);">
+      <td style="${fechBase}position:sticky;left:0;color:var(--ac);">Total Geral</td>
+      ${vendedores.map(v => `<td style="${fechBase}text-align:right;color:var(--ac);">${formatarMoeda((totalBrutoPorVendedor[v] - (devolucoesPorVendedor[v] || 0)) + (servicoPorVendedor[v] || 0) + (representacaoPorVendedor[v] || 0))}</td>`).join("")}
+      <td style="${fechBase}text-align:right;color:var(--ac);">${formatarMoeda((totalBrutoGeral - totalDevolucoes) + totalServicoGeral + totalRepresentacaoGeral)}</td>
     </tr>`;
 
   el("tbody-relatorios").innerHTML = linhas;
