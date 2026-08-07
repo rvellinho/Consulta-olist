@@ -423,6 +423,7 @@
             <option value="servico">Serviço</option>
             <option value="devolucao">Devolução</option>
             <option value="representacao">Representação</option>
+            <option value="aguia">Aguia (outro CNPJ)</option>
           </select>
         </div>
         <div class="fg-sm"><label>Número da nota</label><input type="text" id="alt-numero" placeholder="ex: 012662" /></div>
@@ -754,7 +755,7 @@ async function carregarAlteracoes(){
     alteracoesCache = {};
     lista.forEach(a => alteracoesCache[a.id] = a);
     if(!lista.length){ el("lista-alteracoes").innerHTML = '<div class="state-center">Nenhuma alteração cadastrada.</div>'; return; }
-    const rotuloTipo = { produto: "Produto", servico: "Serviço", devolucao: "Devolução", representacao: "Representação" };
+    const rotuloTipo = { produto: "Produto", servico: "Serviço", devolucao: "Devolução", representacao: "Representação", aguia: "Aguia" };
     el("lista-alteracoes").innerHTML = lista.map(a => `
       <div class="usr-card">
         <div class="usr-info">
@@ -1219,7 +1220,7 @@ async function gerarRelatorioVendas() {
     const totalCandidatasRep = candidatasRepresentacao.length;
     for (let i = 0; i < totalCandidatasRep; i++) {
       const pedido = candidatasRepresentacao[i];
-      const pct = 75 + ((i + 1) / Math.max(totalCandidatasRep, 1)) * 23;
+      const pct = 75 + ((i + 1) / Math.max(totalCandidatasRep, 1)) * 15;
       atualizarProgresso(pct, `Conferindo pedido de representação ${i + 1} de ${totalCandidatasRep}...`);
       await new Promise(r => setTimeout(r, 600));
       const r = await fetch(`/api/relatorios?acao=representacao-detalhe&id=${pedido.id}`);
@@ -1227,11 +1228,30 @@ async function gerarRelatorioVendas() {
       if (!d.temNotaFiscal) notasRepresentacao.push(pedido);
     }
 
+    atualizarProgresso(90, "Buscando pedidos faturados por outro CNPJ (aguia)...");
+    const resAguia = await fetch(`/api/relatorios?acao=aguia&dataInicial=${dataInicial}&dataFinal=${dataFinal}`);
+    const dataAguia = await resAguia.json();
+    if (!resAguia.ok) throw new Error(dataAguia.erro || "Erro ao buscar pedidos aguia");
+    const candidatasAguia = dataAguia.notas || [];
+
+    const notasAguia = [];
+    const totalCandidatasAguia = candidatasAguia.length;
+    for (let i = 0; i < totalCandidatasAguia; i++) {
+      const pedido = candidatasAguia[i];
+      const pct = 90 + ((i + 1) / Math.max(totalCandidatasAguia, 1)) * 8;
+      atualizarProgresso(pct, `Conferindo pedido aguia ${i + 1} de ${totalCandidatasAguia}...`);
+      await new Promise(r => setTimeout(r, 600));
+      const r = await fetch(`/api/relatorios?acao=aguia-detalhe&id=${pedido.id}`);
+      const d = await r.json();
+      if (!d.temNotaFiscal) notasAguia.push(pedido);
+    }
+
     atualizarProgresso(100, "Concluído!");
     await new Promise(r => setTimeout(r, 600));
     document.getElementById("modal-progresso")?.remove();
 
-    renderTabelaRelatorios(notasVenda, totalDevolucoes, devolucoesPorVendedor, notasServico, notasRepresentacao, dataInicialIso, dataFinalIso);
+    const notasVendaComAguia = notasVenda.concat(notasAguia);
+    renderTabelaRelatorios(notasVendaComAguia, totalDevolucoes, devolucoesPorVendedor, notasServico, notasRepresentacao, dataInicialIso, dataFinalIso);
     el("tabela-relatorios-wrap").classList.remove("hidden");
 
   } catch(e) {

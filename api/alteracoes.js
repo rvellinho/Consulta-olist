@@ -45,7 +45,7 @@ const supaHeaders = {
   "Content-Type": "application/json",
 };
 
-const TIPOS_VALIDOS = ["produto", "servico", "devolucao", "representacao"];
+const TIPOS_VALIDOS = ["produto", "servico", "devolucao", "representacao", "aguia"];
 
 module.exports = async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");

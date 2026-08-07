@@ -148,6 +148,13 @@ async function buscarTodasNotasServico(dataInicial, dataFinal) {
 const MARCADOR_REPRESENTACAO = "rep";
 const MARGEM_DIAS_REPRESENTACAO = 30;
 
+// Pedidos com a tag "aguia": vendidos por aqui mas faturados por outro CNPJ
+// nosso (outra conta na Olist), então também não têm NF nessa conta. Mesma
+// lógica de busca da representação, mas entram junto com as vendas normais
+// por dia/vendedor — não é uma categoria separada, é venda nossa mesmo.
+const MARCADOR_AGUIA = "aguia";
+const MARGEM_DIAS_AGUIA = 30;
+
 async function buscarPaginaPedidos(situacao, marcador, dataInicial, dataFinal, pagina) {
   const body = new URLSearchParams({
     token: TOKEN_V2, formato: "JSON",
@@ -321,6 +328,49 @@ module.exports = async (req, res) => {
       return res.status(200).json({ temNotaFiscal });
     }
 
+    // ── AÇÃO: pedidos "aguia" (faturados por outro CNPJ nosso) no período ──
+    // Formato igual ao de "vendas" (numero/data/vendedor/valor) pra entrar
+    // junto na grade por dia/vendedor, não como linha separada.
+    if (acao === "aguia") {
+      if (!dataInicial || !dataFinal) return res.status(400).json({ erro: "dataInicial e dataFinal obrigatórios" });
+      const inicioBuscado = somarDiasBR(dataInicial, -MARGEM_DIAS_AGUIA);
+      const fimBuscado = somarDiasBR(dataFinal, MARGEM_DIAS_AGUIA);
+      const pedidos = await buscarTodosPedidos("faturado", MARCADOR_AGUIA, inicioBuscado, fimBuscado);
+
+      const inicioPeriodo = parseDataBR(dataInicial);
+      const fimPeriodo = parseDataBR(dataFinal);
+      const noPeriodo = pedidos.filter(p => {
+        const dp = parseDataBR(p.data_prevista);
+        return dp && dp >= inicioPeriodo && dp <= fimPeriodo;
+      });
+
+      const alteracoes = await buscarAlteracoes("aguia");
+      return res.status(200).json({
+        notas: noPeriodo.map(p => {
+          const alt = alteracoes[normalizarNumero(p.numero)];
+          return {
+            id: p.id,
+            numero: p.numero,
+            data: alt?.data_emissao ? formatarDataBR(alt.data_emissao) : p.data_prevista,
+            vendedor: alt?.vendedor || p.nome_vendedor || "Sem vendedor",
+            valor: parseFloat(p.valor || 0),
+          };
+        }),
+      });
+    }
+
+    // ── AÇÃO: verifica se o pedido "aguia" já tem NF nossa ───────────
+    if (acao === "aguia-detalhe") {
+      const id = req.query.id;
+      if (!id) return res.status(400).json({ erro: "id obrigatorio" });
+      const body = new URLSearchParams({ token: TOKEN_V2, id: String(id), formato: "JSON" }).toString();
+      const r = await httpsRequest("POST", "api.tiny.com.br", "/api2/pedido.obter.php",
+        body, { "Content-Type": "application/x-www-form-urlencoded" });
+      const pedido = parseJSON(r.text).retorno?.pedido;
+      const temNotaFiscal = !!(pedido && Number(pedido.id_nota_fiscal) > 0);
+      return res.status(200).json({ temNotaFiscal });
+    }
+
     // ── AÇÃO: detalhe de uma nota (pra checar a finalidade) ──────────
     if (acao === "nota") {
       const id = req.query.id;
@@ -352,7 +402,7 @@ module.exports = async (req, res) => {
       });
     }
 
-    return res.status(400).json({ erro: "acao invalida. Use: vendas, entradas, nota, servicos, servico-detalhe, representacao, representacao-detalhe" });
+    return res.status(400).json({ erro: "acao invalida. Use: vendas, entradas, nota, servicos, servico-detalhe, representacao, representacao-detalhe, aguia, aguia-detalhe" });
 
   } catch (e) {
     return res.status(500).json({ erro: e.message, stack: e.stack });
