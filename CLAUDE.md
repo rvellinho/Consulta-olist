@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project overview
 
-"Rampa · Gestão de Crédito" — an internal credit-management tool that integrates the Olist Tiny ERP
+"Rampa · Consultas Olist" — an internal credit-management tool that integrates the Olist Tiny ERP
 with a Supabase backend. It is a static single-page frontend (`index.html`) backed by Vercel
 serverless functions in `api/`. There is no build step, no bundler, and no npm dependencies
 (`package.json` only declares the package name).
