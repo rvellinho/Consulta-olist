@@ -325,13 +325,11 @@
       <div class="state-center"><div class="spinner"></div><p id="msg-relatorios">Carregando dados do Olist...</p></div>
     </div>
     <div id="tabela-relatorios-wrap" class="hidden">
-      <div style="border:1px solid var(--br);border-radius:var(--r);overflow:hidden;box-shadow:var(--sh);">
-        <div style="overflow-x:auto;max-height:65vh;overflow-y:auto;">
-          <table id="tabela-relatorios" style="width:100%;border-collapse:collapse;min-width:600px;">
-            <thead id="thead-relatorios" style="position:sticky;top:0;z-index:10;"></thead>
-            <tbody id="tbody-relatorios"></tbody>
-          </table>
-        </div>
+      <div style="border:1px solid var(--br);border-radius:var(--r);overflow-x:auto;box-shadow:var(--sh);">
+        <table id="tabela-relatorios" style="width:100%;border-collapse:collapse;min-width:600px;">
+          <thead id="thead-relatorios" style="position:sticky;top:0;z-index:10;"></thead>
+          <tbody id="tbody-relatorios"></tbody>
+        </table>
       </div>
     </div>
   </div>
@@ -1397,21 +1395,17 @@ function renderTabelaRelatorios(notasVenda, totalDevolucoes, devolucoesPorVended
     ...notasRepresentacao.map(n => n.vendedor),
   ]);
 
-  // Monta a lista de colunas já na ordem visual: colunas do segmento seguidas
-  // do subtotal do segmento. Responsáveis fora dos segmentos conhecidos caem
-  // num grupo "OUTROS (não classificado)" no final, pra nada sumir do relatório.
+  // Monta a lista de colunas já na ordem visual: colunas do segmento, na ordem
+  // definida. Responsáveis fora dos segmentos conhecidos caem num grupo
+  // "OUTROS (não classificado)" no final, pra nada sumir do relatório.
   const colunas = [];
   const cobertos = new Set();
   SEGMENTOS_RESPONSAVEL.forEach(seg => {
     const presentes = seg.membros.filter(m => responsaveisAtivos.has(m));
     presentes.forEach(m => { colunas.push({ tipo: "col", nome: m, segmento: seg.nome }); cobertos.add(m); });
-    if (presentes.length) colunas.push({ tipo: "subtotal", nome: "Subtotal", segmento: seg.nome, membros: presentes });
   });
   const naoClassificados = [...responsaveisAtivos].filter(v => !cobertos.has(v)).sort((a, b) => a.localeCompare(b));
-  if (naoClassificados.length) {
-    naoClassificados.forEach(m => colunas.push({ tipo: "col", nome: m, segmento: "OUTROS (não classificado)" }));
-    colunas.push({ tipo: "subtotal", nome: "Subtotal", segmento: "OUTROS (não classificado)", membros: naoClassificados });
-  }
+  naoClassificados.forEach(m => colunas.push({ tipo: "col", nome: m, segmento: "OUTROS (não classificado)" }));
 
   const servicoPorVendedor = {};
   let totalServicoGeral = 0;
@@ -1444,17 +1438,14 @@ function renderTabelaRelatorios(notasVenda, totalDevolucoes, devolucoesPorVended
     totalBrutoGeral += matriz[d][v];
   }));
 
-  // Lê um valor pra uma coluna (normal ou subtotal) a partir de um dicionário
-  // "valor por responsável" — usado tanto nas linhas de dia quanto nos totais.
-  const valorColuna = (coluna, porResponsavel) => coluna.tipo === "subtotal"
-    ? coluna.membros.reduce((s, m) => s + (porResponsavel[m] || 0), 0)
-    : (porResponsavel[coluna.nome] || 0);
+  // Lê o valor de uma coluna a partir de um dicionário "valor por responsável"
+  // — usado tanto nas linhas de dia quanto nos totais.
+  const valorColuna = (coluna, porResponsavel) => porResponsavel[coluna.nome] || 0;
 
   const fmtCel = v => v ? formatarMoeda(v) : "—";
   const thBase = "padding:10px 12px;font-size:11px;font-weight:700;text-transform:uppercase;color:var(--mt);background:var(--s2);border-bottom:1px solid var(--br);white-space:nowrap;";
   const thSub = "padding:8px 12px;font-size:10px;font-weight:700;text-transform:uppercase;color:var(--tx);background:var(--br);border-bottom:1px solid var(--br);white-space:nowrap;text-align:center;";
   const tdSticky = "position:sticky;left:0;background:#fff;font-weight:600;";
-  const tdSubtotal = "background:var(--s2);font-weight:700;";
 
   // Linha 1 do cabeçalho: nome do segmento, ocupando as colunas dele + o subtotal.
   let colSegmentoAtual = null;
@@ -1475,14 +1466,14 @@ function renderTabelaRelatorios(notasVenda, totalDevolucoes, devolucoesPorVended
       <th rowspan="2" style="${thBase}text-align:right;">Total</th>
     </tr>
     <tr>
-      ${colunas.map(c => `<th style="${thBase}text-align:right;${c.tipo === "subtotal" ? "background:var(--br);" : ""}">${c.nome}</th>`).join("")}
+      ${colunas.map(c => `<th style="${thBase}text-align:right;">${c.nome}</th>`).join("")}
     </tr>`;
 
   let linhas = dias.map(d => {
     const totalLinha = [...responsaveisAtivos].reduce((s, v) => s + matriz[d][v], 0);
     return `<tr style="border-bottom:1px solid var(--br);">
       <td style="padding:10px 12px;font-size:13px;${tdSticky}">${d}</td>
-      ${colunas.map(c => `<td style="padding:10px 12px;font-size:13px;text-align:right;${c.tipo === "subtotal" ? tdSubtotal : ""}">${fmtCel(valorColuna(c, matriz[d]))}</td>`).join("")}
+      ${colunas.map(c => `<td style="padding:10px 12px;font-size:13px;text-align:right;">${fmtCel(valorColuna(c, matriz[d]))}</td>`).join("")}
       <td style="padding:10px 12px;font-size:13px;text-align:right;font-weight:600;">${fmtCel(totalLinha)}</td>
     </tr>`;
   }).join("");
