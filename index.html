@@ -1170,17 +1170,20 @@ async function buscarRelatorioDoCache() {
     const porTipo = { produto: [], aguia: [], servico: [], devolucao: [], representacao: [] };
     (d.linhas || []).forEach(l => (porTipo[l.tipo] || []).push(l));
 
-    const converter = l => ({ data: paraDataBR(l.data), vendedor: l.vendedor, valor: parseFloat(l.valor) || 0 });
+    // Agrupa por RESPONSÁVEL (não pelo nome do vendedor) — é o que aparece
+    // nas colunas do relatório.
+    const converter = l => ({ data: paraDataBR(l.data), vendedor: l.responsavel || l.vendedor, valor: parseFloat(l.valor) || 0 });
     const notasVenda = porTipo.produto.map(converter).concat(porTipo.aguia.map(converter));
-    const notasServico = porTipo.servico.map(l => ({ vendedor: l.vendedor, valor: parseFloat(l.valor) || 0 }));
-    const notasRepresentacao = porTipo.representacao.map(l => ({ vendedor: l.vendedor, valor: parseFloat(l.valor) || 0 }));
+    const notasServico = porTipo.servico.map(l => ({ vendedor: l.responsavel || l.vendedor, valor: parseFloat(l.valor) || 0 }));
+    const notasRepresentacao = porTipo.representacao.map(l => ({ vendedor: l.responsavel || l.vendedor, valor: parseFloat(l.valor) || 0 }));
 
     let totalDevolucoes = 0;
     const devolucoesPorVendedor = {};
     porTipo.devolucao.forEach(l => {
       const valor = parseFloat(l.valor) || 0;
+      const responsavel = l.responsavel || l.vendedor;
       totalDevolucoes += valor;
-      devolucoesPorVendedor[l.vendedor] = (devolucoesPorVendedor[l.vendedor] || 0) + valor;
+      devolucoesPorVendedor[responsavel] = (devolucoesPorVendedor[responsavel] || 0) + valor;
     });
 
     let statusHtml = `Última atualização: <strong>${formatarDataHora(d.ultimaAtualizacao)}</strong>`;
@@ -1369,6 +1372,14 @@ async function atualizarDadosOlist() {
   }
 }
 
+// Agrupamento visual dos responsáveis por segmento — só define ordem e
+// subtotal das colunas, não filtra dado nenhum.
+const SEGMENTOS_RESPONSAVEL = [
+  { nome: "CORPORATIVO", membros: ["CARTEIRA 1", "CARTEIRA 2", "CARTEIRA 4", "CARTEIRA 5 (C/M)"] },
+  { nome: "CONCRETO", membros: ["CARTEIRA 5"] },
+  { nome: "OUTROS", membros: ["Loja (Rampa)", "Rampa"] },
+];
+
 function renderTabelaRelatorios(notasVenda, totalDevolucoes, devolucoesPorVendedor, notasServico, notasRepresentacao, dataInicialIso, dataFinalIso) {
   const dias = [];
   const cursor = new Date(dataInicialIso + "T00:00:00");
@@ -1380,11 +1391,27 @@ function renderTabelaRelatorios(notasVenda, totalDevolucoes, devolucoesPorVended
     cursor.setDate(cursor.getDate() + 1);
   }
 
-  const vendedores = [...new Set([
+  const responsaveisAtivos = new Set([
     ...notasVenda.map(n => n.vendedor),
     ...notasServico.map(n => n.vendedor),
     ...notasRepresentacao.map(n => n.vendedor),
-  ])].sort((a, b) => a.localeCompare(b));
+  ]);
+
+  // Monta a lista de colunas já na ordem visual: colunas do segmento seguidas
+  // do subtotal do segmento. Responsáveis fora dos segmentos conhecidos caem
+  // num grupo "OUTROS (não classificado)" no final, pra nada sumir do relatório.
+  const colunas = [];
+  const cobertos = new Set();
+  SEGMENTOS_RESPONSAVEL.forEach(seg => {
+    const presentes = seg.membros.filter(m => responsaveisAtivos.has(m));
+    presentes.forEach(m => { colunas.push({ tipo: "col", nome: m, segmento: seg.nome }); cobertos.add(m); });
+    if (presentes.length) colunas.push({ tipo: "subtotal", nome: "Subtotal", segmento: seg.nome, membros: presentes });
+  });
+  const naoClassificados = [...responsaveisAtivos].filter(v => !cobertos.has(v)).sort((a, b) => a.localeCompare(b));
+  if (naoClassificados.length) {
+    naoClassificados.forEach(m => colunas.push({ tipo: "col", nome: m, segmento: "OUTROS (não classificado)" }));
+    colunas.push({ tipo: "subtotal", nome: "Subtotal", segmento: "OUTROS (não classificado)", membros: naoClassificados });
+  }
 
   const servicoPorVendedor = {};
   let totalServicoGeral = 0;
@@ -1401,7 +1428,7 @@ function renderTabelaRelatorios(notasVenda, totalDevolucoes, devolucoesPorVended
   });
 
   const matriz = {};
-  dias.forEach(d => { matriz[d] = {}; vendedores.forEach(v => matriz[d][v] = 0); });
+  dias.forEach(d => { matriz[d] = {}; responsaveisAtivos.forEach(v => matriz[d][v] = 0); });
   notasVenda.forEach(n => {
     const [dd, mm] = n.data.split("/");
     const diaLabel = `${dd}/${mm}`;
@@ -1410,65 +1437,75 @@ function renderTabelaRelatorios(notasVenda, totalDevolucoes, devolucoesPorVended
   });
 
   const totalBrutoPorVendedor = {};
-  vendedores.forEach(v => totalBrutoPorVendedor[v] = 0);
+  responsaveisAtivos.forEach(v => totalBrutoPorVendedor[v] = 0);
   let totalBrutoGeral = 0;
-  dias.forEach(d => vendedores.forEach(v => {
+  dias.forEach(d => responsaveisAtivos.forEach(v => {
     totalBrutoPorVendedor[v] += matriz[d][v];
     totalBrutoGeral += matriz[d][v];
   }));
 
+  // Lê um valor pra uma coluna (normal ou subtotal) a partir de um dicionário
+  // "valor por responsável" — usado tanto nas linhas de dia quanto nos totais.
+  const valorColuna = (coluna, porResponsavel) => coluna.tipo === "subtotal"
+    ? coluna.membros.reduce((s, m) => s + (porResponsavel[m] || 0), 0)
+    : (porResponsavel[coluna.nome] || 0);
+
   const fmtCel = v => v ? formatarMoeda(v) : "—";
   const thBase = "padding:10px 12px;font-size:11px;font-weight:700;text-transform:uppercase;color:var(--mt);background:var(--s2);border-bottom:1px solid var(--br);white-space:nowrap;";
+  const thSub = "padding:8px 12px;font-size:10px;font-weight:700;text-transform:uppercase;color:var(--tx);background:var(--br);border-bottom:1px solid var(--br);white-space:nowrap;text-align:center;";
   const tdSticky = "position:sticky;left:0;background:#fff;font-weight:600;";
+  const tdSubtotal = "background:var(--s2);font-weight:700;";
+
+  // Linha 1 do cabeçalho: nome do segmento, ocupando as colunas dele + o subtotal.
+  let colSegmentoAtual = null;
+  const gruposSegmento = [];
+  colunas.forEach(c => {
+    if (c.segmento !== colSegmentoAtual) {
+      gruposSegmento.push({ nome: c.segmento, span: 1 });
+      colSegmentoAtual = c.segmento;
+    } else {
+      gruposSegmento[gruposSegmento.length - 1].span++;
+    }
+  });
 
   el("thead-relatorios").innerHTML = `
     <tr>
-      <th style="${thBase}position:sticky;left:0;z-index:11;text-align:left;">Dia</th>
-      ${vendedores.map(v => `<th style="${thBase}text-align:right;">${v}</th>`).join("")}
-      <th style="${thBase}text-align:right;">Total</th>
+      <th rowspan="2" style="${thBase}position:sticky;left:0;z-index:11;text-align:left;">Dia</th>
+      ${gruposSegmento.map(g => `<th colspan="${g.span}" style="${thSub}">${g.nome}</th>`).join("")}
+      <th rowspan="2" style="${thBase}text-align:right;">Total</th>
+    </tr>
+    <tr>
+      ${colunas.map(c => `<th style="${thBase}text-align:right;${c.tipo === "subtotal" ? "background:var(--br);" : ""}">${c.nome}</th>`).join("")}
     </tr>`;
 
   let linhas = dias.map(d => {
-    const totalLinha = vendedores.reduce((s, v) => s + matriz[d][v], 0);
+    const totalLinha = [...responsaveisAtivos].reduce((s, v) => s + matriz[d][v], 0);
     return `<tr style="border-bottom:1px solid var(--br);">
       <td style="padding:10px 12px;font-size:13px;${tdSticky}">${d}</td>
-      ${vendedores.map(v => `<td style="padding:10px 12px;font-size:13px;text-align:right;">${fmtCel(matriz[d][v])}</td>`).join("")}
+      ${colunas.map(c => `<td style="padding:10px 12px;font-size:13px;text-align:right;${c.tipo === "subtotal" ? tdSubtotal : ""}">${fmtCel(valorColuna(c, matriz[d]))}</td>`).join("")}
       <td style="padding:10px 12px;font-size:13px;text-align:right;font-weight:600;">${fmtCel(totalLinha)}</td>
     </tr>`;
   }).join("");
 
   const fechBase = "padding:10px 12px;font-size:13px;font-weight:700;background:var(--s2);";
-  linhas += `
-    <tr style="border-top:2px solid var(--br);">
-      <td style="${fechBase}position:sticky;left:0;">Total Bruto</td>
-      ${vendedores.map(v => `<td style="${fechBase}text-align:right;">${formatarMoeda(totalBrutoPorVendedor[v])}</td>`).join("")}
-      <td style="${fechBase}text-align:right;">${formatarMoeda(totalBrutoGeral)}</td>
-    </tr>
-    <tr>
-      <td style="${fechBase}position:sticky;left:0;color:var(--red);">Devoluções</td>
-      ${vendedores.map(v => `<td style="${fechBase}text-align:right;color:var(--red);">${devolucoesPorVendedor[v] ? formatarMoeda(devolucoesPorVendedor[v]) : "—"}</td>`).join("")}
-      <td style="${fechBase}text-align:right;color:var(--red);">${formatarMoeda(totalDevolucoes)}</td>
-    </tr>
-    <tr>
-      <td style="${fechBase}position:sticky;left:0;color:var(--ac);">Notas de Produto</td>
-      ${vendedores.map(v => `<td style="${fechBase}text-align:right;">${formatarMoeda(totalBrutoPorVendedor[v] - (devolucoesPorVendedor[v] || 0))}</td>`).join("")}
-      <td style="${fechBase}text-align:right;color:var(--ac);">${formatarMoeda(totalBrutoGeral - totalDevolucoes)}</td>
-    </tr>
-    <tr>
-      <td style="${fechBase}position:sticky;left:0;">Notas de Serviço</td>
-      ${vendedores.map(v => `<td style="${fechBase}text-align:right;">${servicoPorVendedor[v] ? formatarMoeda(servicoPorVendedor[v]) : "—"}</td>`).join("")}
-      <td style="${fechBase}text-align:right;">${formatarMoeda(totalServicoGeral)}</td>
-    </tr>
-    <tr>
-      <td style="${fechBase}position:sticky;left:0;">Representação</td>
-      ${vendedores.map(v => `<td style="${fechBase}text-align:right;">${representacaoPorVendedor[v] ? formatarMoeda(representacaoPorVendedor[v]) : "—"}</td>`).join("")}
-      <td style="${fechBase}text-align:right;">${formatarMoeda(totalRepresentacaoGeral)}</td>
-    </tr>
-    <tr style="border-top:2px solid var(--br);">
-      <td style="${fechBase}position:sticky;left:0;color:var(--ac);">Total Geral</td>
-      ${vendedores.map(v => `<td style="${fechBase}text-align:right;color:var(--ac);">${formatarMoeda((totalBrutoPorVendedor[v] - (devolucoesPorVendedor[v] || 0)) + (servicoPorVendedor[v] || 0) + (representacaoPorVendedor[v] || 0))}</td>`).join("")}
-      <td style="${fechBase}text-align:right;color:var(--ac);">${formatarMoeda((totalBrutoGeral - totalDevolucoes) + totalServicoGeral + totalRepresentacaoGeral)}</td>
+  const linhaResumo = (rotulo, porResponsavel, totalGeral, corRotulo, borda) => `
+    <tr${borda ? ' style="border-top:2px solid var(--br);"' : ""}>
+      <td style="${fechBase}position:sticky;left:0;${corRotulo ? `color:${corRotulo};` : ""}">${rotulo}</td>
+      ${colunas.map(c => `<td style="${fechBase}text-align:right;${corRotulo ? `color:${corRotulo};` : ""}">${fmtCel(valorColuna(c, porResponsavel))}</td>`).join("")}
+      <td style="${fechBase}text-align:right;${corRotulo ? `color:${corRotulo};` : ""}">${formatarMoeda(totalGeral)}</td>
     </tr>`;
+
+  const liquidoPorResponsavel = {};
+  responsaveisAtivos.forEach(v => liquidoPorResponsavel[v] = totalBrutoPorVendedor[v] - (devolucoesPorVendedor[v] || 0));
+  const totalGeralPorResponsavel = {};
+  responsaveisAtivos.forEach(v => totalGeralPorResponsavel[v] = liquidoPorResponsavel[v] + (servicoPorVendedor[v] || 0) + (representacaoPorVendedor[v] || 0));
+
+  linhas += linhaResumo("Total Bruto", totalBrutoPorVendedor, totalBrutoGeral, null, true);
+  linhas += linhaResumo("Devoluções", devolucoesPorVendedor, totalDevolucoes, "var(--red)", false);
+  linhas += linhaResumo("Notas de Produto", liquidoPorResponsavel, totalBrutoGeral - totalDevolucoes, "var(--ac)", false);
+  linhas += linhaResumo("Notas de Serviço", servicoPorVendedor, totalServicoGeral, null, false);
+  linhas += linhaResumo("Representação", representacaoPorVendedor, totalRepresentacaoGeral, null, false);
+  linhas += linhaResumo("Total Geral", totalGeralPorResponsavel, (totalBrutoGeral - totalDevolucoes) + totalServicoGeral + totalRepresentacaoGeral, "var(--ac)", true);
 
   el("tbody-relatorios").innerHTML = linhas;
 }

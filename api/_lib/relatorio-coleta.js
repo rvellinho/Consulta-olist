@@ -50,8 +50,8 @@ const MARCADOR_VENDA_FUTURA_EXCLUIR = "vf-faturamento";
 function httpsRequest(method, hostname, path, body, headers) {
   return new Promise((resolve, reject) => {
     const req = https.request({ hostname, path, method, headers }, (res) => {
-      let d = ""; res.on("data", c => d += c);
-      res.on("end", () => resolve({ status: res.statusCode, text: d }));
+      const chunks = []; res.on("data", c => chunks.push(c));
+      res.on("end", () => resolve({ status: res.statusCode, text: Buffer.concat(chunks).toString("utf8") }));
     });
     req.on("error", reject);
     if (body) req.write(body);
@@ -109,6 +109,28 @@ function formatarDataBRDate(date) {
 
 function hojeBR() {
   return formatarDataBRDate(new Date());
+}
+
+// ── DE-PARA vendedor → responsável (tabela vendedor_responsavel) ─────────
+// Uma linha "tipo=*" vale como padrão pro vendedor; uma linha com tipo
+// específico (ex: "representacao") tem prioridade só pra esse tipo de nota —
+// é o caso da Patrícia Curvello, que é "CARTEIRA 5 (C/M)" nas vendas normais
+// mas "CARTEIRA 5" nas vendas de representação.
+async function buscarMapeamentoResponsavel() {
+  const supaHost = SUPABASE_URL.replace("https://", "");
+  const r = await httpsRequest("GET", supaHost,
+    "/rest/v1/vendedor_responsavel?select=vendedor,tipo,responsavel",
+    null, supaHeaders);
+  const data = parseJSON(r.text);
+  return Array.isArray(data) ? data : [];
+}
+
+function resolverResponsavel(mapeamento, vendedor, tipo) {
+  const especifico = mapeamento.find(m => m.vendedor === vendedor && m.tipo === tipo);
+  if (especifico) return especifico.responsavel;
+  const padrao = mapeamento.find(m => m.vendedor === vendedor && m.tipo === "*");
+  if (padrao) return padrao.responsavel;
+  return vendedor || "Sem responsável";
 }
 
 // ── Correções manuais (tela de Alterações) ───────────────────────────────
@@ -296,12 +318,14 @@ async function salvarNoCache(tipo, dataInicial, dataFinal, linhas) {
     null, { ...supaHeaders, Prefer: "return=minimal" });
 
   if (linhas.length > 0) {
+    const mapeamento = await buscarMapeamentoResponsavel();
     const payload = JSON.stringify(linhas.map(l => ({
       tipo,
       numero_nota: String(l.numero),
       id_olist: l.id ? String(l.id) : null,
       data: paraIso(l.data),
       vendedor: l.vendedor,
+      responsavel: resolverResponsavel(mapeamento, l.vendedor, tipo),
       valor: l.valor,
       cliente_cnpj: l.clienteCnpj || null,
       cliente_codigo: l.clienteCodigo || null,
@@ -340,6 +364,7 @@ module.exports = {
   httpsRequest, sleep, parseJSON, normalizarNumero,
   formatarDataBR, paraIso, parseDataBR, somarDiasBR, formatarDataBRDate, hojeBR,
   buscarAlteracoes, buscarClientePorCnpj, temMarcador,
+  buscarMapeamentoResponsavel, resolverResponsavel,
   buscarTodasNotas, buscarTodasNotasServico, buscarDetalheNotaServico, buscarDetalheNotaFiscal,
   buscarTodosPedidos, buscarDetalhePedido,
   extrairReferenciaOrigem, buscarVendedorDaNotaOrigem,

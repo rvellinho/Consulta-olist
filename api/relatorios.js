@@ -10,6 +10,7 @@ const {
   httpsRequest, sleep, parseJSON, normalizarNumero,
   formatarDataBR, parseDataBR, somarDiasBR, paraIso,
   buscarAlteracoes, temMarcador,
+  buscarMapeamentoResponsavel, resolverResponsavel,
   buscarTodasNotas, buscarTodasNotasServico, buscarDetalheNotaServico, buscarDetalheNotaFiscal,
   buscarTodosPedidos, buscarDetalhePedido,
   extrairReferenciaOrigem, buscarVendedorDaNotaOrigem,
@@ -240,20 +241,24 @@ module.exports = async (req, res) => {
       const linhasBrutas = parseJSON(rLinhas.text);
       const status = parseJSON(rStatus.text)?.[0] || {};
 
-      // Reaplica as correções da tela de Alterações por cima do cache — assim
-      // uma correção feita agora já aparece na hora, sem esperar o próximo
-      // "Atualizar dados".
+      // Reaplica as correções da tela de Alterações e o DE-PARA de responsável
+      // por cima do cache — assim uma correção ou uma mudança no DE-PARA já
+      // aparece na hora, sem esperar o próximo "Atualizar dados".
       const tiposPresentes = [...new Set((Array.isArray(linhasBrutas) ? linhasBrutas : []).map(l => l.tipo))];
       const mapaAlteracoesPorTipo = {};
-      await Promise.all(tiposPresentes.map(async tipo => { mapaAlteracoesPorTipo[tipo] = await buscarAlteracoes(tipo); }));
+      const [_, mapeamentoResponsavel] = await Promise.all([
+        Promise.all(tiposPresentes.map(async tipo => { mapaAlteracoesPorTipo[tipo] = await buscarAlteracoes(tipo); })),
+        buscarMapeamentoResponsavel(),
+      ]);
 
       const linhas = (Array.isArray(linhasBrutas) ? linhasBrutas : []).map(l => {
         const alt = mapaAlteracoesPorTipo[l.tipo]?.[normalizarNumero(l.numero_nota)];
-        if (!alt) return l;
+        const vendedor = alt?.vendedor || l.vendedor;
         return {
           ...l,
-          vendedor: alt.vendedor || l.vendedor,
-          data: alt.data_emissao || l.data,
+          vendedor,
+          data: alt?.data_emissao || l.data,
+          responsavel: resolverResponsavel(mapeamentoResponsavel, vendedor, l.tipo),
         };
       });
 

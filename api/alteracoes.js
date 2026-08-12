@@ -9,9 +9,9 @@ const SUPABASE_KEY = process.env.SUPABASE_KEY;
 function httpsRequest(method, hostname, path, body, headers) {
   return new Promise((resolve, reject) => {
     const req = https.request({ hostname, path, method, headers }, (res) => {
-      let d = "";
-      res.on("data", c => d += c);
-      res.on("end", () => resolve({ status: res.statusCode, text: d, headers: res.headers }));
+      const chunks = [];
+      res.on("data", c => chunks.push(c));
+      res.on("end", () => resolve({ status: res.statusCode, text: Buffer.concat(chunks).toString("utf8"), headers: res.headers }));
     });
     req.on("error", reject);
     if (body) req.write(body);

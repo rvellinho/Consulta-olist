@@ -3,9 +3,9 @@ const https = require("https");
 function httpsPost(hostname, path, body, headers) {
   return new Promise((resolve, reject) => {
     const req = https.request({ hostname, path, method: "POST", headers }, (res) => {
-      let d = "";
-      res.on("data", c => d += c);
-      res.on("end", () => resolve({ status: res.statusCode, text: d }));
+      const chunks = [];
+      res.on("data", c => chunks.push(c));
+      res.on("end", () => resolve({ status: res.statusCode, text: Buffer.concat(chunks).toString("utf8") }));
     });
     req.on("error", reject);
     req.write(body);
