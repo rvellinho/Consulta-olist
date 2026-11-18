@@ -37,6 +37,7 @@
     .msg-erro-box { background: var(--redl); color: var(--red); border-radius: 8px; padding: 10px 14px; font-size: 13px; margin-bottom: 14px; }
     .hidden { display: none !important; }
     .app { max-width: 1200px; margin: 0 auto; padding: 0 16px 40px; }
+    .app.app-wide { max-width: 1600px; }
     .hdr { display: flex; align-items: center; justify-content: space-between; padding: 14px 0; margin-bottom: 20px; border-bottom: 1px solid var(--br); }
     .hdr-logo { display: flex; align-items: center; gap: 10px; }
     .hdr-logo img { height: 36px; object-fit: contain; }
@@ -54,6 +55,15 @@
     .nav-tab { padding: 10px 18px; font-size: 13px; font-weight: 600; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -2px; color: var(--mt); transition: all .15s; background: none; border-top: none; border-left: none; border-right: none; font-family: 'Inter', sans-serif; }
     .nav-tab:hover { color: var(--ac); }
     .nav-tab.active { color: var(--ac); border-bottom-color: var(--ac); }
+    .nav-tab-drop { position: relative; }
+    .nav-tab-drop.active > .nav-tab { color: var(--ac); border-bottom-color: var(--ac); }
+    .drop-menu { position: absolute; top: calc(100% + 4px); left: 0; background: #fff; border: 1px solid var(--br); border-radius: 10px; box-shadow: var(--sh); min-width: 240px; padding: 6px; z-index: 50; }
+    .drop-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; text-align: left; padding: 9px 12px; font-size: 13px; font-weight: 600; color: var(--tx2); background: none; border: none; border-radius: 7px; cursor: pointer; font-family: 'Inter', sans-serif; transition: background .12s; }
+    .drop-item:hover { background: var(--s2); color: var(--ac); }
+    .drop-item:disabled { opacity: .5; cursor: default; pointer-events: none; }
+    .drop-sub { position: relative; }
+    .drop-arrow { color: var(--mt); font-size: 11px; }
+    .drop-flyout { top: -6px; left: calc(100% + 4px); min-width: 220px; }
     .search-bar { display: flex; gap: 10px; margin-bottom: 14px; }
     .search-wrap { flex: 1; position: relative; }
     .si { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--mt); }
@@ -172,7 +182,20 @@
     <button class="nav-tab hidden" id="tab-usuarios" onclick="mudarAba('usuarios')">⚙️ Usuários</button>
     <button class="nav-tab hidden" id="tab-importar" onclick="mudarAba('importar')">📥 Importar</button>
     <button class="nav-tab hidden" id="tab-estoque" onclick="mudarAba('estoque')">📦 Estoque</button>
-    <button class="nav-tab hidden" id="tab-relatorios" onclick="mudarAba('relatorios')">📊 Relatórios</button>
+    <div class="nav-tab-drop hidden" id="tab-relatorios">
+      <button class="nav-tab" type="button" onclick="toggleDropRelatorios(event)">📊 Relatórios ▾</button>
+      <div class="drop-menu hidden" id="drop-relatorios-menu">
+        <div class="drop-item drop-sub" onclick="toggleDropLancamentos(event)">
+          <span>📁 Lançamentos</span><span class="drop-arrow">▸</span>
+          <div class="drop-menu drop-flyout hidden" id="drop-lancamentos-menu">
+            <button class="drop-item" type="button" id="btn-atualizar-olist" onclick="acaoAtualizarOlistMenu()">🔄 Atualizar dados (Olist)</button>
+            <button class="drop-item" type="button" onclick="acaoAlteracoesMenu()">🔧 Alterações</button>
+            <button class="drop-item" type="button" onclick="acaoContatosPropostasMenu()">📞 Contatos e Propostas</button>
+          </div>
+        </div>
+        <button class="drop-item" type="button" onclick="acaoRelatorioVendaDiaMenu()">📈 Relatório Venda x Dia</button>
+      </div>
+    </div>
   </div>
 
   <!-- ABA CLIENTES -->
@@ -317,19 +340,19 @@
       <button class="btn-sec" onclick="definirPeriodoMesAtual()">Mês atual</button>
       <button class="btn-sec" onclick="definirPeriodoMesAnterior()">Mês anterior</button>
       <button class="btn-primary" id="btn-gerar-relatorio" onclick="buscarRelatorioDoCache()">🔍 Buscar</button>
-      <button class="btn-sec" id="btn-atualizar-olist" onclick="atualizarDadosOlist()">🔄 Atualizar dados (Olist)</button>
-      <button class="btn-sec" onclick="abrirModalAlteracoes()">🔧 Alterações</button>
     </div>
     <p id="rel-status-cache" style="font-size:12px;color:var(--mt);margin-bottom:12px;"></p>
     <div id="estado-relatorios" class="hidden">
       <div class="state-center"><div class="spinner"></div><p id="msg-relatorios">Carregando dados do Olist...</p></div>
     </div>
     <div id="tabela-relatorios-wrap" class="hidden">
-      <div style="border:1px solid var(--br);border-radius:var(--r);overflow-x:auto;box-shadow:var(--sh);">
-        <table id="tabela-relatorios" style="width:100%;border-collapse:collapse;min-width:600px;">
-          <thead id="thead-relatorios" style="position:sticky;top:0;z-index:10;"></thead>
-          <tbody id="tbody-relatorios"></tbody>
-        </table>
+      <div style="border:1px solid var(--br);border-radius:var(--r);overflow:hidden;box-shadow:var(--sh);">
+        <div style="overflow:auto;max-height:calc(100vh - 250px);">
+          <table id="tabela-relatorios" style="width:100%;border-collapse:collapse;min-width:600px;">
+            <thead id="thead-relatorios" style="position:sticky;top:0;z-index:10;"></thead>
+            <tbody id="tbody-relatorios"></tbody>
+          </table>
+        </div>
       </div>
     </div>
   </div>
@@ -444,6 +467,58 @@
   </div>
 </div>
 
+<!-- MODAL CONTATOS & PROPOSTAS -->
+<div id="modal-cp-overlay" class="overlay hidden" onclick="fecharModalCP(event)">
+  <div class="modal">
+    <div class="modal-hdr">
+      <div class="modal-av">📞</div>
+      <div class="modal-hdr-info">
+        <h2>Contatos &amp; Propostas</h2>
+        <p class="c-razao">Lançamento manual, por mês e carteira</p>
+      </div>
+      <button class="close-btn" onclick="document.getElementById('modal-cp-overlay').classList.add('hidden')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:12px;align-items:flex-end;">
+        <div class="fg-sm" style="width:90px;">
+          <label>Ano</label>
+          <input type="number" id="cp-ano" placeholder="2026" />
+        </div>
+        <div class="fg-sm" style="width:150px;">
+          <label>Mês</label>
+          <select id="cp-mes"></select>
+        </div>
+        <div class="fg-sm" style="min-width:180px;">
+          <label>Carteira</label>
+          <select id="cp-carteira"></select>
+        </div>
+        <div class="fg-sm" style="width:110px;">
+          <label>Contatos</label>
+          <input type="number" id="cp-contatos" min="0" placeholder="0" />
+        </div>
+        <div class="fg-sm" style="width:110px;">
+          <label>Propostas</label>
+          <input type="number" id="cp-propostas" min="0" placeholder="0" />
+        </div>
+        <button class="btn-primary" id="cp-btn-salvar" onclick="salvarLancamentoCP()">Salvar</button>
+        <button class="btn-sec hidden" id="cp-btn-cancelar" onclick="cancelarEdicaoCP()">Cancelar edição</button>
+      </div>
+      <div id="cp-msg" class="modal-msg hidden"></div>
+      <div class="table-wrap">
+        <table style="width:100%;border-collapse:collapse;">
+          <thead><tr>
+            <th>Ano</th><th>Mês</th><th>Carteira</th><th style="text-align:right;">Contatos</th><th style="text-align:right;">Propostas</th><th></th>
+          </tr></thead>
+          <tbody id="cp-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="modal-ftr">
+      <button class="btn-sec" onclick="document.getElementById('modal-cp-overlay').classList.add('hidden')">Fechar</button>
+    </div>
+  </div>
+</div>
+
 <script>
 let usuarioAtual=null, paginaAtual=1, buscaAtual="", temProxima=false, clienteSel=null, modoDemo=false;
 let analisesBD={}, usuarioEditandoId=null;
@@ -533,9 +608,55 @@ function mudarAba(aba){
   el("tab-importar").classList.toggle("active",aba==="importar");
   el("tab-estoque").classList.toggle("active",aba==="estoque");
   el("tab-relatorios").classList.toggle("active",aba==="relatorios");
+  el("tela-app").classList.toggle("app-wide",aba==="relatorios");
   if(aba==="usuarios")carregarUsuarios();
   if(aba==="relatorios")inicializarDatasRelatorio();
 }
+
+// MENU SUSPENSO "RELATÓRIOS"
+function fecharTodosDropdowns(){
+  el("drop-relatorios-menu")?.classList.add("hidden");
+  el("drop-lancamentos-menu")?.classList.add("hidden");
+}
+function toggleDropRelatorios(e){
+  e.stopPropagation();
+  const menu=el("drop-relatorios-menu");
+  const abrir=menu.classList.contains("hidden");
+  fecharTodosDropdowns();
+  if(abrir)menu.classList.remove("hidden");
+}
+function toggleDropLancamentos(e){
+  e.stopPropagation();
+  el("drop-lancamentos-menu").classList.toggle("hidden");
+}
+document.addEventListener("click",e=>{
+  const wrap=el("tab-relatorios");
+  if(wrap && !wrap.contains(e.target))fecharTodosDropdowns();
+});
+function acaoAtualizarOlistMenu(){
+  fecharTodosDropdowns();
+  mudarAba("relatorios");
+  atualizarDadosOlist();
+}
+function acaoAlteracoesMenu(){
+  fecharTodosDropdowns();
+  abrirModalAlteracoes();
+}
+function acaoContatosPropostasMenu(){
+  fecharTodosDropdowns();
+  abrirModalContatosPropostas();
+}
+function acaoRelatorioVendaDiaMenu(){
+  fecharTodosDropdowns();
+  mudarAba("relatorios");
+}
+function abrirModalContatosPropostas(){
+  inicializarFormCP();
+  cancelarEdicaoCP();
+  el("modal-cp-overlay").classList.remove("hidden");
+  carregarLancamentosCP();
+}
+function fecharModalCP(e){ if(e.target===el("modal-cp-overlay"))el("modal-cp-overlay").classList.add("hidden"); }
 
 function inicializarDatasRelatorio(){
   if(el("rel-data-inicial").value)return;
@@ -1401,8 +1522,9 @@ function renderTabelaRelatorios(notasVenda, totalDevolucoes, devolucoesPorVended
   const colunas = [];
   const cobertos = new Set();
   SEGMENTOS_RESPONSAVEL.forEach(seg => {
-    const presentes = seg.membros.filter(m => responsaveisAtivos.has(m));
-    presentes.forEach(m => { colunas.push({ tipo: "col", nome: m, segmento: seg.nome }); cobertos.add(m); });
+    // Inclui todos os membros do segmento, mesmo sem nenhuma nota no período
+    // (a coluna aparece zerada em vez de sumir da tabela).
+    seg.membros.forEach(m => { colunas.push({ tipo: "col", nome: m, segmento: seg.nome }); cobertos.add(m); });
   });
   const naoClassificados = [...responsaveisAtivos].filter(v => !cobertos.has(v)).sort((a, b) => a.localeCompare(b));
   naoClassificados.forEach(m => colunas.push({ tipo: "col", nome: m, segmento: "OUTROS (não classificado)" }));
@@ -1443,6 +1565,7 @@ function renderTabelaRelatorios(notasVenda, totalDevolucoes, devolucoesPorVended
   const valorColuna = (coluna, porResponsavel) => porResponsavel[coluna.nome] || 0;
 
   const fmtCel = v => v ? formatarMoeda(v) : "—";
+  const fmtContagem = v => v ? String(v) : "—";
   const thBase = "padding:10px 12px;font-size:11px;font-weight:700;text-transform:uppercase;color:var(--mt);background:var(--s2);border-bottom:1px solid var(--br);white-space:nowrap;";
   const thSub = "padding:8px 12px;font-size:10px;font-weight:700;text-transform:uppercase;color:var(--tx);background:var(--br);border-bottom:1px solid var(--br);white-space:nowrap;text-align:center;";
   const tdSticky = "position:sticky;left:0;background:#fff;font-weight:600;";
@@ -1486,19 +1609,174 @@ function renderTabelaRelatorios(notasVenda, totalDevolucoes, devolucoesPorVended
       <td style="${fechBase}text-align:right;${corRotulo ? `color:${corRotulo};` : ""}">${formatarMoeda(totalGeral)}</td>
     </tr>`;
 
+  const linhaResumoContagem = (rotulo, porResponsavel, totalGeral, borda) => `
+    <tr${borda ? ' style="border-top:2px solid var(--br);"' : ""}>
+      <td style="${fechBase}position:sticky;left:0;">${rotulo}</td>
+      ${colunas.map(c => `<td style="${fechBase}text-align:right;">${fmtContagem(valorColuna(c, porResponsavel))}</td>`).join("")}
+      <td style="${fechBase}text-align:right;">${fmtContagem(totalGeral)}</td>
+    </tr>`;
+
   const liquidoPorResponsavel = {};
   responsaveisAtivos.forEach(v => liquidoPorResponsavel[v] = totalBrutoPorVendedor[v] - (devolucoesPorVendedor[v] || 0));
   const totalGeralPorResponsavel = {};
   responsaveisAtivos.forEach(v => totalGeralPorResponsavel[v] = liquidoPorResponsavel[v] + (servicoPorVendedor[v] || 0) + (representacaoPorVendedor[v] || 0));
+
+  // Total de NF/tickets = quantidade de notas (venda + serviço + representação),
+  // não o valor — usado pra calcular o ticket médio por responsável.
+  const notasPorResponsavel = {};
+  notasVenda.forEach(n => { notasPorResponsavel[n.vendedor] = (notasPorResponsavel[n.vendedor] || 0) + 1; });
+  const servicoNotasPorResponsavel = {};
+  notasServico.forEach(n => { servicoNotasPorResponsavel[n.vendedor] = (servicoNotasPorResponsavel[n.vendedor] || 0) + 1; });
+  const representacaoNotasPorResponsavel = {};
+  notasRepresentacao.forEach(n => { representacaoNotasPorResponsavel[n.vendedor] = (representacaoNotasPorResponsavel[n.vendedor] || 0) + 1; });
+
+  const totalNotasPorResponsavel = {};
+  let totalNotasGeral = 0;
+  responsaveisAtivos.forEach(v => {
+    const qtd = (notasPorResponsavel[v] || 0) + (servicoNotasPorResponsavel[v] || 0) + (representacaoNotasPorResponsavel[v] || 0);
+    totalNotasPorResponsavel[v] = qtd;
+    totalNotasGeral += qtd;
+  });
+
+  const ticketMedioPorResponsavel = {};
+  responsaveisAtivos.forEach(v => {
+    const qtd = totalNotasPorResponsavel[v] || 0;
+    ticketMedioPorResponsavel[v] = qtd ? totalGeralPorResponsavel[v] / qtd : 0;
+  });
+  const totalGeralGeral = (totalBrutoGeral - totalDevolucoes) + totalServicoGeral + totalRepresentacaoGeral;
+  const ticketMedioGeral = totalNotasGeral ? totalGeralGeral / totalNotasGeral : 0;
 
   linhas += linhaResumo("Total Bruto", totalBrutoPorVendedor, totalBrutoGeral, null, true);
   linhas += linhaResumo("Devoluções", devolucoesPorVendedor, totalDevolucoes, "var(--red)", false);
   linhas += linhaResumo("Notas de Produto", liquidoPorResponsavel, totalBrutoGeral - totalDevolucoes, "var(--ac)", false);
   linhas += linhaResumo("Notas de Serviço", servicoPorVendedor, totalServicoGeral, null, false);
   linhas += linhaResumo("Representação", representacaoPorVendedor, totalRepresentacaoGeral, null, false);
-  linhas += linhaResumo("Total Geral", totalGeralPorResponsavel, (totalBrutoGeral - totalDevolucoes) + totalServicoGeral + totalRepresentacaoGeral, "var(--ac)", true);
+  linhas += linhaResumo("Total Geral", totalGeralPorResponsavel, totalGeralGeral, "var(--ac)", true);
+  linhas += linhaResumoContagem("Total de NF/Tickets", totalNotasPorResponsavel, totalNotasGeral, false);
+  linhas += linhaResumo("Ticket Médio", ticketMedioPorResponsavel, ticketMedioGeral, null, false);
 
   el("tbody-relatorios").innerHTML = linhas;
+}
+
+// CONTATOS & PROPOSTAS (lançamento manual)
+const MESES_NOME = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
+const CARTEIRAS_DISPONIVEIS = SEGMENTOS_RESPONSAVEL.filter(seg => seg.nome !== "OUTROS").flatMap(seg => seg.membros);
+let lancamentosCP = [];
+let cpEditandoId = null;
+
+function inicializarFormCP(){
+  if(!el("cp-mes").options.length){
+    el("cp-mes").innerHTML = MESES_NOME.map((nome, i) => `<option value="${i+1}">${nome}</option>`).join("");
+  }
+  if(!el("cp-carteira").options.length){
+    el("cp-carteira").innerHTML = CARTEIRAS_DISPONIVEIS.map(c => `<option value="${c}">${c}</option>`).join("");
+  }
+  if(!el("cp-ano").value){
+    const hoje = new Date();
+    el("cp-ano").value = hoje.getFullYear();
+    el("cp-mes").value = hoje.getMonth() + 1;
+  }
+}
+
+function mostrarMsgCP(texto, ok){
+  const d = el("cp-msg");
+  d.textContent = texto;
+  d.className = ok ? "modal-msg msg-ok" : "modal-msg msg-err";
+  d.classList.remove("hidden");
+  setTimeout(() => d.classList.add("hidden"), 4000);
+}
+
+async function carregarLancamentosCP(){
+  el("cp-tbody").innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--mt);padding:16px;">Carregando...</td></tr>`;
+  try{
+    const r = await fetch("/api/lancamentos");
+    if(!r.ok) throw new Error("Falha ao carregar lançamentos");
+    lancamentosCP = await r.json();
+    renderTabelaCP();
+  }catch(e){
+    el("cp-tbody").innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--red);padding:16px;">Erro: ${e.message}</td></tr>`;
+  }
+}
+
+function renderTabelaCP(){
+  if(!lancamentosCP.length){
+    el("cp-tbody").innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--mt);padding:16px;">Nenhum lançamento ainda.</td></tr>`;
+    return;
+  }
+  el("cp-tbody").innerHTML = lancamentosCP.map(l => `
+    <tr>
+      <td>${l.ano}</td>
+      <td>${MESES_NOME[l.mes-1]}</td>
+      <td>${l.carteira}</td>
+      <td style="text-align:right;">${l.contatos}</td>
+      <td style="text-align:right;">${l.propostas}</td>
+      <td style="text-align:right;white-space:nowrap;">
+        <button class="btn-sec" style="padding:5px 10px;font-size:12px;" onclick="editarLancamentoCP(${l.id})">✏️</button>
+        <button class="btn-danger" style="padding:5px 10px;font-size:12px;" onclick="excluirLancamentoCP(${l.id})">🗑️</button>
+      </td>
+    </tr>`).join("");
+}
+
+function editarLancamentoCP(id){
+  const l = lancamentosCP.find(x => x.id === id);
+  if(!l)return;
+  cpEditandoId = id;
+  el("cp-ano").value = l.ano;
+  el("cp-mes").value = l.mes;
+  el("cp-carteira").value = l.carteira;
+  el("cp-contatos").value = l.contatos;
+  el("cp-propostas").value = l.propostas;
+  el("cp-btn-salvar").textContent = "Atualizar";
+  el("cp-btn-cancelar").classList.remove("hidden");
+}
+
+function cancelarEdicaoCP(){
+  cpEditandoId = null;
+  el("cp-contatos").value = "";
+  el("cp-propostas").value = "";
+  el("cp-btn-salvar").textContent = "Salvar";
+  el("cp-btn-cancelar").classList.add("hidden");
+}
+
+async function salvarLancamentoCP(){
+  const ano = parseInt(el("cp-ano").value, 10);
+  const mes = parseInt(el("cp-mes").value, 10);
+  const carteira = el("cp-carteira").value;
+  const contatos = parseInt(el("cp-contatos").value, 10) || 0;
+  const propostas = parseInt(el("cp-propostas").value, 10) || 0;
+  if(!ano || !mes || !carteira){ mostrarMsgCP("Preencha ano, mês e carteira.", false); return; }
+
+  const btn = el("cp-btn-salvar");
+  btn.disabled = true;
+  try{
+    const payload = { ano, mes, carteira, contatos, propostas, usuario: usuarioAtual.login };
+    let r;
+    if(cpEditandoId){
+      r = await fetch("/api/lancamentos", { method:"PUT", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ id: cpEditandoId, ...payload }) });
+    }else{
+      r = await fetch("/api/lancamentos", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(payload) });
+    }
+    if(!r.ok){ const err = await r.json(); throw new Error(err.erro || `Erro ${r.status}`); }
+    mostrarMsgCP("✓ Lançamento salvo com sucesso!", true);
+    cancelarEdicaoCP();
+    await carregarLancamentosCP();
+  }catch(e){
+    mostrarMsgCP("Erro: " + e.message, false);
+  }finally{
+    btn.disabled = false;
+  }
+}
+
+async function excluirLancamentoCP(id){
+  if(!confirm("Excluir este lançamento?"))return;
+  try{
+    const r = await fetch("/api/lancamentos", { method:"DELETE", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ id }) });
+    if(!r.ok){ const err = await r.json(); throw new Error(err.erro || `Erro ${r.status}`); }
+    if(cpEditandoId === id) cancelarEdicaoCP();
+    await carregarLancamentosCP();
+  }catch(e){
+    mostrarMsgCP("Erro: " + e.message, false);
+  }
 }
 
 function filtrarEstoque() {
