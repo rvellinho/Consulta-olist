@@ -1,5 +1,6 @@
 // Relatório de Estoque — endpoints separados para evitar timeout
 const https = require("https");
+const { classificarProduto } = require("./_lib/estoque-classificacao");
 
 const TOKEN_V2 = process.env.OLIST_TOKEN;
 const CLIENT_ID = process.env.OLIST_CLIENT_ID;
@@ -90,14 +91,9 @@ module.exports = async (req, res) => {
       const prod = parseJSON(r1.text).retorno?.produto;
       if (!prod) return res.status(200).json({ ignorar: true, motivo: "produto não encontrado" });
 
-    // Filtra serviços — apenas classe_produto S (tipo S significa "Simples", não Serviço!)
-      if (prod.classe_produto === "S" && !prod.codigo && !prod.unidade) {
-        return res.status(200).json({ ignorar: true, motivo: "serviço" });
-      }
-
-      // Filtra produtos de representação
-      if ((prod.localizacao || "").toUpperCase().includes("REPRESENTA")) {
-        return res.status(200).json({ ignorar: true, motivo: "representação" });
+      const { elegivel, motivoExclusao } = classificarProduto(prod);
+      if (!elegivel) {
+        return res.status(200).json({ ignorar: true, motivo: motivoExclusao });
       }
 
       await sleep(400);

@@ -42,8 +42,16 @@ for the same duplicated logic.
   600ms delay between rows to respect Olist's rate limit (120 req/min).
 - **`api/estoque.js`** — Stock report, split into separate `acao=` endpoints
   (`produtos`, `produto`, `ordens`) specifically to avoid serverless timeouts — the frontend
-  drives the multi-step aggregation (see below).
+  drives the multi-step aggregation (see below). Eligibility classification (serviço/representação)
+  comes from `api/_lib/estoque-classificacao.js`, shared with the daily sync below.
+- **`api/estoque-sync-diario.js`** — Daily cron (see "Rotina diária de estoque" below) that keeps
+  `estoque_catalogo` up to date, so the live stock report only has to ask Olist about products
+  already known to be eligible, instead of re-classifying the whole catalog on every load.
 - **`api/usuarios.js`** — CRUD for the `usuarios` table in Supabase (admin-only in the UI).
+- **`api/lancamentos.js`** — CRUD for the `contatos_propostas` table in Supabase: manual monthly
+  entry of Contatos/Propostas counts per Carteira, shown in the Relatórios tab (admin-only in the
+  UI). Unique on `(ano, mes, carteira)` — `POST` rejects duplicates (Postgres code `23505`), `PUT`
+  edits by `id`.
 - **`api/callback.js`** — One-time OAuth authorization-code → token exchange for initial Olist v3
   setup (manual flow, hits `accounts.tiny.com.br`).
 - **`api/ping.js`** — Refreshes the Olist v3 OAuth token using the stored refresh token (intended
@@ -129,6 +137,33 @@ Single file containing all CSS and JS inline (~1000 lines). No framework, no mod
 - Timeout curto — funções não podem fazer loops longos
 - `api/salvar.js` e `api/contatos.js` têm `memory: 256` no `vercel.json`
 - Processamento de relatórios e importações em lote → sempre no frontend
+- Plano é o gratuito (Hobby): cron só dispara 1x/dia por rota — não dá pra agendar
+  em intervalos curtos (ex: de 5 em 5 min). Rotinas que precisam de várias chamadas
+  pra terminar usam auto-encadeamento (ver "Rotina diária de estoque")
+
+---
+
+## Rotina diária de estoque (`api/estoque-sync-diario.js`)
+
+Mantém `estoque_catalogo` (cadastro + elegibilidade de cada produto) atualizado, pra aba
+Estoque não precisar reclassificar os ~250 produtos do catálogo (dos quais quase metade é
+serviço/representação e nunca entra no relatório) a cada vez que alguém pede o relatório —
+só o necessário (quantidade em estoque, ordens de compra) continua sendo buscado em tempo real.
+
+- Roda 1x/dia via cron (09:00 UTC = 06:00 BRT), configurado em `vercel.json`
+- **Auto-encadeamento**: como o plano gratuito da Vercel limita a duração de cada chamada
+  (hoje `maxDuration: 60`) e só permite cron 1x/dia, a função processa um lote de produtos
+  (`TAMANHO_LOTE`), salva o progresso em `estoque_sync_status` (linha única, `id=1`), e dispara
+  ela mesma de novo via HTTP (sem esperar a resposta) pra continuar o próximo lote — até
+  terminar o catálogo inteiro, ainda na mesma madrugada. `MAX_SALTOS` é uma trava de segurança
+  contra encadeamento sem fim.
+- Se `em_andamento` ficar travado (ex: uma chamada falhou no meio) por mais de 30 minutos,
+  a próxima chamada recomeça do zero — busca a lista de produtos de novo e reclassifica tudo
+- Ao terminar o catálogo inteiro com sucesso, remove de `estoque_catalogo` quem não apareceu
+  mais na listagem de produtos ativos do dia (produto inativado/excluído na Olist)
+- A regra de classificação (o que é serviço, o que é representação) mora em
+  `api/_lib/estoque-classificacao.js` — usada tanto aqui quanto em `api/estoque.js`. Qualquer
+  ajuste nessa regra precisa ser feito só ali, nunca duplicado
 
 ---
 
@@ -139,6 +174,9 @@ Single file containing all CSS and JS inline (~1000 lines). No framework, no mod
 | `analises_credito` | CNPJ (string limpa) | Histórico de análises de crédito |
 | `tokens_oauth` | `id` (string) | Tokens OAuth2 da Olist |
 | `usuarios` | `id` | Usuários do sistema (admin, analista, visualizador) |
+| `contatos_propostas` | `id` (unique em `ano`+`mes`+`carteira`) | Lançamento manual de Contatos/Propostas por mês/carteira, na aba Relatórios |
+| `estoque_catalogo` | `produto_id` (id Olist) | Cadastro + elegibilidade de cada produto (serviço/representação), atualizado 1x/dia — ver "Rotina diária de estoque" |
+| `estoque_sync_status` | `id` (fixo em `1`) | Progresso/estado da rotina diária de estoque (lista de pendentes, saltos, última conclusão) |
 
 - CNPJ é a chave primária preferida (mais estável que IDs internos da Olist)
 - CNPJ sempre armazenado limpo (sem `.`, `/`, `-`)

@@ -10,6 +10,10 @@
     "api/relatorio-sync-diario.js": {
       "memory": 256,
       "maxDuration": 60
+    },
+    "api/estoque-sync-diario.js": {
+      "memory": 256,
+      "maxDuration": 60
     }
   },
   "crons": [
@@ -20,6 +24,10 @@
     {
       "path": "/api/relatorio-sync-diario",
       "schedule": "0 7 * * *"
+    },
+    {
+      "path": "/api/estoque-sync-diario",
+      "schedule": "0 9 * * *"
     }
   ]
 }
