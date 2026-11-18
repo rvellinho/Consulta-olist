@@ -81,7 +81,8 @@ Single file containing all CSS and JS inline (~1000 lines). No framework, no mod
   If the API call throws (e.g. offline), it falls back to a hardcoded `DEMO_USERS` list and a
   `DEMO` dataset, sets `modoDemo = true`, and shows a "DEMO" badge.
 - **Roles (`perfil`)**: `admin`, `analista`, `visualizador`. `visualizador` is read-only (no
-  "Análise" column/edit form). Only `admin` sees the Usuários, Importar, and Estoque tabs.
+  "Análise" column/edit form). Only `admin` sees the Usuários and Importar tabs; Estoque is
+  visible to both `admin` and `analista`.
 - **Tabs** (`mudarAba`): Clientes (default), Usuários, Importar, Estoque — each is a `<div>`
   toggled via `.hidden`, not separate routes/pages.
 - **Clientes tab**: paginated (100/page) search against `/api/contatos`; clicking a row opens a
@@ -226,8 +227,8 @@ só o necessário (quantidade em estoque, ordens de compra) continua sendo busca
 
 | Perfil | Permissões |
 |---|---|
-| `admin` | Acesso total — Clientes, Usuários, Importar, Estoque |
-| `analista` | Clientes (leitura + edição de análise) |
+| `admin` | Acesso total — Clientes, Usuários, Importar, Estoque, Relatórios |
+| `analista` | Clientes (leitura + edição de análise) e Estoque |
 | `visualizador` | Clientes (somente leitura) |
 
 ---

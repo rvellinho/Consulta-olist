@@ -320,7 +320,8 @@
     <div id="tabela-estoque-wrap" class="hidden">
       <div style="border:1px solid var(--br);border-radius:var(--r);overflow:hidden;box-shadow:var(--sh);">
         <div style="overflow-x:auto;max-height:65vh;overflow-y:auto;">
-          <table id="tabela-estoque" style="width:100%;border-collapse:collapse;min-width:1100px;">
+          <table id="tabela-estoque" style="border-collapse:collapse;table-layout:fixed;">
+            <colgroup id="colgroup-estoque"></colgroup>
             <thead id="thead-estoque" style="position:sticky;top:0;z-index:10;">
               <tr id="thead-row"></tr>
             </thead>
@@ -585,6 +586,9 @@ function iniciarApp(u){
     el("tab-importar").classList.remove("hidden");
     el("tab-estoque").classList.remove("hidden");
     el("tab-relatorios").classList.remove("hidden");
+  }
+  if(u.perfil==="analista"){
+    el("tab-estoque").classList.remove("hidden");
   }
   carregarClientes(1,"");
 }
@@ -1100,27 +1104,83 @@ let dadosEstoqueFiltrado = [];
 let estoqueSortCol = null;
 let estoqueSortDir = 1;
 
+// Ordem e largura padrão das colunas do relatório de estoque. A largura é
+// ajustável pelo usuário (arrastando a borda da coluna) e fica salva por
+// login no localStorage — ver carregarLarguraColunasEstoque/salvarLarguraColunasEstoque.
+// Categoria e Fornecedor ficam por último de propósito: são as únicas que
+// podem sair da área visível sem rolagem horizontal.
 const COLUNAS_ESTOQUE = [
-  { key: "sku",             label: "SKU",            align: "left",   num: false },
-  { key: "nome",            label: "Produto",        align: "left",   num: false },
-  { key: "categoria",       label: "Categoria",      align: "left",   num: false },
-  { key: "fornecedor",      label: "Fornecedor",     align: "left",   num: false },
-  { key: "unidade",         label: "Un",             align: "center", num: false },
-  { key: "estoqueFisico",   label: "Est. Físico",    align: "right",  num: true  },
-  { key: "estoqueReservado",label: "Reservado",      align: "right",  num: true  },
-  { key: "estoqueDisponivel",label:"Disponível",     align: "right",  num: true  },
-  { key: "emCompra",        label: "Em Compra",      align: "right",  num: true  },
-  { key: "dispMaisCompras", label: "Disp.+Compras",  align: "right",  num: true  },
-  { key: "estoqueMinimo",   label: "Est. Mínimo",    align: "right",  num: true  },
-  { key: "necessidade",     label: "Necessidade",    align: "right",  num: true  },
+  { key: "sku",              label: "SKU",           align: "left",   num: false, width: 100 },
+  { key: "nome",              label: "Produto",       align: "left",   num: false, width: 240 },
+  { key: "unidade",           label: "Un",            align: "center", num: false, width: 45  },
+  { key: "estoqueFisico",     label: "Est. Físico",   align: "right",  num: true,  width: 80  },
+  { key: "estoqueReservado",  label: "Reservado",     align: "right",  num: true,  width: 80  },
+  { key: "estoqueDisponivel", label: "Disponível",    align: "right",  num: true,  width: 80  },
+  { key: "emCompra",          label: "Em Compra",     align: "right",  num: true,  width: 80  },
+  { key: "dispMaisCompras",   label: "Disp.+Compras", align: "right",  num: true,  width: 90  },
+  { key: "estoqueMinimo",     label: "Est. Mínimo",   align: "right",  num: true,  width: 80  },
+  { key: "necessidade",       label: "Necessidade",   align: "right",  num: true,  width: 90  },
+  { key: "categoria",         label: "Categoria",     align: "left",   num: false, width: 160 },
+  { key: "fornecedor",        label: "Fornecedor",    align: "left",   num: false, width: 120 },
 ];
 
+function chaveLarguraColunasEstoque() {
+  return `estoque_col_widths_${usuarioAtual?.login || "anon"}`;
+}
+
+function carregarLarguraColunasEstoque() {
+  try {
+    const salvo = JSON.parse(localStorage.getItem(chaveLarguraColunasEstoque()) || "{}");
+    COLUNAS_ESTOQUE.forEach(c => { if (salvo[c.key] > 0) c.width = salvo[c.key]; });
+  } catch (e) { /* localStorage indisponível (modo privado, etc.) — mantém os padrões */ }
+}
+
+function salvarLarguraColunasEstoque() {
+  try {
+    const larguras = {};
+    COLUNAS_ESTOQUE.forEach(c => { larguras[c.key] = c.width; });
+    localStorage.setItem(chaveLarguraColunasEstoque(), JSON.stringify(larguras));
+  } catch (e) { /* ignora falha de localStorage */ }
+}
+
+let estoqueResizeListenerAtivo = false;
+function ativarRedimensionamentoColunasEstoque() {
+  if (estoqueResizeListenerAtivo) return;
+  estoqueResizeListenerAtivo = true;
+  el("thead-row").addEventListener("mousedown", (e) => {
+    const handle = e.target.closest(".col-resize-handle");
+    if (!handle) return;
+    e.preventDefault();
+    const idx = Number(handle.dataset.colIdx);
+    const col = COLUNAS_ESTOQUE[idx];
+    const colEl = el("colgroup-estoque").children[idx];
+    const startX = e.clientX;
+    const startWidth = col.width;
+
+    function onMove(ev) {
+      col.width = Math.max(40, startWidth + (ev.clientX - startX));
+      colEl.style.width = col.width + "px";
+    }
+    function onUp() {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      salvarLarguraColunasEstoque();
+    }
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  });
+}
+
 function buildTheadEstoque() {
+  carregarLarguraColunasEstoque();
+  el("colgroup-estoque").innerHTML = COLUNAS_ESTOQUE.map(c => `<col style="width:${c.width}px;">`).join("");
   const tr = el("thead-row");
   tr.innerHTML = COLUNAS_ESTOQUE.map((c,i) => `
-    <th onclick="sortEstoque(${i})" style="padding:10px 12px;font-size:11px;font-weight:700;text-transform:uppercase;color:var(--mt);background:var(--s2);text-align:${c.align};border-bottom:1px solid var(--br);white-space:nowrap;cursor:pointer;user-select:none;">
-      ${c.label} <span id="sort-icon-${i}" style="opacity:.4;">↕</span>
+    <th style="position:relative;padding:10px 12px;font-size:11px;font-weight:700;text-transform:uppercase;color:var(--mt);background:var(--s2);text-align:${c.align};border-bottom:1px solid var(--br);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;user-select:none;">
+      <span onclick="sortEstoque(${i})" style="cursor:pointer;">${c.label} <span id="sort-icon-${i}" style="opacity:.4;">↕</span></span>
+      ${i < COLUNAS_ESTOQUE.length - 1 ? `<span class="col-resize-handle" data-col-idx="${i}" style="position:absolute;top:0;right:0;width:6px;height:100%;cursor:col-resize;"></span>` : ""}
     </th>`).join("");
+  ativarRedimensionamentoColunasEstoque();
 }
 
 function sortEstoque(colIdx) {
@@ -1135,7 +1195,7 @@ function sortEstoque(colIdx) {
   if (ic) { ic.textContent = estoqueSortDir === 1 ? "↑" : "↓"; ic.style.opacity = "1"; }
   dadosEstoqueFiltrado.sort((a,b) => {
     const va = a[col.key] ?? ""; const vb = b[col.key] ?? "";
-    if (col.num) return (parseFloat(va)||0 - (parseFloat(vb)||0)) * estoqueSortDir;
+    if (col.num) return ((parseFloat(va)||0) - (parseFloat(vb)||0)) * estoqueSortDir;
     return String(va).localeCompare(String(vb)) * estoqueSortDir;
   });
   renderTabelaEstoque(dadosEstoqueFiltrado);
@@ -1824,6 +1884,40 @@ function filtrarEstoque() {
   el("estoque-rodape").textContent = `${lista.length} produtos · ${lista.filter(p=>p.necessidade>0).length} precisam de reposição`;
 }
 
+function escAttr(s) {
+  return String(s ?? "").replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;");
+}
+
+function celulaEstoque(col, p) {
+  const v = p[col.key];
+  const baseTxt = "padding:10px 12px;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
+  switch (col.key) {
+    case "sku":
+      return `<td style="${baseTxt}font-family:monospace;font-size:12px;">${v||"—"}</td>`;
+    case "nome":
+      return `<td style="${baseTxt}" title="${escAttr(v)}">${v||""}</td>`;
+    case "categoria":
+    case "fornecedor":
+      return `<td style="${baseTxt}font-size:12px;color:var(--mt);" title="${escAttr(v)}">${v||"—"}</td>`;
+    case "unidade":
+      return `<td style="padding:10px 12px;font-size:12px;text-align:center;color:var(--mt);">${v||"—"}</td>`;
+    case "estoqueReservado":
+      return `<td style="padding:10px 12px;font-size:13px;text-align:right;color:var(--am);">${fmtQtd(v)}</td>`;
+    case "emCompra":
+      return `<td style="padding:10px 12px;font-size:13px;text-align:right;color:var(--g);">${fmtQtd(v)}</td>`;
+    case "dispMaisCompras":
+      return `<td style="padding:10px 12px;font-size:13px;text-align:right;font-weight:600;">${fmtQtd(v)}</td>`;
+    case "estoqueMinimo":
+      return `<td style="padding:10px 12px;font-size:13px;text-align:right;color:var(--mt);">${fmtQtd(v)}</td>`;
+    case "necessidade": {
+      const urgente = v > 0;
+      return `<td style="padding:10px 12px;font-size:13px;text-align:right;${urgente?"color:var(--red);font-weight:700;":""}">${urgente?fmtQtd(v):"—"}</td>`;
+    }
+    default: // estoqueFisico, estoqueDisponivel
+      return `<td style="padding:10px 12px;font-size:13px;text-align:right;">${fmtQtd(v)}</td>`;
+  }
+}
+
 function renderTabelaEstoque(lista) {
   const tbody = el("tbody-estoque");
   if (!lista.length) {
@@ -1833,20 +1927,8 @@ function renderTabelaEstoque(lista) {
   tbody.innerHTML = lista.map(p => {
     const urgente = p.necessidade > 0;
     const bg = urgente ? "background:var(--redl);" : "";
-    return `<tr style="border-bottom:1px solid var(--br);${bg}">
-      <td style="padding:10px 12px;font-size:12px;font-family:monospace;white-space:nowrap;">${p.sku||"—"}</td>
-      <td style="padding:10px 12px;font-size:13px;">${p.nome}</td>
-      <td style="padding:10px 12px;font-size:12px;color:var(--mt);">${p.categoria||"—"}</td>
-      <td style="padding:10px 12px;font-size:12px;color:var(--mt);white-space:nowrap;">${p.fornecedor||"—"}</td>
-      <td style="padding:10px 12px;font-size:12px;text-align:center;color:var(--mt);">${p.unidade||"—"}</td>
-      <td style="padding:10px 12px;font-size:13px;text-align:right;">${fmtQtd(p.estoqueFisico)}</td>
-      <td style="padding:10px 12px;font-size:13px;text-align:right;color:var(--am);">${fmtQtd(p.estoqueReservado)}</td>
-      <td style="padding:10px 12px;font-size:13px;text-align:right;">${fmtQtd(p.estoqueDisponivel)}</td>
-      <td style="padding:10px 12px;font-size:13px;text-align:right;color:var(--g);">${fmtQtd(p.emCompra)}</td>
-      <td style="padding:10px 12px;font-size:13px;text-align:right;font-weight:600;">${fmtQtd(p.dispMaisCompras)}</td>
-      <td style="padding:10px 12px;font-size:13px;text-align:right;color:var(--mt);">${fmtQtd(p.estoqueMinimo)}</td>
-      <td style="padding:10px 12px;font-size:13px;text-align:right;${urgente?"color:var(--red);font-weight:700;":""}">${urgente?fmtQtd(p.necessidade):"—"}</td>
-    </tr>`;
+    const celulas = COLUNAS_ESTOQUE.map(c => celulaEstoque(c, p)).join("");
+    return `<tr style="border-bottom:1px solid var(--br);${bg}">${celulas}</tr>`;
   }).join("");
 }
 
@@ -1859,15 +1941,10 @@ function exportarEstoque() {
   const lista = dadosEstoqueFiltrado.length ? dadosEstoqueFiltrado : dadosEstoque;
   if (!lista.length) return;
   const html = `<html><head><meta charset="UTF-8"></head><body><table>
-    <tr><th>SKU</th><th>Produto</th><th>Categoria</th><th>Fornecedor</th><th>Unidade</th>
-    <th>Est. Fisico</th><th>Reservado</th><th>Disponivel</th>
-    <th>Em Compra</th><th>Disp.+Compras</th><th>Est. Minimo</th><th>Necessidade</th></tr>
-    ${lista.map(p=>`<tr>
-      <td style="mso-number-format:'@'">${p.sku||""}</td>
-      <td>${p.nome}</td><td>${p.categoria||""}</td><td>${p.fornecedor||""}</td><td>${p.unidade||""}</td>
-      <td>${p.estoqueFisico}</td><td>${p.estoqueReservado}</td><td>${p.estoqueDisponivel}</td>
-      <td>${p.emCompra}</td><td>${p.dispMaisCompras}</td><td>${p.estoqueMinimo}</td><td>${p.necessidade}</td>
-    </tr>`).join("")}
+    <tr>${COLUNAS_ESTOQUE.map(c=>`<th>${c.label}</th>`).join("")}</tr>
+    ${lista.map(p=>`<tr>${COLUNAS_ESTOQUE.map(c =>
+      c.key==="sku" ? `<td style="mso-number-format:'@'">${p.sku||""}</td>` : `<td>${p[c.key] ?? ""}</td>`
+    ).join("")}</tr>`).join("")}
   </table></body></html>`;
   const blob = new Blob([html], { type: "application/vnd.ms-excel;charset=utf-8;" });
   const a = document.createElement("a");
