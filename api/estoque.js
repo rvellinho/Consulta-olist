@@ -1,8 +1,19 @@
-// Relatório de Estoque — endpoints separados para evitar timeout
+// Relatório de Estoque — um único endpoint (acao=relatorio).
+//
+// Antes isso era dividido em 3 chamadas (produtos/produto/ordens) e o
+// frontend fazia um loop produto-a-produto na Olist (600ms de pausa cada,
+// ~250 produtos => minutos), porque cada produto precisava ser buscado
+// individualmente tanto pra saber se era elegível quanto pra pegar o estoque.
+//
+// Isso não é mais necessário:
+// - Elegibilidade/cadastro já vem pronta de `estoque_catalogo` (populada
+//   1x/dia por api/estoque-sync-diario.js) — não bate mais na Olist aqui.
+// - Estoque (saldo/reservado/disponível) vem da Olist v3 em lote
+//   (`GET /estoque`, até 100 produtos por chamada) em vez de um por um.
+// - Compras pendentes vêm da listagem de ordens de compra v3, que já traz
+//   os itens embutidos — sem precisar buscar o detalhe de cada ordem.
 const https = require("https");
-const { classificarProduto } = require("./_lib/estoque-classificacao");
 
-const TOKEN_V2 = process.env.OLIST_TOKEN;
 const CLIENT_ID = process.env.OLIST_CLIENT_ID;
 const CLIENT_SECRET = process.env.OLIST_CLIENT_SECRET;
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -20,7 +31,6 @@ function httpsRequest(method, hostname, path, body, headers) {
   });
 }
 
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 function parseJSON(text) { try { return JSON.parse(text); } catch { return {}; } }
 
 async function getAccessToken() {
@@ -47,6 +57,76 @@ async function getAccessToken() {
   return td.access_token;
 }
 
+async function buscarCatalogoElegivel() {
+  const supaHost = SUPABASE_URL.replace("https://", "");
+  const r = await httpsRequest("GET", supaHost,
+    "/rest/v1/estoque_catalogo?elegivel=eq.true&select=produto_id,sku,nome,categoria,fornecedor,unidade,estoque_minimo",
+    null, { apikey: SUPABASE_KEY, Authorization: "Bearer " + SUPABASE_KEY });
+  return parseJSON(r.text);
+}
+
+// GET /estoque (v3) — saldo/reservado/disponível de até 100 produtos por
+// chamada, paginado. Não filtra por ID, então pagina o catálogo inteiro.
+async function buscarEstoqueTodos(accessToken) {
+  const mapa = {};
+  const limit = 100;
+  let offset = 0;
+  while (true) {
+    const r = await httpsRequest("GET", "api.tiny.com.br",
+      `/public-api/v3/estoque?limit=${limit}&offset=${offset}`,
+      null, { Authorization: "Bearer " + accessToken });
+    const data = parseJSON(r.text);
+    const itens = data.itens || [];
+    itens.forEach(it => {
+      mapa[it.idProduto] = {
+        saldo: Number(it.saldo) || 0,
+        reservado: Number(it.reservado) || 0,
+        disponivel: Number(it.disponivel) || 0,
+      };
+    });
+    const total = data.paginacao?.total ?? itens.length;
+    offset += limit;
+    if (itens.length < limit || offset >= total) break;
+  }
+  return mapa;
+}
+
+// Soma a quantidade pendente por produto nas ordens de compra em aberto (0)
+// e em andamento (3). A listagem já traz os itens embutidos; só busca o
+// detalhe de uma ordem específica se, excepcionalmente, vier sem itens.
+async function buscarComprasPendentes(accessToken) {
+  const mapa = {};
+  const limit = 100;
+  for (const situacao of ["0", "3"]) {
+    let offset = 0;
+    while (true) {
+      const r = await httpsRequest("GET", "api.tiny.com.br",
+        `/public-api/v3/ordem-compra?situacao=${situacao}&limit=${limit}&offset=${offset}`,
+        null, { Authorization: "Bearer " + accessToken });
+      const data = parseJSON(r.text);
+      const ordens = data.itens || [];
+      for (const ordem of ordens) {
+        let itensOrdem = ordem.itens;
+        if (!itensOrdem) {
+          console.log(`[estoque] ordem ${ordem.id} veio sem itens na listagem, buscando detalhe`);
+          const rd = await httpsRequest("GET", "api.tiny.com.br",
+            `/public-api/v3/ordem-compra/${ordem.id}`, null, { Authorization: "Bearer " + accessToken });
+          itensOrdem = parseJSON(rd.text).itens || [];
+        }
+        for (const item of itensOrdem) {
+          const idProd = item.produto?.id;
+          if (!idProd) continue;
+          mapa[idProd] = (mapa[idProd] || 0) + (Number(item.quantidade) || 0);
+        }
+      }
+      const total = data.paginacao?.total ?? ordens.length;
+      offset += limit;
+      if (ordens.length < limit || offset >= total) break;
+    }
+  }
+  return mapa;
+}
+
 module.exports = async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
@@ -56,112 +136,37 @@ module.exports = async (req, res) => {
   const acao = req.query.acao;
 
   try {
-    // ── AÇÃO: listar todos os produtos ──────────────────────────────
-    if (acao === "produtos") {
-      const produtos = [];
-      let pagina = 1;
-      while (true) {
-        const body = new URLSearchParams({
-          token: TOKEN_V2, pesquisa: " ", situacao: "A",
-          pagina: String(pagina), formato: "JSON"
-        }).toString();
-        const r = await httpsRequest("POST", "api.tiny.com.br",
-          "/api2/produtos.pesquisa.php", body,
-          { "Content-Type": "application/x-www-form-urlencoded" });
-        const data = parseJSON(r.text);
-        const lista = data.retorno?.produtos || [];
-        if (!lista.length) break;
-        lista.forEach(p => { if (p.produto) produtos.push({ id: p.produto.id, nome: p.produto.nome }); });
-        if (lista.length < 100) break;
-        pagina++;
-        await sleep(600);
-      }
-      return res.status(200).json({ produtos });
-    }
-
-    // ── AÇÃO: dados completos de um produto ─────────────────────────
-    if (acao === "produto") {
-      const id = req.query.id;
-      if (!id) return res.status(400).json({ erro: "id obrigatorio" });
-
-      // Produto completo (classe_produto, estoque_minimo, sku, unidade)
-      const b1 = new URLSearchParams({ token: TOKEN_V2, id: String(id), formato: "JSON" }).toString();
-      const r1 = await httpsRequest("POST", "api.tiny.com.br", "/api2/produto.obter.php",
-        b1, { "Content-Type": "application/x-www-form-urlencoded" });
-      const prod = parseJSON(r1.text).retorno?.produto;
-      if (!prod) return res.status(200).json({ ignorar: true, motivo: "produto não encontrado" });
-
-      const { elegivel, motivoExclusao } = classificarProduto(prod);
-      if (!elegivel) {
-        return res.status(200).json({ ignorar: true, motivo: motivoExclusao });
+    if (acao === "relatorio") {
+      const catalogo = await buscarCatalogoElegivel();
+      if (!catalogo.length) {
+        return res.status(200).json({ relatorio: [], catalogoVazio: true });
       }
 
-      await sleep(400);
-
-      // Estoque físico e reservado
-      const b2 = new URLSearchParams({ token: TOKEN_V2, id: String(id), formato: "JSON" }).toString();
-      const r2 = await httpsRequest("POST", "api.tiny.com.br", "/api2/produto.obter.estoque.php",
-        b2, { "Content-Type": "application/x-www-form-urlencoded" });
-      const estoque = parseJSON(r2.text).retorno?.produto;
-
-      const estoqueFisico    = parseFloat(estoque?.saldo || 0);
-      const estoqueReservado = parseFloat(estoque?.saldoReservado || 0);
-
-      return res.status(200).json({
-        ignorar: false,
-        id: prod.id,
-        sku: prod.codigo || "",
-        nome: prod.nome,
-        unidade: prod.unidade || "",
-        categoria: prod.categoria || "",
-        fornecedor: prod.nome_fornecedor || "",
-        estoqueFisico,
-        estoqueReservado,
-        estoqueMinimo: parseFloat(prod.estoque_minimo || 0),
-      });
-    }
-
-    // ── AÇÃO: ordens de compra pendentes ────────────────────────────
-    if (acao === "ordens") {
       const accessToken = await getAccessToken();
-      const ordensMap = {};
-      let offset = 0;
-      const limit = 20;
+      const [estoqueMap, comprasMap] = await Promise.all([
+        buscarEstoqueTodos(accessToken),
+        buscarComprasPendentes(accessToken),
+      ]);
 
-      while (true) {
-        await sleep(400);
-        const r = await httpsRequest("GET", "api.tiny.com.br",
-          `/public-api/v3/ordem-compra?limit=${limit}&offset=${offset}`,
-          null, { Authorization: "Bearer " + accessToken });
-        const data = parseJSON(r.text);
-        const itens = data.itens || [];
-        if (!itens.length) break;
+      const relatorio = catalogo.map(p => {
+        const e = estoqueMap[p.produto_id] || { saldo: 0, reservado: 0, disponivel: 0 };
+        const emCompra = comprasMap[p.produto_id] || 0;
+        const dispMaisCompras = e.disponivel + emCompra;
+        const estoqueMinimo = Number(p.estoque_minimo) || 0;
+        const necessidade = Math.max(0, estoqueMinimo - dispMaisCompras);
+        return {
+          id: p.produto_id, sku: p.sku || "", nome: p.nome, unidade: p.unidade || "",
+          categoria: p.categoria || "—", fornecedor: p.fornecedor || "—",
+          estoqueFisico: e.saldo, estoqueReservado: e.reservado, estoqueDisponivel: e.disponivel,
+          emCompra, dispMaisCompras, estoqueMinimo, necessidade,
+        };
+      });
+      relatorio.sort((a, b) => b.necessidade - a.necessidade || a.nome.localeCompare(b.nome));
 
-        const pendentes = itens.filter(o => o.situacao === "0" || o.situacao === "3");
-        for (const ordem of pendentes) {
-          await sleep(400);
-          const rOC = await httpsRequest("GET", "api.tiny.com.br",
-            `/public-api/v3/ordem-compra/${ordem.id}`,
-            null, { Authorization: "Bearer " + accessToken });
-          const oc = parseJSON(rOC.text);
-          if (oc.itens) {
-            for (const item of oc.itens) {
-              const idProd = item.produto?.id;
-              if (!idProd) continue;
-              ordensMap[idProd] = (ordensMap[idProd] || 0) + (item.quantidade || 0);
-            }
-          }
-          await sleep(400);
-        }
-
-        if (itens.length < limit) break;
-        offset += limit;
-        await sleep(500);
-      }
-      return res.status(200).json({ ordensMap });
+      return res.status(200).json({ relatorio });
     }
 
-    return res.status(400).json({ erro: "acao invalida. Use: produtos, produto, ordens" });
+    return res.status(400).json({ erro: "acao invalida. Use: relatorio" });
 
   } catch (e) {
     return res.status(500).json({ erro: e.message, stack: e.stack });
