@@ -19,8 +19,9 @@ const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
 const CRON_SECRET = process.env.CRON_SECRET;
 
-const TAMANHO_LOTE = 40; // produtos por execução — folga confortável nos 60s de maxDuration
-const MAX_SALTOS = 15;   // trava de segurança contra encadeamento sem fim (cobre até ~600 produtos)
+const ORCAMENTO_MS = 45000; // tempo de trabalho por chamada — folga confortável nos 60s de maxDuration
+const MAX_TENTATIVAS_POR_PRODUTO = 3; // falhas pontuais (ex: bloqueio momentâneo da Olist) tentam de novo antes de desistir por hoje
+const MAX_SALTOS = 20;   // trava de segurança contra encadeamento sem fim
 const TRAVADO_APOS_MS = 30 * 60 * 1000; // se "em_andamento" ficar preso, uma nova chamada recomeça do zero
 
 const supaHeaders = {
@@ -96,17 +97,30 @@ async function limparForaDoCatalogo(idsDoDia) {
 }
 
 // Dispara a continuação sem esperar ela terminar — só garante que o pedido
-// saiu antes desta execução devolver sua própria resposta.
+// saiu antes desta execução devolver sua própria resposta. Logado porque já
+// falhou em silêncio uma vez (ver CLAUDE.md) — se falhar de novo, precisa
+// aparecer nos logs da Vercel em vez de só parar sem explicação.
 function dispararContinuacao(host) {
   return new Promise((resolve) => {
+    if (!host) {
+      console.error("[estoque-sync] sem req.headers.host — não foi possível disparar a continuação");
+      return resolve();
+    }
     const [hostname, porta] = host.split(":");
+    console.log(`[estoque-sync] disparando continuação em https://${hostname}/api/estoque-sync-diario`);
     const req = https.request({
       hostname, port: porta || 443, path: "/api/estoque-sync-diario", method: "POST",
       headers: CRON_SECRET ? { Authorization: "Bearer " + CRON_SECRET } : {},
-    }, () => {});
-    req.on("error", () => resolve());
+    }, (resposta) => {
+      console.log(`[estoque-sync] continuação disparada, status ${resposta.statusCode}`);
+      resposta.resume(); // drena a resposta pra liberar o socket, sem esperar o corpo todo
+    });
+    req.on("error", (e) => {
+      console.error("[estoque-sync] erro ao disparar continuação:", e.message);
+      resolve();
+    });
     req.end();
-    setTimeout(resolve, 300);
+    setTimeout(resolve, 800);
   });
 }
 
@@ -141,20 +155,39 @@ module.exports = async (req, res) => {
       status.em_andamento = false;
       status.ultimo_erro = `limite de ${MAX_SALTOS} saltos de segurança atingido com ${status.pendentes.length} produtos ainda pendentes`;
       await salvarStatus(status);
+      console.error("[estoque-sync]", status.ultimo_erro);
       return res.status(200).json({ ok: false, erro: status.ultimo_erro });
     }
 
-    const lote = status.pendentes.slice(0, TAMANHO_LOTE);
-    const resto = status.pendentes.slice(TAMANHO_LOTE);
+    console.log(`[estoque-sync] salto ${status.saltos + 1}: ${status.pendentes.length} pendentes`);
+    const inicioHop = Date.now();
+    const fila = [...status.pendentes];
     const linhas = [];
 
-    for (const prod of lote) {
+    while (fila.length > 0 && (Date.now() - inicioHop) < ORCAMENTO_MS) {
+      const prod = fila.shift();
       await sleep(600);
-      const body = new URLSearchParams({ token: TOKEN_V2, id: String(prod.id), formato: "JSON" }).toString();
-      const r = await httpsRequest("POST", "api.tiny.com.br", "/api2/produto.obter.php", body,
-        { "Content-Type": "application/x-www-form-urlencoded" });
-      const p = parseJSON(r.text).retorno?.produto;
-      if (!p) continue; // erro pontual (ex: bloqueio momentâneo) — mantém o cadastro anterior, tenta de novo no dia seguinte
+      let p = null;
+      try {
+        const body = new URLSearchParams({ token: TOKEN_V2, id: String(prod.id), formato: "JSON" }).toString();
+        const r = await httpsRequest("POST", "api.tiny.com.br", "/api2/produto.obter.php", body,
+          { "Content-Type": "application/x-www-form-urlencoded" });
+        p = parseJSON(r.text).retorno?.produto;
+      } catch (erroRede) {
+        console.error(`[estoque-sync] erro de rede no produto ${prod.id} (${prod.nome}): ${erroRede.message}`);
+      }
+
+      if (!p) {
+        const tentativas = (prod.tentativas || 0) + 1;
+        if (tentativas <= MAX_TENTATIVAS_POR_PRODUTO) {
+          console.error(`[estoque-sync] produto ${prod.id} (${prod.nome}) sem retorno — tentativa ${tentativas}/${MAX_TENTATIVAS_POR_PRODUTO}, volta pra fila`);
+          fila.push({ ...prod, tentativas });
+        } else {
+          console.error(`[estoque-sync] produto ${prod.id} (${prod.nome}) falhou ${tentativas}x — desiste por hoje, tenta de novo amanha`);
+        }
+        continue;
+      }
+
       const { elegivel, motivoExclusao } = classificarProduto(p);
       linhas.push({
         produto_id: p.id, sku: p.codigo || "", nome: p.nome,
@@ -166,11 +199,12 @@ module.exports = async (req, res) => {
     }
     if (linhas.length) await upsertCatalogo(linhas);
 
-    status.pendentes = resto;
-    status.processados += lote.length;
+    status.pendentes = fila;
+    status.processados = status.total_catalogo - fila.length;
     status.saltos += 1;
+    console.log(`[estoque-sync] salto ${status.saltos} concluido: ${linhas.length} classificados, ${fila.length} ainda pendentes`);
 
-    if (resto.length === 0) {
+    if (fila.length === 0) {
       await limparForaDoCatalogo(status.ids_do_dia);
       status.em_andamento = false;
       status.concluido_em = new Date().toISOString();
@@ -180,9 +214,10 @@ module.exports = async (req, res) => {
 
     await salvarStatus(status);
     await dispararContinuacao(req.headers.host);
-    return res.status(200).json({ ok: true, concluido: false, processados: status.processados, restante: resto.length });
+    return res.status(200).json({ ok: true, concluido: false, processados: status.processados, restante: fila.length });
 
   } catch (e) {
+    console.error("[estoque-sync] erro fatal:", e.message);
     return res.status(500).json({ erro: e.message, stack: e.stack });
   }
 };

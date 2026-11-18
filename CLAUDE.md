@@ -152,11 +152,20 @@ só o necessário (quantidade em estoque, ordens de compra) continua sendo busca
 
 - Roda 1x/dia via cron (09:00 UTC = 06:00 BRT), configurado em `vercel.json`
 - **Auto-encadeamento**: como o plano gratuito da Vercel limita a duração de cada chamada
-  (hoje `maxDuration: 60`) e só permite cron 1x/dia, a função processa um lote de produtos
-  (`TAMANHO_LOTE`), salva o progresso em `estoque_sync_status` (linha única, `id=1`), e dispara
-  ela mesma de novo via HTTP (sem esperar a resposta) pra continuar o próximo lote — até
-  terminar o catálogo inteiro, ainda na mesma madrugada. `MAX_SALTOS` é uma trava de segurança
-  contra encadeamento sem fim.
+  (hoje `maxDuration: 60`) e só permite cron 1x/dia, a função processa produtos até estourar
+  um orçamento de tempo (`ORCAMENTO_MS`, hoje 45s — não é uma quantidade fixa de produtos,
+  porque o tempo por produto varia), salva o progresso em `estoque_sync_status` (linha única,
+  `id=1`), e dispara ela mesma de novo via HTTP (sem esperar a resposta) pra continuar —
+  até terminar o catálogo inteiro, ainda na mesma madrugada. `MAX_SALTOS` é uma trava de
+  segurança contra encadeamento sem fim.
+  - **Já falhou em silêncio uma vez** (2026-11-18, testado manualmente): o auto-disparo não
+    chegou a acionar a próxima chamada, e ficou parado sem erro registrado até alguém notar e
+    disparar manualmente. Por isso `dispararContinuacao` loga no console antes/depois de
+    disparar — se voltar a travar, checar os runtime logs da Vercel pra esse padrão antes de
+    supor que é só lentidão
+  - Produto que falha ao classificar (ex: bloqueio momentâneo da Olist) volta pro fim da fila
+    e tenta de novo até `MAX_TENTATIVAS_POR_PRODUTO` vezes antes de desistir por hoje — na
+    primeira versão isso não existia e ~12% do catálogo ficou faltando sem nenhum aviso
 - Se `em_andamento` ficar travado (ex: uma chamada falhou no meio) por mais de 30 minutos,
   a próxima chamada recomeça do zero — busca a lista de produtos de novo e reclassifica tudo
 - Ao terminar o catálogo inteiro com sucesso, remove de `estoque_catalogo` quem não apareceu
