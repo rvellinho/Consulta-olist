@@ -40,13 +40,20 @@ for the same duplicated logic.
 - **`api/importar.js`** — Bulk version of `salvar.js` for spreadsheet imports: looks up each
   client by CNPJ via Olist v2, then updates limit (v3) + analysis (Supabase) per row, with a
   600ms delay between rows to respect Olist's rate limit (120 req/min).
-- **`api/estoque.js`** — Stock report, split into separate `acao=` endpoints
-  (`produtos`, `produto`, `ordens`) specifically to avoid serverless timeouts — the frontend
-  drives the multi-step aggregation (see below). Eligibility classification (serviço/representação)
-  comes from `api/_lib/estoque-classificacao.js`, shared with the daily sync below.
+- **`api/estoque.js`** — Stock report, single endpoint (`acao=relatorio`). Used to loop
+  product-by-product against Olist (600ms delay × ~250 products ⇒ minutes) because
+  eligibility could only be known after fetching each product. Not anymore: cadastro +
+  eligibility come from `estoque_catalogo` (Supabase, populated by the daily sync below —
+  doesn't touch Olist for that), stock quantities come from Olist v3's `GET /estoque` in
+  batches of up to 100 products (paginated — a handful of calls for the whole catalog
+  instead of one per product), and pending purchase orders come from `GET /ordem-compra`
+  filtered by `situacao`, which already returns each order's line items inline (no
+  per-order detail call needed — verified live, see "Erros conhecidos" below). End-to-end:
+  ~3-4s instead of minutes.
 - **`api/estoque-sync-diario.js`** — Daily cron (see "Rotina diária de estoque" below) that keeps
-  `estoque_catalogo` up to date, so the live stock report only has to ask Olist about products
-  already known to be eligible, instead of re-classifying the whole catalog on every load.
+  `estoque_catalogo` up to date (cadastro + elegibilidade, via `api/_lib/estoque-classificacao.js`)
+  — this is the only place that still classifies products one-by-one against Olist v2, since the
+  bulk v3 endpoints don't expose the fields (`classe_produto`, `localizacao`, etc.) needed for that.
 - **`api/usuarios.js`** — CRUD for the `usuarios` table in Supabase (admin-only in the UI).
 - **`api/lancamentos.js`** — CRUD for the `contatos_propostas` table in Supabase: manual monthly
   entry of Contatos/Propostas counts per Carteira, shown in the Relatórios tab (admin-only in the
@@ -82,18 +89,35 @@ Single file containing all CSS and JS inline (~1000 lines). No framework, no mod
   matching `analisesBD` entry; saving posts to `/api/salvar`.
 - **Importar tab**: client-side CSV/XLSX parsing (column-name matching for `cnpj`, `limite`,
   `data_analise`, `anotacoes`), preview table, then batches of 10 rows posted to `/api/importar`.
-- **Estoque tab**: orchestrates the multi-call report — fetches `acao=ordens` and `acao=produtos`
-  once, then loops over every product calling `acao=produto&id=` one at a time with a 600ms
-  delay (progress bar shown to the user). Results are merged client-side (`estoqueDisponivel`,
-  `emCompra`, `dispMaisCompras`, `necessidade`), filterable/sortable/groupable, and exportable to
-  `.xls` (HTML table trick, not a real Excel format).
+- **Estoque tab**: one fetch to `/api/estoque?acao=relatorio` (server does all the Olist calls —
+  see `api/estoque.js` above), result rendered directly. Also shows a "Catálogo: X produtos —
+  atualizado em ..." line (reads `/api/estoque-sync-diario` via GET) and an "Atualizar Catálogo
+  Agora" button (POST to the same endpoint) to force the daily sync on demand, for when a
+  product's cadastro changed and the admin doesn't want to wait for the 6am cron. Report is
+  filterable/sortable/groupable client-side, and exportable to `.xls` (HTML table trick, not a
+  real Excel format).
 
 ## Regras críticas da API Olist — LEIA ANTES DE QUALQUER ALTERAÇÃO
 
 ### API V2 vs V3
-- **Leituras** → sempre API V2 (token-based, `api2/*.php`)
-- **Escritas** → sempre API V3 (OAuth2, `public-api/v3/*`)
-- A API V2 NÃO atualiza limite de crédito de forma confiável — nunca usar V2 para writes
+- **Escritas** → sempre API V3 (OAuth2, `public-api/v3/*`) — a V2 NÃO atualiza limite de
+  crédito de forma confiável, nunca usar V2 pra isso
+- **Leituras**: historicamente sempre V2 (token-based, `api2/*.php`), mas a V3 tem endpoints
+  de leitura **em lote** que a V2 não tem — vale usar quando servem:
+  - `GET /public-api/v3/estoque` — saldo/reservado/disponível de até 100 produtos por
+    chamada, paginado (`limit`/`offset`). Usado em `api/estoque.js`. **Não** devolve
+    `classe_produto`, `localizacao`, fornecedor nem estoque mínimo — não serve pra
+    classificação de elegibilidade, só pra quantidade
+  - `GET /public-api/v3/ordem-compra` filtrado por `situacao` — a listagem já traz os
+    `itens` (produto + quantidade) embutidos, sem precisar buscar o detalhe de cada ordem.
+    Confirmado ao vivo em produção (2026-11-18): nenhuma ordem veio sem itens na listagem
+  - `GET /public-api/v3/produtos` (listar produtos) existe mas **não** tem os campos de
+    classificação (`classe_produto`, `localizacao`, fornecedor, estoque mínimo) — por isso
+    a sincronização diária do catálogo (`api/estoque-sync-diario.js`) continua usando V2
+    produto a produto, não dá pra trocar por esse endpoint
+  - Limite de requisição da V3 não é documentado com número fixo (a doc só diz que GET
+    tem limite maior que POST/PUT/DELETE, por conta, não por app — ver headers
+    `X-RateLimit-*` nas respostas se precisar medir de verdade)
 
 ### Payload V3 — campo `limiteCredito`
 - O campo `limiteCredito` deve estar na **raiz** do JSON payload
