@@ -5,12 +5,16 @@
 // pede o relatório (metade deles é serviço/representação e nem entra no
 // relatório — isso aqui evita pagar esse preço de novo em toda consulta).
 //
-// O plano gratuito da Vercel só permite 1 chamada de cron por dia e tem um
-// limite curto de duração por chamada — classificar o catálogo inteiro não
-// cabe numa chamada só. Por isso essa função se "auto-encadeia": processa um
-// lote, salva o progresso em estoque_sync_status, e dispara ela mesma de
-// novo pra continuar o próximo lote — até terminar o catálogo todo, tudo
-// ainda dentro da mesma madrugada.
+// Tentativa inicial: já que o plano gratuito da Vercel só permite 1 cron/dia
+// e tem duração curta por chamada, a função se "auto-encadeava" via HTTP
+// (uma chamada disparando a próxima). NÃO FUNCIONA — a própria Vercel detecta
+// e bloqueia com "508 Loop Detected" depois de alguns saltos (visto em
+// produção em 2026-11-18). Solução: aumentar maxDuration (ver vercel.json,
+// hoje 300s) e processar o catálogo inteiro numa única chamada. Ainda assim
+// salva o progresso periodicamente em estoque_sync_status, então se um dia o
+// catálogo crescer demais e não couber mais em 300s, basta chamar de novo —
+// ela retoma de onde parou em vez de recomeçar (a menos que já tenha passado
+// TRAVADO_APOS_MS, daí recomeça do zero pra não trabalhar com dado velho).
 const https = require("https");
 const { classificarProduto } = require("./_lib/estoque-classificacao");
 
@@ -19,9 +23,9 @@ const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
 const CRON_SECRET = process.env.CRON_SECRET;
 
-const ORCAMENTO_MS = 45000; // tempo de trabalho por chamada — folga confortável nos 60s de maxDuration
+const ORCAMENTO_TOTAL_MS = 280000; // folga sob os 300s de maxDuration (vercel.json)
 const MAX_TENTATIVAS_POR_PRODUTO = 3; // falhas pontuais (ex: bloqueio momentâneo da Olist) tentam de novo antes de desistir por hoje
-const MAX_SALTOS = 20;   // trava de segurança contra encadeamento sem fim
+const SALVAR_PROGRESSO_A_CADA = 20; // checkpoint no banco, pra não perder tudo se a chamada cair no meio
 const TRAVADO_APOS_MS = 30 * 60 * 1000; // se "em_andamento" ficar preso, uma nova chamada recomeça do zero
 
 const supaHeaders = {
@@ -79,6 +83,7 @@ async function salvarStatus(status) {
 }
 
 async function upsertCatalogo(linhas) {
+  if (!linhas.length) return;
   const supaHost = SUPABASE_URL.replace("https://", "");
   const payload = JSON.stringify(linhas);
   await httpsRequest("POST", supaHost, "/rest/v1/estoque_catalogo?on_conflict=produto_id", payload,
@@ -96,39 +101,13 @@ async function limparForaDoCatalogo(idsDoDia) {
     { ...supaHeaders, Prefer: "return=minimal" });
 }
 
-// Dispara a continuação sem esperar ela terminar — só garante que o pedido
-// saiu antes desta execução devolver sua própria resposta. Logado porque já
-// falhou em silêncio uma vez (ver CLAUDE.md) — se falhar de novo, precisa
-// aparecer nos logs da Vercel em vez de só parar sem explicação.
-function dispararContinuacao(host) {
-  return new Promise((resolve) => {
-    if (!host) {
-      console.error("[estoque-sync] sem req.headers.host — não foi possível disparar a continuação");
-      return resolve();
-    }
-    const [hostname, porta] = host.split(":");
-    console.log(`[estoque-sync] disparando continuação em https://${hostname}/api/estoque-sync-diario`);
-    const req = https.request({
-      hostname, port: porta || 443, path: "/api/estoque-sync-diario", method: "POST",
-      headers: CRON_SECRET ? { Authorization: "Bearer " + CRON_SECRET } : {},
-    }, (resposta) => {
-      console.log(`[estoque-sync] continuação disparada, status ${resposta.statusCode}`);
-      resposta.resume(); // drena a resposta pra liberar o socket, sem esperar o corpo todo
-    });
-    req.on("error", (e) => {
-      console.error("[estoque-sync] erro ao disparar continuação:", e.message);
-      resolve();
-    });
-    req.end();
-    setTimeout(resolve, 800);
-  });
-}
-
 module.exports = async (req, res) => {
   const vercelCron = req.headers["x-vercel-cron"];
   if (CRON_SECRET && req.headers.authorization !== `Bearer ${CRON_SECRET}` && !vercelCron) {
     return res.status(401).json({ erro: "não autorizado" });
   }
+
+  const inicioExecucao = Date.now();
 
   try {
     let status = await lerStatus();
@@ -149,22 +128,16 @@ module.exports = async (req, res) => {
         ultimo_erro: null,
       };
       await salvarStatus(status);
+      console.log(`[estoque-sync] execução nova: ${todos.length} produtos ativos encontrados`);
+    } else {
+      console.log(`[estoque-sync] retomando execução anterior: ${status.pendentes.length} ainda pendentes`);
     }
 
-    if (status.saltos >= MAX_SALTOS) {
-      status.em_andamento = false;
-      status.ultimo_erro = `limite de ${MAX_SALTOS} saltos de segurança atingido com ${status.pendentes.length} produtos ainda pendentes`;
-      await salvarStatus(status);
-      console.error("[estoque-sync]", status.ultimo_erro);
-      return res.status(200).json({ ok: false, erro: status.ultimo_erro });
-    }
-
-    console.log(`[estoque-sync] salto ${status.saltos + 1}: ${status.pendentes.length} pendentes`);
-    const inicioHop = Date.now();
     const fila = [...status.pendentes];
-    const linhas = [];
+    let linhasParaSalvar = [];
+    let processadosDesdeUltimoCheckpoint = 0;
 
-    while (fila.length > 0 && (Date.now() - inicioHop) < ORCAMENTO_MS) {
+    while (fila.length > 0 && (Date.now() - inicioExecucao) < ORCAMENTO_TOTAL_MS) {
       const prod = fila.shift();
       await sleep(600);
       let p = null;
@@ -185,35 +158,49 @@ module.exports = async (req, res) => {
         } else {
           console.error(`[estoque-sync] produto ${prod.id} (${prod.nome}) falhou ${tentativas}x — desiste por hoje, tenta de novo amanha`);
         }
-        continue;
+      } else {
+        const { elegivel, motivoExclusao } = classificarProduto(p);
+        linhasParaSalvar.push({
+          produto_id: p.id, sku: p.codigo || "", nome: p.nome,
+          categoria: p.categoria || null, fornecedor: p.nome_fornecedor || null, unidade: p.unidade || null,
+          estoque_minimo: parseFloat(p.estoque_minimo || 0),
+          elegivel, motivo_exclusao: motivoExclusao,
+          atualizado_em: new Date().toISOString(),
+        });
       }
 
-      const { elegivel, motivoExclusao } = classificarProduto(p);
-      linhas.push({
-        produto_id: p.id, sku: p.codigo || "", nome: p.nome,
-        categoria: p.categoria || null, fornecedor: p.nome_fornecedor || null, unidade: p.unidade || null,
-        estoque_minimo: parseFloat(p.estoque_minimo || 0),
-        elegivel, motivo_exclusao: motivoExclusao,
-        atualizado_em: new Date().toISOString(),
-      });
+      processadosDesdeUltimoCheckpoint++;
+      if (processadosDesdeUltimoCheckpoint >= SALVAR_PROGRESSO_A_CADA) {
+        await upsertCatalogo(linhasParaSalvar);
+        linhasParaSalvar = [];
+        status.pendentes = fila;
+        status.processados = status.total_catalogo - fila.length;
+        status.saltos += 1;
+        await salvarStatus(status);
+        console.log(`[estoque-sync] checkpoint: ${status.processados}/${status.total_catalogo} processados, ${fila.length} pendentes`);
+        processadosDesdeUltimoCheckpoint = 0;
+      }
     }
-    if (linhas.length) await upsertCatalogo(linhas);
 
+    await upsertCatalogo(linhasParaSalvar);
     status.pendentes = fila;
     status.processados = status.total_catalogo - fila.length;
     status.saltos += 1;
-    console.log(`[estoque-sync] salto ${status.saltos} concluido: ${linhas.length} classificados, ${fila.length} ainda pendentes`);
 
     if (fila.length === 0) {
       await limparForaDoCatalogo(status.ids_do_dia);
       status.em_andamento = false;
       status.concluido_em = new Date().toISOString();
       await salvarStatus(status);
+      console.log(`[estoque-sync] concluído: ${status.total_catalogo} produtos classificados em ${Math.round((Date.now() - inicioExecucao) / 1000)}s`);
       return res.status(200).json({ ok: true, concluido: true, total: status.total_catalogo });
     }
 
+    // Orçamento de tempo esgotado antes de terminar o catálogo inteiro — fica
+    // salvo como está (em_andamento continua true) pra retomar na próxima
+    // chamada em vez de recomeçar do zero.
     await salvarStatus(status);
-    await dispararContinuacao(req.headers.host);
+    console.error(`[estoque-sync] orçamento de tempo esgotado: ${status.processados}/${status.total_catalogo} processados, ${fila.length} pendentes — precisa de outra chamada pra terminar`);
     return res.status(200).json({ ok: true, concluido: false, processados: status.processados, restante: fila.length });
 
   } catch (e) {

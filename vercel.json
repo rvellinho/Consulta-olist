@@ -13,7 +13,7 @@
     },
     "api/estoque-sync-diario.js": {
       "memory": 256,
-      "maxDuration": 60
+      "maxDuration": 300
     }
   },
   "crons": [
