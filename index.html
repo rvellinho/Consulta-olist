@@ -288,6 +288,11 @@
 
   <!-- ABA ESTOQUE -->
   <div id="aba-estoque" class="hidden">
+    <!-- Catálogo de produtos (cadastro + elegibilidade), atualizado 1x/dia -->
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;background:var(--s2);border-radius:8px;padding:10px 14px;">
+      <div style="font-size:12px;color:var(--mt);" id="estoque-catalogo-info">Catálogo: carregando...</div>
+      <button class="btn-sec" id="btn-atualizar-catalogo" onclick="atualizarCatalogoEstoque()">🔁 Atualizar Catálogo Agora</button>
+    </div>
     <!-- Filtros -->
     <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:12px;align-items:center;">
       <input id="est-busca" placeholder="🔍 Buscar produto ou SKU..." oninput="filtrarEstoque()" style="border:1.5px solid var(--br);border-radius:8px;padding:8px 12px;font-size:13px;font-family:Inter,sans-serif;outline:none;min-width:200px;flex:1;" />
@@ -611,6 +616,7 @@ function mudarAba(aba){
   el("tela-app").classList.toggle("app-wide",aba==="relatorios");
   if(aba==="usuarios")carregarUsuarios();
   if(aba==="relatorios")inicializarDatasRelatorio();
+  if(aba==="estoque")carregarInfoCatalogoEstoque();
 }
 
 // MENU SUSPENSO "RELATÓRIOS"
@@ -1133,6 +1139,62 @@ function sortEstoque(colIdx) {
     return String(va).localeCompare(String(vb)) * estoqueSortDir;
   });
   renderTabelaEstoque(dadosEstoqueFiltrado);
+}
+
+function formatarDataHoraBR(iso) {
+  if (!iso) return null;
+  return new Date(iso).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" });
+}
+
+async function carregarInfoCatalogoEstoque() {
+  const info = el("estoque-catalogo-info");
+  try {
+    const r = await fetch("/api/estoque-sync-diario");
+    const d = await r.json();
+    const s = d.status;
+    if (!s) { info.textContent = "Catálogo: ainda não sincronizado"; return; }
+    if (s.em_andamento) {
+      info.textContent = `Catálogo: atualizando agora... (${s.processados || 0}/${s.total_catalogo || "?"} produtos)`;
+    } else {
+      info.textContent = `Catálogo: ${s.total_catalogo} produtos — atualizado em ${formatarDataHoraBR(s.concluido_em)}`;
+    }
+  } catch (e) {
+    info.textContent = "Catálogo: não foi possível checar o status";
+  }
+}
+
+async function atualizarCatalogoEstoque() {
+  const btn = el("btn-atualizar-catalogo");
+  const info = el("estoque-catalogo-info");
+  btn.disabled = true;
+  info.textContent = "Catálogo: iniciando atualização...";
+
+  const poll = setInterval(async () => {
+    try {
+      const r = await fetch("/api/estoque-sync-diario");
+      const d = await r.json();
+      const s = d.status;
+      if (s && s.em_andamento) {
+        info.textContent = `Catálogo: atualizando... (${s.processados || 0}/${s.total_catalogo || "?"} produtos, pode levar alguns minutos)`;
+      }
+    } catch (e) { /* ignora falha de uma leitura de progresso isolada */ }
+  }, 4000);
+
+  try {
+    const r = await fetch("/api/estoque-sync-diario", { method: "POST" });
+    const d = await r.json();
+    if (!r.ok || !d.ok) throw new Error(d.erro || "Falha ao atualizar o catálogo");
+    if (d.concluido) {
+      info.textContent = `Catálogo: ${d.total} produtos — atualizado agora (${new Date().toLocaleTimeString("pt-BR")})`;
+    } else {
+      info.textContent = `Catálogo: parcialmente atualizado (${d.processados}/${d.processados + d.restante}). Clique novamente pra terminar.`;
+    }
+  } catch (e) {
+    info.textContent = "Catálogo: erro ao atualizar — " + e.message;
+  } finally {
+    clearInterval(poll);
+    btn.disabled = false;
+  }
 }
 
 async function carregarEstoque() {

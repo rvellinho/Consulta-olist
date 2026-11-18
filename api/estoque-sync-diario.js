@@ -102,6 +102,18 @@ async function limparForaDoCatalogo(idsDoDia) {
 }
 
 module.exports = async (req, res) => {
+  // Leitura de status (usada pelo botão "Atualizar Catálogo" do frontend pra
+  // mostrar quando foi a última sincronização e acompanhar o progresso de uma
+  // em andamento) — não dispara processamento, só lê.
+  if (req.method === "GET") {
+    try {
+      const status = await lerStatus();
+      return res.status(200).json({ ok: true, status });
+    } catch (e) {
+      return res.status(500).json({ erro: e.message });
+    }
+  }
+
   const vercelCron = req.headers["x-vercel-cron"];
   if (CRON_SECRET && req.headers.authorization !== `Bearer ${CRON_SECRET}` && !vercelCron) {
     return res.status(401).json({ erro: "não autorizado" });
