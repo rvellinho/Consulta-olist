@@ -46,7 +46,7 @@ module.exports = async (req, res) => {
     // GET — listar todos os usuários
     if (req.method === "GET") {
       const r = await httpsRequest("GET", supaHost,
-        "/rest/v1/usuarios?select=id,login,perfil,ativo,criado_em&order=criado_em.asc",
+        "/rest/v1/usuarios?select=id,login,perfil,ativo,empresas,criado_em&order=criado_em.asc",
         null,
         supaHeaders
       );
@@ -56,10 +56,11 @@ module.exports = async (req, res) => {
 
     // POST — criar usuário
     if (req.method === "POST") {
-      const { login, senha, perfil } = parseBody(req.body);
+      const { login, senha, perfil, empresas } = parseBody(req.body);
       if (!login || !senha || !perfil) return res.status(400).json({ erro: "login, senha e perfil são obrigatórios" });
 
-      const payload = JSON.stringify({ login: login.trim().toLowerCase(), senha, perfil, ativo: true });
+      const empresasValidas = Array.isArray(empresas) && empresas.length ? empresas : ["rampa"];
+      const payload = JSON.stringify({ login: login.trim().toLowerCase(), senha, perfil, ativo: true, empresas: empresasValidas });
       const r = await httpsRequest("POST", supaHost,
         "/rest/v1/usuarios",
         payload,
@@ -76,7 +77,7 @@ module.exports = async (req, res) => {
 
     // PUT — editar usuário
     if (req.method === "PUT") {
-      const { id, login, senha, perfil, ativo } = parseBody(req.body);
+      const { id, login, senha, perfil, ativo, empresas } = parseBody(req.body);
       if (!id) return res.status(400).json({ erro: "id obrigatório" });
 
       const updates = {};
@@ -84,6 +85,7 @@ module.exports = async (req, res) => {
       if (senha) updates.senha = senha;
       if (perfil) updates.perfil = perfil;
       if (ativo !== undefined) updates.ativo = ativo;
+      if (Array.isArray(empresas) && empresas.length) updates.empresas = empresas;
 
       const payload = JSON.stringify(updates);
       const r = await httpsRequest("PATCH", supaHost,

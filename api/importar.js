@@ -1,11 +1,10 @@
 // Importação em lote via planilha
 const https = require("https");
+const { getAccessToken } = require("./_lib/olist-auth");
+const { getConfigEmpresa } = require("./_lib/empresas");
 
-const CLIENT_ID = process.env.OLIST_CLIENT_ID;
-const CLIENT_SECRET = process.env.OLIST_CLIENT_SECRET;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
-const TOKEN_V2 = process.env.OLIST_TOKEN;
 
 function httpsRequest(method, hostname, path, body, headers) {
   return new Promise((resolve, reject) => {
@@ -41,45 +40,12 @@ const supaHeaders = {
   "Content-Type": "application/json",
 };
 
-// Busca refresh token do Supabase e obtém access token V3
-async function getAccessToken() {
-  const supaHost = SUPABASE_URL.replace("https://", "");
-  const r = await httpsRequest("GET", supaHost,
-    "/rest/v1/tokens_oauth?id=eq.olist_refresh_token&select=token",
-    null, supaHeaders
-  );
-  const data = parseJSON(r.text);
-  if (!Array.isArray(data) || !data[0]) throw new Error("Refresh token não encontrado");
-  const refreshToken = data[0].token;
-
-  const body = "grant_type=refresh_token"
-    + "&client_id=" + encodeURIComponent(CLIENT_ID)
-    + "&client_secret=" + encodeURIComponent(CLIENT_SECRET)
-    + "&refresh_token=" + encodeURIComponent(refreshToken);
-
-  const tr = await httpsRequest("POST", "accounts.tiny.com.br",
-    "/realms/tiny/protocol/openid-connect/token", body,
-    { "Content-Type": "application/x-www-form-urlencoded", "Content-Length": Buffer.byteLength(body) }
-  );
-  const td = parseJSON(tr.text);
-  if (!td.access_token) throw new Error("Falha ao obter access token");
-
-  // Salva novo refresh token se renovado
-  if (td.refresh_token && td.refresh_token !== refreshToken) {
-    const p = JSON.stringify({ token: td.refresh_token, atualizado: new Date().toISOString() });
-    await httpsRequest("PATCH", supaHost,
-      "/rest/v1/tokens_oauth?id=eq.olist_refresh_token", p,
-      { ...supaHeaders, "Content-Length": Buffer.byteLength(p), Prefer: "return=minimal" }
-    );
-  }
-  return td.access_token;
-}
-
 // Busca cliente no Olist pelo CNPJ
-async function buscarClientePorCnpj(cnpj) {
+async function buscarClientePorCnpj(empresa, cnpj) {
+  const { tokenV2 } = getConfigEmpresa(empresa);
   const cnpjLimpo = cnpj.replace(/[.\-\/]/g, "").trim();
   const params = new URLSearchParams({
-    token: TOKEN_V2, cpf_cnpj: cnpjLimpo, formato: "JSON"
+    token: tokenV2, cpf_cnpj: cnpjLimpo, formato: "JSON"
   });
   const r = await httpsRequest("POST", "api.tiny.com.br",
     "/api2/contatos.pesquisa.php", params.toString(),
@@ -106,17 +72,18 @@ async function atualizarLimite(accessToken, idOlist, nome, limite) {
 }
 
 // Salva análise no Supabase
-async function salvarAnalise(chave, dataAnalise, anotacoes, ultimoUsuario) {
+async function salvarAnalise(empresa, chave, dataAnalise, anotacoes, ultimoUsuario) {
   const supaHost = SUPABASE_URL.replace("https://", "");
   const payload = JSON.stringify({
     cliente_id: chave,
+    empresa,
     data_analise: dataAnalise || null,
     anotacoes: anotacoes || "",
     ultimo_usuario: ultimoUsuario,
     ultima_alteracao: new Date().toISOString(),
   });
   const ru = await httpsRequest("PATCH", supaHost,
-    "/rest/v1/analises_credito?cliente_id=eq." + chave, payload,
+    "/rest/v1/analises_credito?cliente_id=eq." + chave + "&empresa=eq." + empresa, payload,
     { ...supaHeaders, "Content-Length": Buffer.byteLength(payload), Prefer: "return=minimal,count=exact" }
   );
   const naoAtualizou = !ru.headers["content-range"] || ru.headers["content-range"] === "*/0";
@@ -149,14 +116,15 @@ module.exports = async (req, res) => {
 
   try {
     const body = parseBody(req.body);
-    const { linhas, ultimoUsuario } = body;
+    const { linhas, ultimoUsuario, empresa } = body;
+    const empresaChave = String(empresa || "rampa").toLowerCase();
 
     if (!Array.isArray(linhas) || !linhas.length) {
       return res.status(400).json({ erro: "Nenhuma linha enviada" });
     }
 
     // Obtém access token uma vez para toda a importação
-    const accessToken = await getAccessToken();
+    const accessToken = await getAccessToken(empresaChave);
 
     const resultados = [];
     let sucesso = 0, erros = 0;
@@ -172,7 +140,7 @@ module.exports = async (req, res) => {
 
       try {
         // Busca cliente no Olist pelo CNPJ
-        const cliente = await buscarClientePorCnpj(cnpj);
+        const cliente = await buscarClientePorCnpj(empresaChave, cnpj);
         if (!cliente) {
           resultados.push({ cnpj, status: "erro", msg: "Cliente não encontrado no Olist" });
           erros++;
@@ -189,7 +157,7 @@ module.exports = async (req, res) => {
         await atualizarLimite(accessToken, cliente.id, cliente.nome, limiteNum);
 
         // Salva análise no Supabase
-        await salvarAnalise(chave, dataFormatada, anotacoes || "", ultimoUsuario || "Importação");
+        await salvarAnalise(empresaChave, chave, dataFormatada, anotacoes || "", ultimoUsuario || "Importação");
 
         resultados.push({ cnpj, nome: cliente.nome, status: "ok", limite: limiteNum, data: dataFormatada });
         sucesso++;

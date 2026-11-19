@@ -160,6 +160,15 @@
   </div>
 </div>
 
+<!-- ESCOLHA DE EMPRESA -->
+<div id="tela-empresa" class="login-wrap hidden">
+  <div class="login-card">
+    <div class="login-logo"><img src="/RAMPA com transparencia.png" alt="Rampa" /></div>
+    <p class="login-sub">Escolha a empresa</p>
+    <div id="empresa-opcoes" style="display:flex;flex-direction:column;gap:10px;margin-top:6px;"></div>
+  </div>
+</div>
+
 <!-- APP -->
 <div id="tela-app" class="app hidden">
   <header class="hdr">
@@ -168,6 +177,12 @@
       <span id="badge-demo" class="badge-demo hidden">DEMO</span>
     </div>
     <div class="hdr-user">
+      <div id="empresa-switch-wrap" class="hidden" style="position:relative;">
+        <button type="button" onclick="toggleEmpresaSwitch(event)" id="btn-empresa-switch" style="border:1.5px solid var(--br);border-radius:8px;padding:6px 10px;font-size:12px;font-family:Inter,sans-serif;background:#fff;cursor:pointer;white-space:nowrap;">
+          🏢 <span id="empresa-switch-label">Rampa</span> ▾
+        </button>
+        <div id="empresa-switch-menu" class="hidden" style="position:absolute;top:calc(100% + 4px);right:0;z-index:30;background:#fff;border:1px solid var(--br);border-radius:8px;box-shadow:var(--sh);min-width:140px;padding:6px;"></div>
+      </div>
       <div class="u-info">
         <span id="usr-nome" class="u-nome"></span>
         <span id="usr-perfil" class="bp"></span>
@@ -179,9 +194,14 @@
   <!-- ABAS -->
   <div class="nav-tabs">
     <button class="nav-tab active" id="tab-clientes" onclick="mudarAba('clientes')">👥 Clientes</button>
-    <button class="nav-tab hidden" id="tab-usuarios" onclick="mudarAba('usuarios')">⚙️ Usuários</button>
-    <button class="nav-tab hidden" id="tab-importar" onclick="mudarAba('importar')">📥 Importar</button>
     <button class="nav-tab hidden" id="tab-estoque" onclick="mudarAba('estoque')">📦 Estoque</button>
+    <div class="nav-tab-drop hidden" id="tab-configuracoes">
+      <button class="nav-tab" type="button" onclick="toggleDropConfiguracoes(event)">⚙️ Configurações ▾</button>
+      <div class="drop-menu hidden" id="drop-configuracoes-menu">
+        <button class="drop-item" type="button" onclick="acaoUsuariosMenu()">👥 Usuários</button>
+        <button class="drop-item" type="button" id="drop-item-importar" onclick="acaoImportarMenu()">📥 Importar</button>
+      </div>
+    </div>
     <div class="nav-tab-drop hidden" id="tab-relatorios">
       <button class="nav-tab" type="button" onclick="toggleDropRelatorios(event)">📊 Relatórios ▾</button>
       <div class="drop-menu hidden" id="drop-relatorios-menu">
@@ -429,6 +449,13 @@
           <option value="admin">Admin — acesso total</option>
         </select>
       </div>
+      <div class="fg-sm modal-row-full">
+        <label>Empresas que pode acessar</label>
+        <div style="display:flex;gap:14px;">
+          <label style="display:flex;align-items:center;gap:6px;font-weight:400;cursor:pointer;"><input type="checkbox" id="mu-emp-rampa" style="width:14px;height:14px;" /> Rampa</label>
+          <label style="display:flex;align-items:center;gap:6px;font-weight:400;cursor:pointer;"><input type="checkbox" id="mu-emp-tf" style="width:14px;height:14px;" /> TF</label>
+        </div>
+      </div>
     </div>
     <div id="mu-msg" class="modal-msg hidden"></div>
     <div class="modal-ftr">
@@ -533,6 +560,8 @@
 
 <script>
 let usuarioAtual=null, paginaAtual=1, buscaAtual="", temProxima=false, clienteSel=null, modoDemo=false;
+let empresaAtual="rampa";
+const EMPRESAS={rampa:{label:"Rampa"},tf:{label:"TF"}};
 let analisesBD={}, usuarioEditandoId=null;
 
 const fmtBRL=v=>new Intl.NumberFormat("pt-BR",{style:"currency",currency:"BRL",maximumFractionDigits:0}).format(v||0);
@@ -576,35 +605,116 @@ async function fazerLogin(){
 }
 
 function iniciarApp(u){
-  el("tela-login").classList.add("hidden");el("tela-app").classList.remove("hidden");
-  mudarAba("clientes");
+  usuarioAtual=u;
+  const permitidas=Array.isArray(u.empresas)&&u.empresas.length?u.empresas:["rampa"];
+  const salva=sessionStorage.getItem("empresaEscolhida");
+  if(permitidas.length===1){
+    empresaAtual=permitidas[0];
+    continuarIniciarApp(u);
+  }else if(salva&&permitidas.includes(salva)){
+    empresaAtual=salva;
+    continuarIniciarApp(u);
+  }else{
+    mostrarTelaEmpresa(permitidas);
+  }
+}
+
+function mostrarTelaEmpresa(permitidas){
+  el("tela-login").classList.add("hidden");
+  el("tela-app").classList.add("hidden");
+  const wrap=el("empresa-opcoes");
+  wrap.innerHTML="";
+  permitidas.forEach(emp=>{
+    const btn=document.createElement("button");
+    btn.className="btn-primary w100";
+    btn.textContent=EMPRESAS[emp]?.label||emp;
+    btn.onclick=()=>escolherEmpresa(emp);
+    wrap.appendChild(btn);
+  });
+  el("tela-empresa").classList.remove("hidden");
+}
+
+function escolherEmpresa(emp){
+  empresaAtual=emp;
+  sessionStorage.setItem("empresaEscolhida",emp);
+  continuarIniciarApp(usuarioAtual);
+}
+
+function continuarIniciarApp(u){
+  el("tela-login").classList.add("hidden");
+  el("tela-empresa").classList.add("hidden");
+  el("tela-app").classList.remove("hidden");
   el("usr-nome").textContent=u.login;
   const bp={admin:["Admin","bp-admin"],analista:["Analista","bp-analista"],visualizador:["Visualizador","bp-viz"]}[u.perfil]||["?","bp-viz"];
   el("usr-perfil").textContent=bp[0];el("usr-perfil").className=`bp ${bp[1]}`;
   if(u.perfil==="visualizador")el("th-analise").style.display="none";
-  // Sempre esconde abas admin primeiro
-  el("tab-usuarios").classList.add("hidden");
-  el("tab-importar").classList.add("hidden");
+  aplicarVisibilidadeAbas(u);
+  atualizarSeletorEmpresaHeader(u);
+  mudarAba(empresaAtual==="rampa"?"clientes":"estoque");
+  if(empresaAtual==="rampa")carregarClientes(1,"");
+}
+
+// Combina a visibilidade por perfil (admin/analista/visualizador) com a
+// disponibilidade por empresa — hoje só a Rampa tem Clientes/Importar/
+// Relatórios funcionando; a TF só tem Estoque.
+function aplicarVisibilidadeAbas(u){
+  el("tab-configuracoes").classList.add("hidden");
   el("tab-estoque").classList.add("hidden");
   el("tab-relatorios").classList.add("hidden");
   if(u.perfil==="admin"){
-    el("tab-usuarios").classList.remove("hidden");
-    el("tab-importar").classList.remove("hidden");
+    el("tab-configuracoes").classList.remove("hidden");
     el("tab-estoque").classList.remove("hidden");
     el("tab-relatorios").classList.remove("hidden");
   }
   if(u.perfil==="analista"){
     el("tab-estoque").classList.remove("hidden");
   }
-  carregarClientes(1,"");
+  const rampaOk=empresaAtual==="rampa";
+  el("tab-clientes").classList.toggle("hidden",!rampaOk);
+  if(!rampaOk)el("tab-relatorios").classList.add("hidden");
+  el("drop-item-importar")?.classList.toggle("hidden",!rampaOk);
+}
+
+function atualizarSeletorEmpresaHeader(u){
+  const permitidas=Array.isArray(u.empresas)&&u.empresas.length?u.empresas:["rampa"];
+  el("empresa-switch-label").textContent=EMPRESAS[empresaAtual]?.label||empresaAtual;
+  const wrap=el("empresa-switch-wrap");
+  if(permitidas.length<2){wrap.classList.add("hidden");return;}
+  wrap.classList.remove("hidden");
+  const menu=el("empresa-switch-menu");
+  menu.innerHTML="";
+  permitidas.forEach(emp=>{
+    const item=document.createElement("button");
+    item.type="button";item.className="drop-item";item.style.width="100%";
+    item.textContent=EMPRESAS[emp]?.label||emp;
+    item.onclick=()=>{el("empresa-switch-menu").classList.add("hidden");trocarEmpresa(emp);};
+    menu.appendChild(item);
+  });
+}
+
+function toggleEmpresaSwitch(e){
+  e.stopPropagation();
+  const menu=el("empresa-switch-menu");
+  const abrir=menu.classList.contains("hidden");
+  fecharTodosDropdowns();
+  menu.classList.toggle("hidden",!abrir);
+}
+
+function trocarEmpresa(emp){
+  if(emp===empresaAtual)return;
+  empresaAtual=emp;
+  sessionStorage.setItem("empresaEscolhida",emp);
+  el("empresa-switch-label").textContent=EMPRESAS[emp]?.label||emp;
+  aplicarVisibilidadeAbas(usuarioAtual);
+  mudarAba(empresaAtual==="rampa"?"clientes":"estoque");
+  if(empresaAtual==="rampa")carregarClientes(1,"");
 }
 
 function fazerLogout(){
-  sessionStorage.removeItem("sessao");usuarioAtual=null;
-  el("tela-app").classList.add("hidden");el("tela-login").classList.remove("hidden");
+  sessionStorage.removeItem("sessao");sessionStorage.removeItem("empresaEscolhida");usuarioAtual=null;
+  el("tela-app").classList.add("hidden");el("tela-empresa").classList.add("hidden");el("tela-login").classList.remove("hidden");
   el("inp-login").value="";el("inp-senha").value="";
-  el("tab-usuarios").classList.add("hidden");
-  el("tab-importar").classList.add("hidden");
+  el("tab-configuracoes").classList.add("hidden");
   el("tab-estoque").classList.add("hidden");
   el("tab-relatorios").classList.add("hidden");
   mudarAba("clientes");
@@ -619,8 +729,7 @@ function mudarAba(aba){
   el("aba-estoque").classList.toggle("hidden",aba!=="estoque");
   el("aba-relatorios").classList.toggle("hidden",aba!=="relatorios");
   el("tab-clientes").classList.toggle("active",aba==="clientes");
-  el("tab-usuarios").classList.toggle("active",aba==="usuarios");
-  el("tab-importar").classList.toggle("active",aba==="importar");
+  el("tab-configuracoes").classList.toggle("active",aba==="usuarios"||aba==="importar");
   el("tab-estoque").classList.toggle("active",aba==="estoque");
   el("tab-relatorios").classList.toggle("active",aba==="relatorios");
   el("tela-app").classList.toggle("app-wide",aba==="relatorios");
@@ -629,10 +738,12 @@ function mudarAba(aba){
   if(aba==="estoque")carregarInfoCatalogoEstoque();
 }
 
-// MENU SUSPENSO "RELATÓRIOS"
+// MENUS SUSPENSOS ("RELATÓRIOS" e "CONFIGURAÇÕES")
 function fecharTodosDropdowns(){
   el("drop-relatorios-menu")?.classList.add("hidden");
   el("drop-lancamentos-menu")?.classList.add("hidden");
+  el("drop-configuracoes-menu")?.classList.add("hidden");
+  el("empresa-switch-menu")?.classList.add("hidden");
 }
 function toggleDropRelatorios(e){
   e.stopPropagation();
@@ -645,9 +756,20 @@ function toggleDropLancamentos(e){
   e.stopPropagation();
   el("drop-lancamentos-menu").classList.toggle("hidden");
 }
+function toggleDropConfiguracoes(e){
+  e.stopPropagation();
+  const menu=el("drop-configuracoes-menu");
+  const abrir=menu.classList.contains("hidden");
+  fecharTodosDropdowns();
+  if(abrir)menu.classList.remove("hidden");
+}
+function acaoUsuariosMenu(){ fecharTodosDropdowns(); mudarAba("usuarios"); }
+function acaoImportarMenu(){ fecharTodosDropdowns(); mudarAba("importar"); }
 document.addEventListener("click",e=>{
-  const wrap=el("tab-relatorios");
-  if(wrap && !wrap.contains(e.target))fecharTodosDropdowns();
+  const dentroRelatorios=el("tab-relatorios")?.contains(e.target);
+  const dentroConfig=el("tab-configuracoes")?.contains(e.target);
+  const dentroEmpresaSwitch=el("empresa-switch-wrap")?.contains(e.target);
+  if(!dentroRelatorios&&!dentroConfig&&!dentroEmpresaSwitch)fecharTodosDropdowns();
 });
 function acaoAtualizarOlistMenu(){
   fecharTodosDropdowns();
@@ -703,7 +825,7 @@ async function carregarClientes(pagina,pesquisa){
   el("estado").innerHTML='<div class="spinner"></div><p>Consultando Olist ERP...</p>';
   el("estado").classList.remove("hidden");el("tabela").classList.add("hidden");el("aviso").classList.add("hidden");
   try{
-    const res=await fetch(`/api/contatos?pagina=${pagina}&pesquisa=${encodeURIComponent(pesquisa||" ")}`);
+    const res=await fetch(`/api/contatos?pagina=${pagina}&pesquisa=${encodeURIComponent(pesquisa||" ")}&empresa=${empresaAtual}`);
     if(!res.ok)throw new Error(`Erro ${res.status}`);
     const data=await res.json();
     analisesBD=data.analises||{};
@@ -748,7 +870,7 @@ async function abrirModal(c){
   el("modal-body").innerHTML='<div class="modal-loading"><div class="spinner-sm"></div> Carregando dados do cliente...</div>';
   el("modal-overlay").classList.remove("hidden");
   let limite=0;
-  if(!modoDemo){try{const res=await fetch(`/api/contatos?id=${id}`);if(res.ok){const data=await res.json();limite=Math.round(parseFloat(data.contato?.limite_credito)||0);}}catch{}}
+  if(!modoDemo){try{const res=await fetch(`/api/contatos?id=${id}&empresa=${empresaAtual}`);if(res.ok){const data=await res.json();limite=Math.round(parseFloat(data.contato?.limite_credito)||0);}}catch{}}
   else{limite=Math.round(c.limiteCredito||0);}
   let html=`<div class="sec-title">💳 Limite &amp; Análise de Crédito</div>`;
   if(podeEditar){
@@ -774,7 +896,7 @@ async function salvarCliente(){
     const anotacoes=document.querySelector("#modal-body textarea")?.value||"";
     const cnpj=clienteSel.cpf_cnpj||clienteSel.cpfCnpj||"";
     if(!modoDemo){
-      const res=await fetch("/api/salvar",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:clienteSel.id,nome:clienteSel.nome,cpfCnpj:cnpj,limiteCredito:limiteNum,dataAnalise,anotacoes,ultimoUsuario:usuarioAtual.login})});
+      const res=await fetch("/api/salvar",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:clienteSel.id,nome:clienteSel.nome,cpfCnpj:cnpj,limiteCredito:limiteNum,dataAnalise,anotacoes,ultimoUsuario:usuarioAtual.login,empresa:empresaAtual})});
       if(!res.ok){const err=await res.json();throw new Error(err.erro||`Erro ${res.status}`);}
     }
     const chave=limparDoc(cnpj)||String(clienteSel.id);
@@ -802,7 +924,7 @@ async function carregarUsuarios(){
           </div>
         </div>
         <div class="usr-actions">
-          <button class="btn-sec" onclick="abrirModalEditarUsuario(${u.id},'${u.login}','${u.perfil}',${u.ativo})">Editar</button>
+          <button class="btn-sec" onclick="abrirModalEditarUsuario(${u.id},'${u.login}','${u.perfil}',${u.ativo},'${(u.empresas||["rampa"]).join(",")}')">Editar</button>
           ${u.login!=='admin'?`<button class="btn-danger" onclick="excluirUsuario(${u.id},'${u.login}')">Excluir</button>`:''}
         </div>
       </div>`).join("");
@@ -814,15 +936,19 @@ function abrirModalNovoUsuario(){
   el("mu-titulo").textContent="Novo Usuário";
   el("mu-login").value="";el("mu-senha").value="";el("mu-perfil").value="visualizador";
   el("mu-login").disabled=false;
+  el("mu-emp-rampa").checked=true;el("mu-emp-tf").checked=false;
   el("mu-msg").classList.add("hidden");
   el("modal-usr-overlay").classList.remove("hidden");
 }
 
-function abrirModalEditarUsuario(id,login,perfil,ativo){
+function abrirModalEditarUsuario(id,login,perfil,ativo,empresasStr){
   usuarioEditandoId=id;
   el("mu-titulo").textContent="Editar Usuário";
   el("mu-login").value=login;el("mu-senha").value="";el("mu-perfil").value=perfil;
   el("mu-login").disabled=true;
+  const empresas=(empresasStr||"rampa").split(",");
+  el("mu-emp-rampa").checked=empresas.includes("rampa");
+  el("mu-emp-tf").checked=empresas.includes("tf");
   el("mu-msg").classList.add("hidden");
   el("modal-usr-overlay").classList.remove("hidden");
 }
@@ -836,12 +962,14 @@ async function salvarUsuario(){
   const login=el("mu-login").value.trim();
   const senha=el("mu-senha").value;
   const perfil=el("mu-perfil").value;
+  const empresas=[el("mu-emp-rampa").checked&&"rampa",el("mu-emp-tf").checked&&"tf"].filter(Boolean);
   try{
     if(!usuarioEditandoId&&(!login||!senha))throw new Error("Login e senha são obrigatórios.");
     if(!perfil)throw new Error("Selecione um perfil.");
+    if(!empresas.length)throw new Error("Marque pelo menos uma empresa.");
     const body=usuarioEditandoId
-      ?{id:usuarioEditandoId,...(senha?{senha}:{}),perfil}
-      :{login,senha,perfil};
+      ?{id:usuarioEditandoId,...(senha?{senha}:{}),perfil,empresas}
+      :{login,senha,perfil,empresas};
     const res=await fetch("/api/usuarios",{method:usuarioEditandoId?"PUT":"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
     const data=await res.json();
     if(!res.ok)throw new Error(data.erro||"Erro ao salvar");
@@ -1065,7 +1193,7 @@ async function executarImportacao() {
       const res = await fetch("/api/importar", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ linhas: lote, ultimoUsuario: usuarioAtual.login })
+        body: JSON.stringify({ linhas: lote, ultimoUsuario: usuarioAtual.login, empresa: empresaAtual })
       });
       const data = await res.json();
       if (data.resultados) resultados.push(...data.resultados);
@@ -1215,7 +1343,7 @@ function formatarDataHoraBR(iso) {
 async function carregarInfoCatalogoEstoque() {
   const info = el("estoque-catalogo-info");
   try {
-    const r = await fetch("/api/estoque-sync-diario");
+    const r = await fetch(`/api/estoque-sync-diario?empresa=${empresaAtual}`);
     const d = await r.json();
     const s = d.status;
     if (!s) { info.textContent = "Catálogo: ainda não sincronizado"; return; }
@@ -1244,7 +1372,7 @@ async function atualizarCatalogoEstoque() {
 
   const poll = setInterval(async () => {
     try {
-      const r = await fetch("/api/estoque-sync-diario");
+      const r = await fetch(`/api/estoque-sync-diario?empresa=${empresaAtual}`);
       const d = await r.json();
       const s = d.status;
       if (s && s.em_andamento) {
@@ -1254,7 +1382,7 @@ async function atualizarCatalogoEstoque() {
   }, 4000);
 
   try {
-    const r = await fetch("/api/estoque-sync-diario", { method: "POST" });
+    const r = await fetch(`/api/estoque-sync-diario?empresa=${empresaAtual}`, { method: "POST" });
     const d = await r.json();
     if (!r.ok || !d.ok) throw new Error(d.erro || "Falha ao atualizar o catálogo");
     if (d.concluido) {
@@ -1278,7 +1406,7 @@ async function carregarEstoque() {
   el("msg-estoque").textContent = "Buscando estoque, compras pendentes e catálogo...";
 
   try {
-    const r = await fetch("/api/estoque?acao=relatorio");
+    const r = await fetch(`/api/estoque?acao=relatorio&empresa=${empresaAtual}`);
     const data = await r.json();
     if (!r.ok) throw new Error(data.erro || "Erro ao buscar o relatório");
     if (data.catalogoVazio) throw new Error('Catálogo ainda não sincronizado — clique em "Atualizar Catálogo Agora" primeiro.');

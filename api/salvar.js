@@ -1,8 +1,7 @@
 // v9 - Refresh token automático via Supabase
 const https = require("https");
+const { getAccessToken } = require("./_lib/olist-auth");
 
-const CLIENT_ID = process.env.OLIST_CLIENT_ID;
-const CLIENT_SECRET = process.env.OLIST_CLIENT_SECRET;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
 
@@ -36,59 +35,11 @@ const supabaseHeaders = {
   "Content-Type": "application/json",
 };
 
-async function getRefreshToken() {
-  const supaHost = SUPABASE_URL.replace("https://", "");
-  const r = await httpsRequest("GET", supaHost,
-    "/rest/v1/tokens_oauth?id=eq.olist_refresh_token&select=token",
-    null,
-    supabaseHeaders
-  );
-  const data = parseJSON(r.text);
-  if (!Array.isArray(data) || !data[0]) throw new Error("Refresh token não encontrado no Supabase");
-  return data[0].token;
-}
-
-async function saveRefreshToken(newToken) {
-  const supaHost = SUPABASE_URL.replace("https://", "");
-  const payload = JSON.stringify({ token: newToken, atualizado: new Date().toISOString() });
-  await httpsRequest("PATCH", supaHost,
-    "/rest/v1/tokens_oauth?id=eq.olist_refresh_token",
-    payload,
-    { ...supabaseHeaders, "Content-Length": Buffer.byteLength(payload), Prefer: "return=minimal" }
-  );
-}
-
-async function getAccessToken() {
-  const refreshToken = await getRefreshToken();
-
-  const body = "grant_type=refresh_token"
-    + "&client_id=" + encodeURIComponent(CLIENT_ID)
-    + "&client_secret=" + encodeURIComponent(CLIENT_SECRET)
-    + "&refresh_token=" + encodeURIComponent(refreshToken);
-
-  const r = await httpsRequest(
-    "POST",
-    "accounts.tiny.com.br",
-    "/realms/tiny/protocol/openid-connect/token",
-    body,
-    { "Content-Type": "application/x-www-form-urlencoded", "Content-Length": Buffer.byteLength(body) }
-  );
-
-  const data = parseJSON(r.text);
-  if (!data.access_token) throw new Error("Falha ao obter access token: " + r.text);
-
-  // Salva novo refresh token se foi renovado
-  if (data.refresh_token && data.refresh_token !== refreshToken) {
-    await saveRefreshToken(data.refresh_token);
-  }
-
-  return data.access_token;
-}
-
-async function salvarAnalise(chave, dataAnalise, anotacoes, ultimoUsuario) {
+async function salvarAnalise(empresa, chave, dataAnalise, anotacoes, ultimoUsuario) {
   const supaHost = SUPABASE_URL.replace("https://", "");
   const payload = JSON.stringify({
     cliente_id: chave,
+    empresa,
     data_analise: dataAnalise || null,
     anotacoes: anotacoes || "",
     ultimo_usuario: ultimoUsuario,
@@ -96,7 +47,7 @@ async function salvarAnalise(chave, dataAnalise, anotacoes, ultimoUsuario) {
   });
 
   const ru = await httpsRequest("PATCH", supaHost,
-    "/rest/v1/analises_credito?cliente_id=eq." + chave,
+    "/rest/v1/analises_credito?cliente_id=eq." + chave + "&empresa=eq." + empresa,
     payload,
     { ...supabaseHeaders, "Content-Length": Buffer.byteLength(payload), Prefer: "return=minimal,count=exact" }
   );
@@ -122,7 +73,8 @@ module.exports = async (req, res) => {
 
   try {
     const parsed = parseBody(req.body);
-    const { id, nome, cpfCnpj, limiteCredito, dataAnalise, anotacoes, ultimoUsuario } = parsed;
+    const { id, nome, cpfCnpj, limiteCredito, dataAnalise, anotacoes, ultimoUsuario, empresa } = parsed;
+    const empresaChave = String(empresa || "rampa").toLowerCase();
 
     if (!id) return res.status(400).json({ erro: "id obrigatorio" });
 
@@ -133,7 +85,7 @@ module.exports = async (req, res) => {
     const limiteFormatado = limiteNumero <= 0 ? 1 : limiteNumero;
 
     // Obtém access token (busca refresh token do Supabase e renova automaticamente)
-    const accessToken = await getAccessToken();
+    const accessToken = await getAccessToken(empresaChave);
 
     // Atualiza limite no Olist via API V3
     const v3Body = JSON.stringify({ nome, limiteCredito: limiteFormatado });
@@ -155,7 +107,7 @@ module.exports = async (req, res) => {
 
     // Salva análise no Supabase usando CNPJ/CPF como chave
     const chave = String(cpfCnpj || id).replace(/[.\-\/]/g, "");
-    await salvarAnalise(chave, dataAnalise, anotacoes, ultimoUsuario);
+    await salvarAnalise(empresaChave, chave, dataAnalise, anotacoes, ultimoUsuario);
 
     return res.status(200).json({ ok: true });
 

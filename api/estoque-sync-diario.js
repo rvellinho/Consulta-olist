@@ -17,8 +17,8 @@
 // TRAVADO_APOS_MS, daí recomeça do zero pra não trabalhar com dado velho).
 const https = require("https");
 const { classificarProduto } = require("./_lib/estoque-classificacao");
+const { getConfigEmpresa } = require("./_lib/empresas");
 
-const TOKEN_V2 = process.env.OLIST_TOKEN;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
 const CRON_SECRET = process.env.CRON_SECRET;
@@ -48,12 +48,13 @@ function httpsRequest(method, hostname, path, body, headers) {
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 function parseJSON(text) { try { return JSON.parse(text); } catch { return {}; } }
 
-async function buscarTodosProdutosAtivos() {
+async function buscarTodosProdutosAtivos(empresa) {
+  const { tokenV2 } = getConfigEmpresa(empresa);
   const produtos = [];
   let pagina = 1;
   while (true) {
     const body = new URLSearchParams({
-      token: TOKEN_V2, pesquisa: " ", situacao: "A",
+      token: tokenV2, pesquisa: " ", situacao: "A",
       pagina: String(pagina), formato: "JSON",
     }).toString();
     const r = await httpsRequest("POST", "api.tiny.com.br", "/api2/produtos.pesquisa.php", body,
@@ -69,16 +70,25 @@ async function buscarTodosProdutosAtivos() {
   return produtos;
 }
 
-async function lerStatus() {
+async function lerStatus(empresa) {
   const supaHost = SUPABASE_URL.replace("https://", "");
-  const r = await httpsRequest("GET", supaHost, "/rest/v1/estoque_sync_status?id=eq.1&select=*", null, supaHeaders);
+  const r = await httpsRequest("GET", supaHost, `/rest/v1/estoque_sync_status?empresa=eq.${empresa}&select=*`, null, supaHeaders);
   return parseJSON(r.text)?.[0] || null;
 }
 
-async function salvarStatus(status) {
+// Garante que existe uma linha de status pra essa empresa (não faz nada se
+// já existir — precisa de uma constraint única em "empresa" pra isso valer).
+async function criarStatus(empresa) {
+  const supaHost = SUPABASE_URL.replace("https://", "");
+  const payload = JSON.stringify({ empresa });
+  await httpsRequest("POST", supaHost, "/rest/v1/estoque_sync_status?on_conflict=empresa", payload,
+    { ...supaHeaders, "Content-Length": Buffer.byteLength(payload), Prefer: "resolution=ignore-duplicates,return=minimal" });
+}
+
+async function salvarStatus(empresa, status) {
   const supaHost = SUPABASE_URL.replace("https://", "");
   const payload = JSON.stringify(status);
-  await httpsRequest("PATCH", supaHost, "/rest/v1/estoque_sync_status?id=eq.1", payload,
+  await httpsRequest("PATCH", supaHost, `/rest/v1/estoque_sync_status?empresa=eq.${empresa}`, payload,
     { ...supaHeaders, "Content-Length": Buffer.byteLength(payload), Prefer: "return=minimal" });
 }
 
@@ -87,41 +97,44 @@ async function salvarStatus(status) {
 // qualquer hora) em vez de só nos logs da Vercel, que no plano Hobby somem
 // depois de 1h — sem isso, uma falha logo no início (antes do status normal
 // existir) passava sem deixar nenhum rastro.
-async function marcarTentativa(erro) {
+async function marcarTentativa(empresa, erro) {
+  await criarStatus(empresa);
   const supaHost = SUPABASE_URL.replace("https://", "");
   const campos = { ultima_tentativa_em: new Date().toISOString() };
   if (erro) campos.ultimo_erro = erro;
   const payload = JSON.stringify(campos);
-  await httpsRequest("PATCH", supaHost, "/rest/v1/estoque_sync_status?id=eq.1", payload,
+  await httpsRequest("PATCH", supaHost, `/rest/v1/estoque_sync_status?empresa=eq.${empresa}`, payload,
     { ...supaHeaders, "Content-Length": Buffer.byteLength(payload), Prefer: "return=minimal" });
 }
 
-async function upsertCatalogo(linhas) {
+async function upsertCatalogo(empresa, linhas) {
   if (!linhas.length) return;
   const supaHost = SUPABASE_URL.replace("https://", "");
-  const payload = JSON.stringify(linhas);
-  await httpsRequest("POST", supaHost, "/rest/v1/estoque_catalogo?on_conflict=produto_id", payload,
+  const payload = JSON.stringify(linhas.map(l => ({ ...l, empresa })));
+  await httpsRequest("POST", supaHost, "/rest/v1/estoque_catalogo?on_conflict=produto_id,empresa", payload,
     { ...supaHeaders, "Content-Length": Buffer.byteLength(payload), Prefer: "resolution=merge-duplicates,return=minimal" });
 }
 
 // Remove do catálogo quem não apareceu mais na listagem de produtos ativos
 // de hoje (produto inativado/excluído na Olist) — só roda quando a
 // sincronização termina o catálogo inteiro com sucesso.
-async function limparForaDoCatalogo(idsDoDia) {
+async function limparForaDoCatalogo(empresa, idsDoDia) {
   if (!idsDoDia.length) return;
   const supaHost = SUPABASE_URL.replace("https://", "");
   const lista = idsDoDia.join(",");
-  await httpsRequest("DELETE", supaHost, `/rest/v1/estoque_catalogo?produto_id=not.in.(${lista})`, null,
+  await httpsRequest("DELETE", supaHost, `/rest/v1/estoque_catalogo?empresa=eq.${empresa}&produto_id=not.in.(${lista})`, null,
     { ...supaHeaders, Prefer: "return=minimal" });
 }
 
 module.exports = async (req, res) => {
+  const empresa = String(req.query.empresa || "rampa").toLowerCase();
+
   // Leitura de status (usada pelo botão "Atualizar Catálogo" do frontend pra
   // mostrar quando foi a última sincronização e acompanhar o progresso de uma
   // em andamento) — não dispara processamento, só lê.
   if (req.method === "GET") {
     try {
-      const status = await lerStatus();
+      const status = await lerStatus(empresa);
       return res.status(200).json({ ok: true, status });
     } catch (e) {
       return res.status(500).json({ erro: e.message });
@@ -136,13 +149,13 @@ module.exports = async (req, res) => {
   const inicioExecucao = Date.now();
 
   try {
-    await marcarTentativa();
-    let status = await lerStatus();
+    await marcarTentativa(empresa);
+    let status = await lerStatus(empresa);
     const iniciadoHaMuito = status?.em_andamento && status.iniciado_em
       && (Date.now() - new Date(status.iniciado_em).getTime() > TRAVADO_APOS_MS);
 
     if (!status || !status.em_andamento || iniciadoHaMuito) {
-      const todos = await buscarTodosProdutosAtivos();
+      const todos = await buscarTodosProdutosAtivos(empresa);
       status = {
         em_andamento: true,
         pendentes: todos,
@@ -154,12 +167,13 @@ module.exports = async (req, res) => {
         concluido_em: null,
         ultimo_erro: null,
       };
-      await salvarStatus(status);
-      console.log(`[estoque-sync] execução nova: ${todos.length} produtos ativos encontrados`);
+      await salvarStatus(empresa, status);
+      console.log(`[estoque-sync:${empresa}] execução nova: ${todos.length} produtos ativos encontrados`);
     } else {
-      console.log(`[estoque-sync] retomando execução anterior: ${status.pendentes.length} ainda pendentes`);
+      console.log(`[estoque-sync:${empresa}] retomando execução anterior: ${status.pendentes.length} ainda pendentes`);
     }
 
+    const { tokenV2 } = getConfigEmpresa(empresa);
     const fila = [...status.pendentes];
     let linhasParaSalvar = [];
     let processadosDesdeUltimoCheckpoint = 0;
@@ -169,7 +183,7 @@ module.exports = async (req, res) => {
       await sleep(600);
       let p = null;
       try {
-        const body = new URLSearchParams({ token: TOKEN_V2, id: String(prod.id), formato: "JSON" }).toString();
+        const body = new URLSearchParams({ token: tokenV2, id: String(prod.id), formato: "JSON" }).toString();
         const r = await httpsRequest("POST", "api.tiny.com.br", "/api2/produto.obter.php", body,
           { "Content-Type": "application/x-www-form-urlencoded" });
         p = parseJSON(r.text).retorno?.produto;
@@ -198,41 +212,41 @@ module.exports = async (req, res) => {
 
       processadosDesdeUltimoCheckpoint++;
       if (processadosDesdeUltimoCheckpoint >= SALVAR_PROGRESSO_A_CADA) {
-        await upsertCatalogo(linhasParaSalvar);
+        await upsertCatalogo(empresa, linhasParaSalvar);
         linhasParaSalvar = [];
         status.pendentes = fila;
         status.processados = status.total_catalogo - fila.length;
         status.saltos += 1;
-        await salvarStatus(status);
-        console.log(`[estoque-sync] checkpoint: ${status.processados}/${status.total_catalogo} processados, ${fila.length} pendentes`);
+        await salvarStatus(empresa, status);
+        console.log(`[estoque-sync:${empresa}] checkpoint: ${status.processados}/${status.total_catalogo} processados, ${fila.length} pendentes`);
         processadosDesdeUltimoCheckpoint = 0;
       }
     }
 
-    await upsertCatalogo(linhasParaSalvar);
+    await upsertCatalogo(empresa, linhasParaSalvar);
     status.pendentes = fila;
     status.processados = status.total_catalogo - fila.length;
     status.saltos += 1;
 
     if (fila.length === 0) {
-      await limparForaDoCatalogo(status.ids_do_dia);
+      await limparForaDoCatalogo(empresa, status.ids_do_dia);
       status.em_andamento = false;
       status.concluido_em = new Date().toISOString();
-      await salvarStatus(status);
-      console.log(`[estoque-sync] concluído: ${status.total_catalogo} produtos classificados em ${Math.round((Date.now() - inicioExecucao) / 1000)}s`);
+      await salvarStatus(empresa, status);
+      console.log(`[estoque-sync:${empresa}] concluído: ${status.total_catalogo} produtos classificados em ${Math.round((Date.now() - inicioExecucao) / 1000)}s`);
       return res.status(200).json({ ok: true, concluido: true, total: status.total_catalogo });
     }
 
     // Orçamento de tempo esgotado antes de terminar o catálogo inteiro — fica
     // salvo como está (em_andamento continua true) pra retomar na próxima
     // chamada em vez de recomeçar do zero.
-    await salvarStatus(status);
-    console.error(`[estoque-sync] orçamento de tempo esgotado: ${status.processados}/${status.total_catalogo} processados, ${fila.length} pendentes — precisa de outra chamada pra terminar`);
+    await salvarStatus(empresa, status);
+    console.error(`[estoque-sync:${empresa}] orçamento de tempo esgotado: ${status.processados}/${status.total_catalogo} processados, ${fila.length} pendentes — precisa de outra chamada pra terminar`);
     return res.status(200).json({ ok: true, concluido: false, processados: status.processados, restante: fila.length });
 
   } catch (e) {
-    console.error("[estoque-sync] erro fatal:", e.message);
-    try { await marcarTentativa(e.message); } catch (_) { /* best-effort */ }
+    console.error(`[estoque-sync:${empresa}] erro fatal:`, e.message);
+    try { await marcarTentativa(empresa, e.message); } catch (_) { /* best-effort */ }
     return res.status(500).json({ erro: e.message, stack: e.stack });
   }
 };

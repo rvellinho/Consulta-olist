@@ -17,8 +17,10 @@ serverless functions in `api/`. There is no build step, no bundler, and no npm d
   sequential outbound HTTPS calls and need extra headroom/time).
 
 ### Required environment variables
-- `OLIST_TOKEN` — Olist/Tiny API v2 token (legacy `api2/*.php` endpoints, used for read/search).
-- `OLIST_CLIENT_ID`, `OLIST_CLIENT_SECRET` — OAuth2 client for Olist/Tiny API v3 (`public-api/v3/*`, used for writes).
+- `OLIST_TOKEN` — Olist/Tiny API v2 token (legacy `api2/*.php` endpoints, used for read/search) — conta Rampa.
+- `OLIST_CLIENT_ID`, `OLIST_CLIENT_SECRET` — OAuth2 client for Olist/Tiny API v3 (`public-api/v3/*`, used for writes) — conta Rampa.
+- `OLIST_TOKEN_TF`, `OLIST_CLIENT_ID_TF`, `OLIST_CLIENT_SECRET_TF` — mesmas credenciais, mas da conta Olist
+  da Timbers/Fabrique ("TF"). Ver "Multi-empresa" abaixo.
 - `SUPABASE_URL`, `SUPABASE_KEY` — Supabase project URL and service key, used as the app's database via PostgREST.
 
 ## Backend (`api/*.js`)
@@ -60,17 +62,51 @@ for the same duplicated logic.
   UI). Unique on `(ano, mes, carteira)` — `POST` rejects duplicates (Postgres code `23505`), `PUT`
   edits by `id`.
 - **`api/callback.js`** — One-time OAuth authorization-code → token exchange for initial Olist v3
-  setup (manual flow, hits `accounts.tiny.com.br`).
+  setup (manual flow, hits `accounts.tiny.com.br`). Resolve a empresa pelo parâmetro `state` que a
+  Tiny devolve no redirect (`?code=...&state=tf`) — sem `state`, assume `rampa`.
 - **`api/ping.js`** — Refreshes the Olist v3 OAuth token using the stored refresh token (intended
-  to be hit periodically, e.g. via cron, to keep the refresh token from expiring).
+  to be hit periodically, e.g. via cron, to keep the refresh token from expiring). Aceita
+  `?empresa=` (default `rampa`).
+- **`api/_lib/empresas.js`** — mapa de credenciais por empresa (`rampa`, `tf`), lê as env vars
+  certas pra cada uma e lança erro claro se a empresa pedida ainda não tiver as env vars
+  preenchidas.
+- **`api/_lib/olist-auth.js`** — `getAccessToken(empresa)` consolidado (ver "Multi-empresa" abaixo).
 
 ### Olist v3 OAuth refresh-token flow
-The refresh token is persisted in the Supabase table `tokens_oauth` (row `id=olist_refresh_token`).
-`getAccessToken()` (separately implemented in `api/estoque.js`, `api/importar.js`, `api/salvar.js`,
-and `api/ping.js`) reads that refresh token, exchanges it at
-`accounts.tiny.com.br/realms/tiny/protocol/openid-connect/token`, and — if Tiny rotated the
-refresh token — writes the new one back to Supabase. Any change to this flow needs to be applied
-in all of these files.
+O refresh token é persistido na tabela `tokens_oauth` do Supabase — uma linha por empresa
+(`id = olist_refresh_token_rampa` / `olist_refresh_token_tf`). `getAccessToken(empresa)`, em
+`api/_lib/olist-auth.js`, lê o refresh token certo, troca em
+`accounts.tiny.com.br/realms/tiny/protocol/openid-connect/token` e — se a Tiny rotacionou o
+refresh token (ela sempre rotaciona) — salva o novo de volta no Supabase.
+
+## Multi-empresa (Rampa + TF)
+
+Esse projeto atende duas contas Olist: **Rampa** (a original) e **TF** (Timbers + Fabrique —
+duas marcas que dividem CNPJ e uma única conta Olist). O parâmetro `empresa` (valores: `rampa`
+ou `tf`, default `rampa` quando omitido — compatibilidade com chamadas antigas/crons) percorre
+toda a stack:
+
+- **Credenciais**: `api/_lib/empresas.js` resolve `empresa` pras env vars certas (`OLIST_TOKEN`
+  vs `OLIST_TOKEN_TF`, etc.) e pro id certo em `tokens_oauth`.
+- **Backend**: todo endpoint que fala com a Olist ou com uma tabela correlacionada aceita
+  `empresa` via query string (GET) ou corpo (POST) e usa `api/_lib/empresas.js` /
+  `api/_lib/olist-auth.js` — nunca lê `process.env.OLIST_TOKEN` direto.
+- **Supabase**: `estoque_catalogo`, `estoque_sync_status` e `analises_credito` têm uma coluna
+  `empresa` (default `'rampa'`) — toda query/upsert nessas tabelas tem que filtrar por ela,
+  senão mistura dado das duas contas (ex: `produto_id` é um ID interno da Olist, pode colidir
+  entre as duas contas).
+- **`usuarios`**: coluna `empresas` (jsonb, ex: `["rampa"]` ou `["rampa","tf"]`) — controla o
+  seletor de empresa no frontend.
+- **Frontend**: `empresaAtual` (global em `index.html`) guarda a empresa escolhida (tela logo
+  após o login, ou direto se o usuário só tiver acesso a uma); todo `fetch` pras rotas acima
+  passa `empresa=${empresaAtual}`. Hoje só a aba Estoque funciona de fato pra TF — Clientes e
+  Importar ficam escondidos quando `empresaAtual !== "rampa"` (código já aceita `empresa=tf`
+  nesses endpoints, só falta a TF ter credenciais configuradas). Relatórios/lançamentos
+  continuam Rampa-only de propósito (ver decisão do usuário — cross-empresa fica pra depois).
+- **Adicionar uma empresa nova**: criar a entrada em `EMPRESAS` (`api/_lib/empresas.js`),
+  as env vars `OLIST_TOKEN_<X>`/`OLIST_CLIENT_ID_<X>`/`OLIST_CLIENT_SECRET_<X>`, rodar o fluxo
+  OAuth uma vez (via `api/callback.js?state=<x>`) pra gerar o primeiro refresh token, e
+  adicionar `<x>` em `EMPRESAS` no frontend (`index.html`).
 
 ## Frontend (`index.html`)
 
@@ -81,10 +117,16 @@ Single file containing all CSS and JS inline (~1000 lines). No framework, no mod
   If the API call throws (e.g. offline), it falls back to a hardcoded `DEMO_USERS` list and a
   `DEMO` dataset, sets `modoDemo = true`, and shows a "DEMO" badge.
 - **Roles (`perfil`)**: `admin`, `analista`, `visualizador`. `visualizador` is read-only (no
-  "Análise" column/edit form). Only `admin` sees the Usuários and Importar tabs; Estoque is
-  visible to both `admin` and `analista`.
+  "Análise" column/edit form). Only `admin` sees the "⚙️ Configurações" menu (Usuários +
+  Importar, consolidated into one dropdown — see `tab-configuracoes`); Estoque is visible to
+  both `admin` and `analista`.
+- **Empresa** (`empresaAtual`, `rampa` ou `tf`): escolhida numa tela própria logo após o login
+  (pulada se o usuário só tiver acesso a uma — campo `empresas` do usuário) e trocável sem sair
+  do app pelo seletor no cabeçalho. Clientes/Importar ficam escondidos quando a empresa não é
+  `rampa` (ver "Multi-empresa" acima). Persistida em `sessionStorage["empresaEscolhida"]`.
 - **Tabs** (`mudarAba`): Clientes (default), Usuários, Importar, Estoque — each is a `<div>`
-  toggled via `.hidden`, not separate routes/pages.
+  toggled via `.hidden`, not separate routes/pages (Usuários/Importar são acessadas pelo menu
+  Configurações, mas continuam sendo as mesmas abas internamente).
 - **Clientes tab**: paginated (100/page) search against `/api/contatos`; clicking a row opens a
   modal that lazily fetches the live credit limit (`/api/contatos?id=`) and shows/edits the
   matching `analisesBD` entry; saving posts to `/api/salvar`.
@@ -140,13 +182,11 @@ Single file containing all CSS and JS inline (~1000 lines). No framework, no mod
 ### OAuth2 — refresh token
 - O refresh token é rotativo — a Olist emite um novo a cada uso
 - Sempre salvar o novo refresh token no Supabase após cada troca
-- Tabela: `tokens_oauth`, row `id = olist_refresh_token`
-- A função `getAccessToken()` existe duplicada em:
-  - `api/salvar.js`
-  - `api/importar.js`
-  - `api/estoque.js`
-  - `api/ping.js`
-- Qualquer correção nessa função deve ser aplicada nos 4 arquivos
+- Tabela: `tokens_oauth`, uma linha por empresa (`id = olist_refresh_token_rampa` /
+  `olist_refresh_token_tf`)
+- `getAccessToken(empresa)` mora só em `api/_lib/olist-auth.js` (consolidado — antes era
+  duplicado em `salvar.js`/`importar.js`/`estoque.js`/`ping.js`). Qualquer correção é num
+  lugar só agora.
 
 ### Rate limit Olist
 - Limite: ~120 requisições/minuto
@@ -240,15 +280,16 @@ lugar consultável depois que o log da Vercel expirava.
 
 | Tabela | Chave | Descrição |
 |---|---|---|
-| `analises_credito` | CNPJ (string limpa) | Histórico de análises de crédito |
-| `tokens_oauth` | `id` (string) | Tokens OAuth2 da Olist |
-| `usuarios` | `id` | Usuários do sistema (admin, analista, visualizador) |
-| `contatos_propostas` | `id` (unique em `ano`+`mes`+`carteira`) | Lançamento manual de Contatos/Propostas por mês/carteira, na aba Relatórios |
-| `estoque_catalogo` | `produto_id` (id Olist) | Cadastro + elegibilidade de cada produto (serviço/representação), atualizado 1x/dia — ver "Rotina diária de estoque" |
-| `estoque_sync_status` | `id` (fixo em `1`) | Progresso/estado da rotina diária de estoque (lista de pendentes, saltos, última conclusão, última tentativa e último erro — ver "Falha silenciosa do cron diário") |
+| `analises_credito` | CNPJ + `empresa` | Histórico de análises de crédito |
+| `tokens_oauth` | `id` (string, `olist_refresh_token_<empresa>`) | Tokens OAuth2 da Olist, uma linha por empresa |
+| `usuarios` | `id` | Usuários do sistema (admin, analista, visualizador) + coluna `empresas` (jsonb) |
+| `contatos_propostas` | `id` (unique em `ano`+`mes`+`carteira`) | Lançamento manual de Contatos/Propostas por mês/carteira, na aba Relatórios (Rampa-only por enquanto) |
+| `estoque_catalogo` | `produto_id` + `empresa` | Cadastro + elegibilidade de cada produto (serviço/representação), atualizado 1x/dia — ver "Rotina diária de estoque" |
+| `estoque_sync_status` | `empresa` (uma linha por empresa) | Progresso/estado da rotina diária de estoque (lista de pendentes, saltos, última conclusão, última tentativa e último erro — ver "Falha silenciosa do cron diário") |
 
 - CNPJ é a chave primária preferida (mais estável que IDs internos da Olist)
 - CNPJ sempre armazenado limpo (sem `.`, `/`, `-`)
+- Toda tabela correlacionada à Olist tem `empresa` (default `'rampa'`) — ver "Multi-empresa"
 
 ---
 
@@ -277,6 +318,8 @@ lugar consultável depois que o log da Vercel expirava.
 - [ ] A operação é leitura ou escrita?
 - [ ] Estou usando V2 para leitura e V3 para escrita?
 - [ ] O payload V3 tem `limiteCredito` na raiz?
-- [ ] Se alterei `getAccessToken()`, atualizei os 4 arquivos?
+- [ ] Se alterei `getAccessToken()`, foi só em `api/_lib/olist-auth.js`?
 - [ ] Limite zero está sendo convertido para R$1,00?
 - [ ] Loops pesados estão no frontend, não no serverless?
+- [ ] Esse endpoint fala com a Olist ou com uma tabela correlacionada? Se sim, aceita e
+      propaga `empresa` (default `"rampa"`), e usa `api/_lib/empresas.js`/`olist-auth.js`?

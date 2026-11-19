@@ -1,7 +1,7 @@
 // v4
 const https = require("https");
+const { getConfigEmpresa } = require("./_lib/empresas");
 
-const TOKEN = process.env.OLIST_TOKEN;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
 
@@ -39,7 +39,7 @@ const supabaseHeaders = {
 async function buscarUsuario(login, senha) {
   const supaHost = SUPABASE_URL.replace("https://", "");
   const r = await get(supaHost,
-    `/rest/v1/usuarios?login=eq.${encodeURIComponent(login)}&senha=eq.${encodeURIComponent(senha)}&ativo=eq.true&select=id,login,perfil`,
+    `/rest/v1/usuarios?login=eq.${encodeURIComponent(login)}&senha=eq.${encodeURIComponent(senha)}&ativo=eq.true&select=id,login,perfil,empresas`,
     supabaseHeaders
   );
   const data = parseJSON(r.text);
@@ -70,6 +70,8 @@ module.exports = async (req, res) => {
 
     // ── GET lista ─────────────────────────────────────────────────────────
     if (req.method === "GET" && !req.query.id) {
+      const empresa = String(req.query.empresa || "rampa").toLowerCase();
+      const { tokenV2 } = getConfigEmpresa(empresa);
       const pagina = req.query.pagina || 1;
       const pesquisa = req.query.pesquisa || " ";
 
@@ -78,7 +80,7 @@ module.exports = async (req, res) => {
       const isCnpj = /^\d{11,14}$/.test(somenteNumeros);
 
       const params = new URLSearchParams({
-        token: TOKEN,
+        token: tokenV2,
         situacao: "A",
         pagina: String(pagina),
         formato: "JSON",
@@ -109,7 +111,7 @@ module.exports = async (req, res) => {
 
       if (chaves.length > 0) {
         const supaHost = SUPABASE_URL.replace("https://", "");
-        const ar = await get(supaHost, "/rest/v1/analises_credito?cliente_id=in.(" + chaves.join(",") + ")", {
+        const ar = await get(supaHost, "/rest/v1/analises_credito?cliente_id=in.(" + chaves.join(",") + ")&empresa=eq." + empresa, {
           apikey: SUPABASE_KEY,
           Authorization: "Bearer " + SUPABASE_KEY,
         });
@@ -122,7 +124,8 @@ module.exports = async (req, res) => {
 
     // ── GET individual ────────────────────────────────────────────────────
     if (req.method === "GET" && req.query.id) {
-      const params = new URLSearchParams({ token: TOKEN, id: req.query.id, formato: "JSON" });
+      const { tokenV2 } = getConfigEmpresa(req.query.empresa);
+      const params = new URLSearchParams({ token: tokenV2, id: req.query.id, formato: "JSON" });
       const r = await post("api.tiny.com.br", "/api2/contato.obter.php", params.toString(), { "Content-Type": "application/x-www-form-urlencoded" });
       const data = parseJSON(r.text);
       return res.status(200).json({ contato: (data.retorno && data.retorno.contato) ? data.retorno.contato : {} });

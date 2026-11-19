@@ -13,9 +13,8 @@
 // - Compras pendentes vêm da listagem de ordens de compra v3, que já traz
 //   os itens embutidos — sem precisar buscar o detalhe de cada ordem.
 const https = require("https");
+const { getAccessToken } = require("./_lib/olist-auth");
 
-const CLIENT_ID = process.env.OLIST_CLIENT_ID;
-const CLIENT_SECRET = process.env.OLIST_CLIENT_SECRET;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
 
@@ -33,34 +32,10 @@ function httpsRequest(method, hostname, path, body, headers) {
 
 function parseJSON(text) { try { return JSON.parse(text); } catch { return {}; } }
 
-async function getAccessToken() {
+async function buscarCatalogoElegivel(empresa) {
   const supaHost = SUPABASE_URL.replace("https://", "");
   const r = await httpsRequest("GET", supaHost,
-    "/rest/v1/tokens_oauth?id=eq.olist_refresh_token&select=token",
-    null, { apikey: SUPABASE_KEY, Authorization: "Bearer " + SUPABASE_KEY });
-  const refreshToken = parseJSON(r.text)[0].token;
-  const body = "grant_type=refresh_token"
-    + "&client_id=" + encodeURIComponent(CLIENT_ID)
-    + "&client_secret=" + encodeURIComponent(CLIENT_SECRET)
-    + "&refresh_token=" + encodeURIComponent(refreshToken);
-  const tr = await httpsRequest("POST", "accounts.tiny.com.br",
-    "/realms/tiny/protocol/openid-connect/token", body,
-    { "Content-Type": "application/x-www-form-urlencoded", "Content-Length": Buffer.byteLength(body) });
-  const td = parseJSON(tr.text);
-  if (!td.access_token) throw new Error("Falha ao obter access token");
-  if (td.refresh_token) {
-    const p = JSON.stringify({ token: td.refresh_token, atualizado: new Date().toISOString() });
-    await httpsRequest("PATCH", supaHost,
-      "/rest/v1/tokens_oauth?id=eq.olist_refresh_token", p,
-      { apikey: SUPABASE_KEY, Authorization: "Bearer " + SUPABASE_KEY, "Content-Type": "application/json", "Content-Length": Buffer.byteLength(p), Prefer: "return=minimal" });
-  }
-  return td.access_token;
-}
-
-async function buscarCatalogoElegivel() {
-  const supaHost = SUPABASE_URL.replace("https://", "");
-  const r = await httpsRequest("GET", supaHost,
-    "/rest/v1/estoque_catalogo?elegivel=eq.true&select=produto_id,sku,nome,categoria,fornecedor,unidade,estoque_minimo",
+    `/rest/v1/estoque_catalogo?elegivel=eq.true&empresa=eq.${empresa}&select=produto_id,sku,nome,categoria,fornecedor,unidade,estoque_minimo`,
     null, { apikey: SUPABASE_KEY, Authorization: "Bearer " + SUPABASE_KEY });
   return parseJSON(r.text);
 }
@@ -134,15 +109,16 @@ module.exports = async (req, res) => {
   if (req.method === "OPTIONS") return res.status(200).end();
 
   const acao = req.query.acao;
+  const empresa = String(req.query.empresa || "rampa").toLowerCase();
 
   try {
     if (acao === "relatorio") {
-      const catalogo = await buscarCatalogoElegivel();
+      const catalogo = await buscarCatalogoElegivel(empresa);
       if (!catalogo.length) {
         return res.status(200).json({ relatorio: [], catalogoVazio: true });
       }
 
-      const accessToken = await getAccessToken();
+      const accessToken = await getAccessToken(empresa);
       const [estoqueMap, comprasMap] = await Promise.all([
         buscarEstoqueTodos(accessToken),
         buscarComprasPendentes(accessToken),
