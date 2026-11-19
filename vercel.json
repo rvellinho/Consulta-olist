@@ -26,12 +26,20 @@
       "schedule": "0 10 * * *"
     },
     {
+      "path": "/api/ping?empresa=tf",
+      "schedule": "5 10 * * *"
+    },
+    {
       "path": "/api/relatorio-sync-diario",
       "schedule": "0 7 * * *"
     },
     {
       "path": "/api/estoque-sync-diario",
       "schedule": "0 9 * * *"
+    },
+    {
+      "path": "/api/estoque-sync-diario?empresa=tf",
+      "schedule": "15 9 * * *"
     }
   ]
 }

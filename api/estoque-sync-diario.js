@@ -26,7 +26,15 @@ const CRON_SECRET = process.env.CRON_SECRET;
 const ORCAMENTO_TOTAL_MS = 280000; // folga sob os 300s de maxDuration (vercel.json)
 const MAX_TENTATIVAS_POR_PRODUTO = 3; // falhas pontuais (ex: bloqueio momentâneo da Olist) tentam de novo antes de desistir por hoje
 const SALVAR_PROGRESSO_A_CADA = 20; // checkpoint no banco, pra não perder tudo se a chamada cair no meio
-const TRAVADO_APOS_MS = 30 * 60 * 1000; // se "em_andamento" ficar preso, uma nova chamada recomeça do zero
+// Se "em_andamento" ficar preso sem nenhuma atividade por mais que isso, uma
+// nova chamada recomeça do zero. Precisa ser bem maior que o intervalo do
+// cron diário (~24h): um catálogo grande (ex: TF, 644 produtos) não cabe
+// numa chamada só e precisa retomar de um dia pro outro — comparar com
+// menos de 24h faria ele recomeçar do zero TODO dia, sem nunca terminar
+// (bug encontrado em 2026-11-19 ao conectar a TF, catálogo maior que o da
+// Rampa). 36h dá folga pro cron diário retomar normalmente e ainda
+// autorrecupera se a execução for realmente abandonada por mais de um dia.
+const TRAVADO_APOS_MS = 36 * 60 * 60 * 1000;
 
 const supaHeaders = {
   apikey: SUPABASE_KEY,
@@ -149,10 +157,14 @@ module.exports = async (req, res) => {
   const inicioExecucao = Date.now();
 
   try {
-    await marcarTentativa(empresa);
+    // Lê o status ANTES de marcar esta tentativa, pra comparar contra a
+    // última atividade real (não contra "agora", que marcarTentativa está
+    // prestes a gravar) — ver comentário de TRAVADO_APOS_MS acima.
     let status = await lerStatus(empresa);
-    const iniciadoHaMuito = status?.em_andamento && status.iniciado_em
-      && (Date.now() - new Date(status.iniciado_em).getTime() > TRAVADO_APOS_MS);
+    const ultimaAtividade = status?.ultima_tentativa_em || status?.iniciado_em;
+    const iniciadoHaMuito = status?.em_andamento && ultimaAtividade
+      && (Date.now() - new Date(ultimaAtividade).getTime() > TRAVADO_APOS_MS);
+    await marcarTentativa(empresa);
 
     if (!status || !status.em_andamento || iniciadoHaMuito) {
       const todos = await buscarTodosProdutosAtivos(empresa);

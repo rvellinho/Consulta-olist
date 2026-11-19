@@ -99,10 +99,12 @@ toda a stack:
   seletor de empresa no frontend.
 - **Frontend**: `empresaAtual` (global em `index.html`) guarda a empresa escolhida (tela logo
   após o login, ou direto se o usuário só tiver acesso a uma); todo `fetch` pras rotas acima
-  passa `empresa=${empresaAtual}`. Hoje só a aba Estoque funciona de fato pra TF — Clientes e
-  Importar ficam escondidos quando `empresaAtual !== "rampa"` (código já aceita `empresa=tf`
-  nesses endpoints, só falta a TF ter credenciais configuradas). Relatórios/lançamentos
-  continuam Rampa-only de propósito (ver decisão do usuário — cross-empresa fica pra depois).
+  passa `empresa=${empresaAtual}`. A TF está conectada (credenciais configuradas, catálogo
+  sincronizado) e a aba Estoque funciona de fato pra ela desde 2026-11-19 — Clientes e
+  Importar continuam escondidos quando `empresaAtual !== "rampa"` (código já aceita
+  `empresa=tf` nesses endpoints, só não foi habilitado na UI porque essas funções ainda não
+  foram pensadas/testadas pra TF). Relatórios/lançamentos continuam Rampa-only de propósito
+  (ver decisão do usuário — cross-empresa fica pra depois).
 - **Adicionar uma empresa nova**: criar a entrada em `EMPRESAS` (`api/_lib/empresas.js`),
   as env vars `OLIST_TOKEN_<X>`/`OLIST_CLIENT_ID_<X>`/`OLIST_CLIENT_SECRET_<X>`, rodar o fluxo
   OAuth uma vez (via `api/callback.js?state=<x>`) pra gerar o primeiro refresh token, e
@@ -244,8 +246,11 @@ só o necessário (quantidade em estoque, ordens de compra) continua sendo busca
     fila e tenta de novo até `MAX_TENTATIVAS_POR_PRODUTO` vezes antes de desistir por
     hoje — na primeira versão isso não existia e ~12% do catálogo ficou faltando sem
     nenhum aviso
-- Se `em_andamento` ficar travado (ex: uma chamada falhou no meio) por mais de 30 minutos,
-  a próxima chamada recomeça do zero — busca a lista de produtos de novo e reclassifica tudo
+- Se `em_andamento` ficar travado (ex: uma chamada falhou no meio) sem nenhuma atividade por
+  mais de `TRAVADO_APOS_MS` (hoje 36h), a próxima chamada recomeça do zero — busca a lista de
+  produtos de novo e reclassifica tudo. Esse prazo é comparado contra a última tentativa
+  registrada (`ultima_tentativa_em`), não contra o início do ciclo (`iniciado_em`) — ver bug
+  corrigido abaixo ("Catálogo grande não termina em 1 chamada + cron 1x/dia")
 - Ao terminar o catálogo inteiro com sucesso, remove de `estoque_catalogo` quem não apareceu
   mais na listagem de produtos ativos do dia (produto inativado/excluído na Olist)
 - A regra de classificação (o que é serviço, o que é representação) mora em
@@ -273,6 +278,30 @@ lugar consultável depois que o log da Vercel expirava.
 - **Lição**: qualquer rotina que roda sem ninguém olhar (cron) precisa persistir seu
   próprio estado de erro num lugar que sobrevive à expiração do log — não dá pra confiar
   só em `console.error`/logs da Vercel pra diagnosticar depois no Hobby
+
+### Catálogo grande não termina em 1 chamada + cron 1x/dia → nunca terminava (2026-11-19)
+Descoberto ao conectar a TF: o catálogo dela tem 644 produtos (vs. ~250-280 da Rampa), não
+cabe no orçamento de uma chamada (`ORCAMENTO_TOTAL_MS`, folga sob os 300s de
+`maxDuration`) — precisou de 3 chamadas manuais seguidas pra terminar a primeira vez.
+
+Isso por si só é esperado (ver "retoma de onde parou" acima) — o problema é que o Hobby só
+dispara o cron 1x/dia, e a trava de "travado" (`TRAVADO_APOS_MS`) comparava com
+`iniciado_em` (início do ciclo inteiro), não com a última atividade. Como o intervalo entre
+dois disparos do cron é sempre ~24h, **qualquer** execução incompleta de um dia seria vista
+como "travada" no disparo do dia seguinte e recomeçava do zero — pra um catálogo que precisa
+de várias chamadas, isso significa nunca terminar (processa os primeiros ~280 produtos todo
+dia, reseta, de novo, pra sempre). Não é bug visível de cara: só aparece quando o catálogo
+de alguma empresa cresce além do que uma chamada dá conta.
+
+- Corrigido em `api/estoque-sync-diario.js`: a comparação de "travado" agora usa
+  `ultima_tentativa_em` (atualizado a cada chamada, inclusive as que só retomam) em vez de
+  `iniciado_em`, e `TRAVADO_APOS_MS` subiu de 30 minutos pra 36 horas — folga suficiente pro
+  cron diário retomar normalmente de um dia pro outro, mas ainda autorrecupera se a execução
+  for realmente abandonada por mais de um dia e meio.
+- **Lição**: qualquer limite de "tempo parado = travado" precisa ser maior que o intervalo
+  real entre as chamadas que fazem esse trabalho continuar — um cron 1x/dia com um job que
+  pode levar mais de um dia pra terminar precisa de uma margem bem acima de 24h, não de
+  minutos.
 
 ---
 
