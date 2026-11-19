@@ -2076,7 +2076,7 @@ function filtrarEstoque() {
     });
     lista = Object.values(mapa).map(p => ({
       ...p,
-      necessidade: Math.max(0, p.estoqueMinimo - p.dispMaisCompras)
+      necessidade: p.estoqueMinimo - p.dispMaisCompras
     }));
     lista.sort((a,b) => b.necessidade - a.necessidade || a.nome.localeCompare(b.nome));
   }
@@ -2114,7 +2114,7 @@ function celulaEstoque(col, p) {
       return `<td style="padding:3px 12px;font-size:13px;text-align:right;color:var(--mt);">${fmtQtd(v)}</td>`;
     case "necessidade": {
       const urgente = v > 0;
-      return `<td style="padding:3px 12px;font-size:13px;text-align:right;${urgente?"color:var(--red);font-weight:700;":""}">${urgente?fmtQtd(v):"—"}</td>`;
+      return `<td style="padding:3px 12px;font-size:13px;text-align:right;${urgente?"color:var(--red);font-weight:700;":"color:var(--mt);"}">${fmtQtd(v)}</td>`;
     }
     default: // estoqueFisico, estoqueDisponivel
       return `<td style="padding:3px 12px;font-size:13px;text-align:right;">${fmtQtd(v)}</td>`;

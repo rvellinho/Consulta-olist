@@ -129,7 +129,9 @@ module.exports = async (req, res) => {
         const emCompra = comprasMap[p.produto_id] || 0;
         const dispMaisCompras = e.disponivel + emCompra;
         const estoqueMinimo = Number(p.estoque_minimo) || 0;
-        const necessidade = Math.max(0, estoqueMinimo - dispMaisCompras);
+        // Não trava em 0: negativo deixa claro que o produto está acima do
+        // estoque mínimo (disp.+compras > EM), não só "sem necessidade".
+        const necessidade = estoqueMinimo - dispMaisCompras;
         return {
           id: p.produto_id, sku: p.sku || "", nome: p.nome, unidade: p.unidade || "",
           categoria: p.categoria || "—", fornecedor: p.fornecedor || "—",
