@@ -82,6 +82,20 @@ async function salvarStatus(status) {
     { ...supaHeaders, "Content-Length": Buffer.byteLength(payload), Prefer: "return=minimal" });
 }
 
+// Registra que a função foi chamada, antes de qualquer trabalho que possa
+// falhar — e, se falhar, o erro. Isso fica salvo no Supabase (consultável a
+// qualquer hora) em vez de só nos logs da Vercel, que no plano Hobby somem
+// depois de 1h — sem isso, uma falha logo no início (antes do status normal
+// existir) passava sem deixar nenhum rastro.
+async function marcarTentativa(erro) {
+  const supaHost = SUPABASE_URL.replace("https://", "");
+  const campos = { ultima_tentativa_em: new Date().toISOString() };
+  if (erro) campos.ultimo_erro = erro;
+  const payload = JSON.stringify(campos);
+  await httpsRequest("PATCH", supaHost, "/rest/v1/estoque_sync_status?id=eq.1", payload,
+    { ...supaHeaders, "Content-Length": Buffer.byteLength(payload), Prefer: "return=minimal" });
+}
+
 async function upsertCatalogo(linhas) {
   if (!linhas.length) return;
   const supaHost = SUPABASE_URL.replace("https://", "");
@@ -122,6 +136,7 @@ module.exports = async (req, res) => {
   const inicioExecucao = Date.now();
 
   try {
+    await marcarTentativa();
     let status = await lerStatus();
     const iniciadoHaMuito = status?.em_andamento && status.iniciado_em
       && (Date.now() - new Date(status.iniciado_em).getTime() > TRAVADO_APOS_MS);
@@ -217,6 +232,7 @@ module.exports = async (req, res) => {
 
   } catch (e) {
     console.error("[estoque-sync] erro fatal:", e.message);
+    try { await marcarTentativa(e.message); } catch (_) { /* best-effort */ }
     return res.status(500).json({ erro: e.message, stack: e.stack });
   }
 };

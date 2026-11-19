@@ -171,6 +171,13 @@ Single file containing all CSS and JS inline (~1000 lines). No framework, no mod
   "Rotina diária de estoque"), a saída foi aumentar `maxDuration` e processar tudo
   numa única chamada, com checkpoint de progresso salvo no banco como rede de
   segurança (não como mecanismo de continuação)
+- **Logs de runtime no Hobby só ficam disponíveis por 1h** (Pro: 1 dia, Enterprise: 3
+  dias). Descoberto em produção (2026-11-19) tentando investigar por que um cron das
+  06h não tinha rodado — por volta das 11h40 já não dava mais pra ver nada daquele
+  horário. Pra qualquer rotina que roda sem supervisão (cron), isso significa que
+  `console.error`/`console.log` sozinhos não servem pra diagnosticar depois — o estado
+  de erro precisa ser persistido em algum lugar que não expire (ex: Supabase), não só
+  logado. Ver "Falha silenciosa do cron diário" na seção de estoque
 
 ---
 
@@ -205,6 +212,28 @@ só o necessário (quantidade em estoque, ordens de compra) continua sendo busca
   `api/_lib/estoque-classificacao.js` — usada tanto aqui quanto em `api/estoque.js`. Qualquer
   ajuste nessa regra precisa ser feito só ali, nunca duplicado
 
+### Falha silenciosa do cron diário (2026-11-19) e visibilidade de erro
+Descoberto: o cron das 09:00 UTC (06:00 BRT) não rodou em 2026-11-19 — `estoque_sync_status`
+continuava com o `concluido_em` do dia anterior. Causa raiz não confirmada (os logs da
+Vercel no plano Hobby só ficam 1h — ver "Vercel serverless — limitações" — e por volta
+das 11h o rastro já tinha sumido), mas o cenário mais provável é a função ter caído numa
+exceção **antes** de salvar qualquer status (ex: falha/rate-limit da Olist V2 dentro de
+`buscarTodosProdutosAtivos()`), já que o `catch` do handler só fazia `console.log` — nada
+era persistido no banco, então uma falha bem no início não deixava rastro nenhum em
+lugar consultável depois que o log da Vercel expirava.
+- Corrigido: a função agora grava `ultima_tentativa_em` (e `ultimo_erro`, se houver) em
+  `estoque_sync_status` a cada chamada, **antes** de qualquer trabalho que possa falhar, e
+  de novo no `catch` fatal. Isso dá um rastro persistente no Supabase (consultável a
+  qualquer hora, sem depender da retenção curta de log da Vercel) de quando a função foi
+  chamada por último e se deu erro — mesmo que a falha seja na primeira linha.
+- A aba Estoque mostra esse erro: se a última tentativa for mais recente que a última
+  conclusão e tiver `ultimo_erro`, a linha "Catálogo: ..." fica vermelha e mostra a
+  mensagem de erro em vez de só repetir a data da última sincronização bem-sucedida (que
+  antes parecia "tudo normal" mesmo com o cron quebrado há dias)
+- **Lição**: qualquer rotina que roda sem ninguém olhar (cron) precisa persistir seu
+  próprio estado de erro num lugar que sobrevive à expiração do log — não dá pra confiar
+  só em `console.error`/logs da Vercel pra diagnosticar depois no Hobby
+
 ---
 
 ## Estrutura do banco Supabase
@@ -216,7 +245,7 @@ só o necessário (quantidade em estoque, ordens de compra) continua sendo busca
 | `usuarios` | `id` | Usuários do sistema (admin, analista, visualizador) |
 | `contatos_propostas` | `id` (unique em `ano`+`mes`+`carteira`) | Lançamento manual de Contatos/Propostas por mês/carteira, na aba Relatórios |
 | `estoque_catalogo` | `produto_id` (id Olist) | Cadastro + elegibilidade de cada produto (serviço/representação), atualizado 1x/dia — ver "Rotina diária de estoque" |
-| `estoque_sync_status` | `id` (fixo em `1`) | Progresso/estado da rotina diária de estoque (lista de pendentes, saltos, última conclusão) |
+| `estoque_sync_status` | `id` (fixo em `1`) | Progresso/estado da rotina diária de estoque (lista de pendentes, saltos, última conclusão, última tentativa e último erro — ver "Falha silenciosa do cron diário") |
 
 - CNPJ é a chave primária preferida (mais estável que IDs internos da Olist)
 - CNPJ sempre armazenado limpo (sem `.`, `/`, `-`)

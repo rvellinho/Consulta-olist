@@ -296,12 +296,18 @@
     <!-- Filtros -->
     <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:12px;align-items:center;">
       <input id="est-busca" placeholder="🔍 Buscar produto ou SKU..." oninput="filtrarEstoque()" style="border:1.5px solid var(--br);border-radius:8px;padding:8px 12px;font-size:13px;font-family:Inter,sans-serif;outline:none;min-width:200px;flex:1;" />
-      <select id="est-categoria" onchange="filtrarEstoque()" style="border:1.5px solid var(--br);border-radius:8px;padding:8px 12px;font-size:13px;font-family:Inter,sans-serif;outline:none;background:#fff;">
-        <option value="">Todas as categorias</option>
-      </select>
-      <select id="est-fornecedor" onchange="filtrarEstoque()" style="border:1.5px solid var(--br);border-radius:8px;padding:8px 12px;font-size:13px;font-family:Inter,sans-serif;outline:none;background:#fff;">
-        <option value="">Todos os fornecedores</option>
-      </select>
+      <div class="ms-filtro" style="position:relative;">
+        <button type="button" onclick="toggleMultiSelectEstoque('categoria')" style="border:1.5px solid var(--br);border-radius:8px;padding:8px 12px;font-size:13px;font-family:Inter,sans-serif;outline:none;background:#fff;cursor:pointer;white-space:nowrap;">
+          Categoria: <span id="ms-categoria-label" style="color:var(--mt);">todas</span> ▾
+        </button>
+        <div id="ms-categoria-painel" class="hidden" style="position:absolute;top:calc(100% + 4px);left:0;z-index:30;background:#fff;border:1px solid var(--br);border-radius:8px;box-shadow:var(--sh);min-width:220px;max-height:280px;overflow-y:auto;padding:6px;"></div>
+      </div>
+      <div class="ms-filtro" style="position:relative;">
+        <button type="button" onclick="toggleMultiSelectEstoque('fornecedor')" style="border:1.5px solid var(--br);border-radius:8px;padding:8px 12px;font-size:13px;font-family:Inter,sans-serif;outline:none;background:#fff;cursor:pointer;white-space:nowrap;">
+          Fornecedor: <span id="ms-fornecedor-label" style="color:var(--mt);">todos</span> ▾
+        </button>
+        <div id="ms-fornecedor-painel" class="hidden" style="position:absolute;top:calc(100% + 4px);left:0;z-index:30;background:#fff;border:1px solid var(--br);border-radius:8px;box-shadow:var(--sh);min-width:220px;max-height:280px;overflow-y:auto;padding:6px;"></div>
+      </div>
       <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;white-space:nowrap;padding:8px 12px;border:1.5px solid var(--br);border-radius:8px;background:#fff;">
         <input type="checkbox" id="est-agrupar" onchange="filtrarEstoque()" style="width:14px;height:14px;accent-color:var(--ac);" />
         Agrupar produtos iguais
@@ -1176,7 +1182,7 @@ function buildTheadEstoque() {
   el("colgroup-estoque").innerHTML = COLUNAS_ESTOQUE.map(c => `<col style="width:${c.width}px;">`).join("");
   const tr = el("thead-row");
   tr.innerHTML = COLUNAS_ESTOQUE.map((c,i) => `
-    <th style="position:relative;padding:10px 12px;font-size:11px;font-weight:700;text-transform:uppercase;color:var(--mt);background:var(--s2);text-align:${c.align};border-bottom:1px solid var(--br);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;user-select:none;">
+    <th style="position:relative;padding:6px 12px;font-size:11px;font-weight:700;text-transform:uppercase;color:var(--mt);background:var(--s2);text-align:${c.align};border-bottom:1px solid var(--br);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;user-select:none;">
       <span onclick="sortEstoque(${i})" style="cursor:pointer;">${c.label} <span id="sort-icon-${i}" style="opacity:.4;">↕</span></span>
       ${i < COLUNAS_ESTOQUE.length - 1 ? `<span class="col-resize-handle" data-col-idx="${i}" style="position:absolute;top:0;right:0;width:6px;height:100%;cursor:col-resize;"></span>` : ""}
     </th>`).join("");
@@ -1213,9 +1219,16 @@ async function carregarInfoCatalogoEstoque() {
     const d = await r.json();
     const s = d.status;
     if (!s) { info.textContent = "Catálogo: ainda não sincronizado"; return; }
+    const ultimaTentativaFalhou = s.ultimo_erro && !s.em_andamento
+      && (!s.concluido_em || new Date(s.ultima_tentativa_em) > new Date(s.concluido_em));
     if (s.em_andamento) {
+      info.style.color = "";
       info.textContent = `Catálogo: atualizando agora... (${s.processados || 0}/${s.total_catalogo || "?"} produtos)`;
+    } else if (ultimaTentativaFalhou) {
+      info.style.color = "var(--red)";
+      info.textContent = `Catálogo: ${s.total_catalogo || 0} produtos (atualizado em ${formatarDataHoraBR(s.concluido_em) || "nunca"}) — tentativa de ${formatarDataHoraBR(s.ultima_tentativa_em)} falhou: ${s.ultimo_erro}`;
     } else {
+      info.style.color = "";
       info.textContent = `Catálogo: ${s.total_catalogo} produtos — atualizado em ${formatarDataHoraBR(s.concluido_em)}`;
     }
   } catch (e) {
@@ -1273,13 +1286,13 @@ async function carregarEstoque() {
     const relatorio = data.relatorio || [];
     dadosEstoque = relatorio;
 
-    // Popula filtros de categoria e fornecedor
+    // Popula filtros de categoria e fornecedor (multi-seleção)
     const cats = [...new Set(relatorio.map(p=>p.categoria).filter(Boolean).sort())];
     const fors = [...new Set(relatorio.map(p=>p.fornecedor).filter(f=>f&&f!=="—").sort())];
-    const selCat = el("est-categoria");
-    const selFor = el("est-fornecedor");
-    selCat.innerHTML = '<option value="">Todas as categorias</option>' + cats.map(c=>`<option>${c}</option>`).join("");
-    selFor.innerHTML = '<option value="">Todos os fornecedores</option>' + fors.map(f=>`<option>${f}</option>`).join("");
+    estoqueFiltrosMulti.categoria.clear();
+    estoqueFiltrosMulti.fornecedor.clear();
+    montarPainelMultiSelectEstoque("categoria", cats);
+    montarPainelMultiSelectEstoque("fornecedor", fors);
 
     buildTheadEstoque();
     filtrarEstoque();
@@ -1840,15 +1853,77 @@ async function excluirLancamentoCP(id){
   }
 }
 
+// Filtros de categoria/fornecedor permitem marcar vários valores ao mesmo
+// tempo (em vez de um <select> só com uma opção). Set vazio = sem filtro
+// (mostra tudo); Set com valores = só os marcados.
+const estoqueFiltrosMulti = { categoria: new Set(), fornecedor: new Set() };
+
+function montarPainelMultiSelectEstoque(campo, valores) {
+  const painel = el(`ms-${campo}-painel`);
+  const cabecalho = `
+    <div style="display:flex;gap:10px;padding:4px 6px 8px;border-bottom:1px solid var(--br);margin-bottom:4px;">
+      <a href="#" onclick="event.preventDefault();marcarTodosMultiSelectEstoque('${campo}',true)" style="font-size:12px;color:var(--ac);text-decoration:none;">Marcar todos</a>
+      <a href="#" onclick="event.preventDefault();marcarTodosMultiSelectEstoque('${campo}',false)" style="font-size:12px;color:var(--mt);text-decoration:none;">Limpar</a>
+    </div>`;
+  const itens = valores.map(v => `
+    <label style="display:flex;align-items:center;gap:6px;padding:5px 6px;font-size:13px;cursor:pointer;border-radius:5px;white-space:nowrap;">
+      <input type="checkbox" value="${escAttr(v)}" onchange="onMultiSelectEstoqueChange('${campo}', this)" style="width:14px;height:14px;accent-color:var(--ac);flex-shrink:0;" ${estoqueFiltrosMulti[campo].has(v)?"checked":""} />
+      <span>${v}</span>
+    </label>`).join("");
+  painel.innerHTML = cabecalho + (itens || `<div style="padding:6px;font-size:12px;color:var(--mt);">Nenhuma opção</div>`);
+  atualizarLabelMultiSelectEstoque(campo);
+}
+
+function atualizarLabelMultiSelectEstoque(campo) {
+  const label = el(`ms-${campo}-label`);
+  const n = estoqueFiltrosMulti[campo].size;
+  const padrao = campo === "categoria" ? "todas" : "todos";
+  label.textContent = n === 0 ? padrao : `${n} selecionada${n>1?"s":""}`;
+}
+
+function onMultiSelectEstoqueChange(campo, chk) {
+  if (chk.checked) estoqueFiltrosMulti[campo].add(chk.value);
+  else estoqueFiltrosMulti[campo].delete(chk.value);
+  atualizarLabelMultiSelectEstoque(campo);
+  filtrarEstoque();
+}
+
+function marcarTodosMultiSelectEstoque(campo, marcar) {
+  const painel = el(`ms-${campo}-painel`);
+  painel.querySelectorAll('input[type="checkbox"]').forEach(chk => {
+    chk.checked = marcar;
+    if (marcar) estoqueFiltrosMulti[campo].add(chk.value);
+  });
+  if (!marcar) estoqueFiltrosMulti[campo].clear();
+  atualizarLabelMultiSelectEstoque(campo);
+  filtrarEstoque();
+}
+
+let estoqueMultiSelectClickFora = false;
+function toggleMultiSelectEstoque(campo) {
+  ["categoria", "fornecedor"].forEach(c => {
+    const painel = el(`ms-${c}-painel`);
+    if (c === campo) painel.classList.toggle("hidden");
+    else painel.classList.add("hidden");
+  });
+  if (!estoqueMultiSelectClickFora) {
+    estoqueMultiSelectClickFora = true;
+    document.addEventListener("click", (e) => {
+      if (e.target.closest(".ms-filtro, [id^='ms-'][id$='-painel'], button[onclick*='toggleMultiSelectEstoque']")) return;
+      ["categoria", "fornecedor"].forEach(c => el(`ms-${c}-painel`).classList.add("hidden"));
+    });
+  }
+}
+
 function filtrarEstoque() {
   const busca = (el("est-busca")?.value || "").toLowerCase();
-  const cat = el("est-categoria")?.value || "";
-  const forn = el("est-fornecedor")?.value || "";
+  const catSel = estoqueFiltrosMulti.categoria;
+  const fornSel = estoqueFiltrosMulti.fornecedor;
   const agrupar = el("est-agrupar")?.checked || false;
 
   let lista = dadosEstoque.filter(p => {
-    if (cat && p.categoria !== cat) return false;
-    if (forn && p.fornecedor !== forn) return false;
+    if (catSel.size && !catSel.has(p.categoria)) return false;
+    if (fornSel.size && !fornSel.has(p.fornecedor)) return false;
     if (busca && !p.nome.toLowerCase().includes(busca) && !p.sku.toLowerCase().includes(busca)) return false;
     return true;
   });
@@ -1890,7 +1965,7 @@ function escAttr(s) {
 
 function celulaEstoque(col, p) {
   const v = p[col.key];
-  const baseTxt = "padding:10px 12px;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
+  const baseTxt = "padding:3px 12px;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
   switch (col.key) {
     case "sku":
       return `<td style="${baseTxt}font-family:monospace;font-size:12px;">${v||"—"}</td>`;
@@ -1900,21 +1975,21 @@ function celulaEstoque(col, p) {
     case "fornecedor":
       return `<td style="${baseTxt}font-size:12px;color:var(--mt);" title="${escAttr(v)}">${v||"—"}</td>`;
     case "unidade":
-      return `<td style="padding:10px 12px;font-size:12px;text-align:center;color:var(--mt);">${v||"—"}</td>`;
+      return `<td style="padding:3px 12px;font-size:12px;text-align:center;color:var(--mt);">${v||"—"}</td>`;
     case "estoqueReservado":
-      return `<td style="padding:10px 12px;font-size:13px;text-align:right;color:var(--am);">${fmtQtd(v)}</td>`;
+      return `<td style="padding:3px 12px;font-size:13px;text-align:right;color:var(--am);">${fmtQtd(v)}</td>`;
     case "emCompra":
-      return `<td style="padding:10px 12px;font-size:13px;text-align:right;color:var(--g);">${fmtQtd(v)}</td>`;
+      return `<td style="padding:3px 12px;font-size:13px;text-align:right;color:var(--g);">${fmtQtd(v)}</td>`;
     case "dispMaisCompras":
-      return `<td style="padding:10px 12px;font-size:13px;text-align:right;font-weight:600;">${fmtQtd(v)}</td>`;
+      return `<td style="padding:3px 12px;font-size:13px;text-align:right;font-weight:600;">${fmtQtd(v)}</td>`;
     case "estoqueMinimo":
-      return `<td style="padding:10px 12px;font-size:13px;text-align:right;color:var(--mt);">${fmtQtd(v)}</td>`;
+      return `<td style="padding:3px 12px;font-size:13px;text-align:right;color:var(--mt);">${fmtQtd(v)}</td>`;
     case "necessidade": {
       const urgente = v > 0;
-      return `<td style="padding:10px 12px;font-size:13px;text-align:right;${urgente?"color:var(--red);font-weight:700;":""}">${urgente?fmtQtd(v):"—"}</td>`;
+      return `<td style="padding:3px 12px;font-size:13px;text-align:right;${urgente?"color:var(--red);font-weight:700;":""}">${urgente?fmtQtd(v):"—"}</td>`;
     }
     default: // estoqueFisico, estoqueDisponivel
-      return `<td style="padding:10px 12px;font-size:13px;text-align:right;">${fmtQtd(v)}</td>`;
+      return `<td style="padding:3px 12px;font-size:13px;text-align:right;">${fmtQtd(v)}</td>`;
   }
 }
 
