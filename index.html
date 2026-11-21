@@ -216,6 +216,12 @@
         <button class="drop-item" type="button" onclick="acaoRelatorioVendaDiaMenu()">📈 Relatório Venda x Dia</button>
       </div>
     </div>
+    <div class="nav-tab-drop hidden" id="tab-financeiro">
+      <button class="nav-tab" type="button" onclick="toggleDropFinanceiro(event)">💰 Financeiro ▾</button>
+      <div class="drop-menu hidden" id="drop-financeiro-menu">
+        <button class="drop-item" type="button" onclick="acaoDreMenu()">📊 DRE</button>
+      </div>
+    </div>
   </div>
 
   <!-- ABA CLIENTES -->
@@ -398,6 +404,40 @@
       <div class="state-center"><div class="spinner"></div></div>
     </div>
   </div>
+
+  <!-- ABA FINANCEIRO (DRE) -->
+  <div id="aba-financeiro-dre" class="hidden">
+    <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:12px;align-items:flex-end;">
+      <div class="fg-sm" style="min-width:150px;">
+        <label>Empresa</label>
+        <select id="fin-empresa" onchange="carregarDRE()">
+          <option value="rampa">Rampa</option>
+          <option value="tf">TF</option>
+          <option value="consolidado">Consolidado (Rampa+TF)</option>
+        </select>
+      </div>
+      <div class="fg-sm" style="width:90px;">
+        <label>Ano</label>
+        <input type="number" id="fin-ano" onchange="carregarDRE()" />
+      </div>
+      <div class="fg-sm" style="width:150px;">
+        <label>Mês</label>
+        <select id="fin-mes" onchange="carregarDRE()"></select>
+      </div>
+      <button class="btn-primary" id="fin-btn-lancamento" onclick="abrirModalFinanceiro()">+ Lançamento Manual</button>
+    </div>
+    <div id="fin-nao-classificado" class="hidden" style="background:var(--redl);color:var(--red);border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px;"></div>
+    <div id="estado-financeiro" class="hidden">
+      <div class="state-center"><div class="spinner"></div><p>Carregando DRE...</p></div>
+    </div>
+    <div id="tabela-financeiro-wrap" class="hidden">
+      <div class="table-wrap">
+        <table style="width:100%;border-collapse:collapse;">
+          <tbody id="tbody-financeiro"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- MODAL CLIENTE -->
@@ -558,6 +598,67 @@
   </div>
 </div>
 
+<!-- MODAL LANÇAMENTO MANUAL (FINANCEIRO) -->
+<div id="modal-fin-overlay" class="overlay hidden" onclick="fecharModalFin(event)">
+  <div class="modal">
+    <div class="modal-hdr">
+      <div class="modal-av">💰</div>
+      <div class="modal-hdr-info">
+        <h2>Lançamento Manual</h2>
+        <p class="c-razao">Pra valores que não vêm da Olist — provisões, ajustes, etc.</p>
+      </div>
+      <button class="close-btn" onclick="document.getElementById('modal-fin-overlay').classList.add('hidden')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:12px;align-items:flex-end;">
+        <div class="fg-sm" style="width:110px;">
+          <label>Empresa</label>
+          <select id="mf-empresa"><option value="rampa">Rampa</option><option value="tf">TF</option></select>
+        </div>
+        <div class="fg-sm" style="width:90px;">
+          <label>Ano</label>
+          <input type="number" id="mf-ano" placeholder="2026" />
+        </div>
+        <div class="fg-sm" style="width:150px;">
+          <label>Mês</label>
+          <select id="mf-mes"></select>
+        </div>
+        <div class="fg-sm" style="min-width:220px;">
+          <label>Grupo (linha do DRE)</label>
+          <select id="mf-grupo"></select>
+        </div>
+        <div class="fg-sm" style="min-width:160px;">
+          <label>Subitem (opcional)</label>
+          <input type="text" id="mf-subitem" placeholder="ex: Provisão, Ajuste" />
+        </div>
+        <div class="fg-sm" style="width:140px;">
+          <label>Valor (R$)</label>
+          <input type="number" step="0.01" id="mf-valor" placeholder="0,00" />
+        </div>
+        <div class="fg-sm" style="min-width:200px;flex:1;">
+          <label>Observação (opcional)</label>
+          <input type="text" id="mf-obs" placeholder="opcional" />
+        </div>
+        <button class="btn-primary" id="mf-btn-salvar" onclick="salvarLancamentoFin()">Salvar</button>
+        <button class="btn-sec hidden" id="mf-btn-cancelar" onclick="cancelarEdicaoFin()">Cancelar edição</button>
+      </div>
+      <p style="font-size:12px;color:var(--mt);margin:-6px 0 12px;">⚠ Grupos marcados com ⚠ nunca são puxados automaticamente da Olist (provisão de inadimplência, 13º, depreciação, impostos sobre o resultado) — o lançamento aqui é a única fonte.</p>
+      <div id="mf-msg" class="modal-msg hidden"></div>
+      <div class="table-wrap">
+        <table style="width:100%;border-collapse:collapse;">
+          <thead><tr>
+            <th>Empresa</th><th>Ano</th><th>Mês</th><th>Grupo</th><th>Subitem</th><th style="text-align:right;">Valor</th><th></th>
+          </tr></thead>
+          <tbody id="mf-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="modal-ftr">
+      <button class="btn-sec" onclick="document.getElementById('modal-fin-overlay').classList.add('hidden')">Fechar</button>
+    </div>
+  </div>
+</div>
+
 <script>
 let usuarioAtual=null, paginaAtual=1, buscaAtual="", temProxima=false, clienteSel=null, modoDemo=false;
 let empresaAtual="rampa";
@@ -661,10 +762,12 @@ function aplicarVisibilidadeAbas(u){
   el("tab-configuracoes").classList.add("hidden");
   el("tab-estoque").classList.add("hidden");
   el("tab-relatorios").classList.add("hidden");
+  el("tab-financeiro").classList.add("hidden");
   if(u.perfil==="admin"){
     el("tab-configuracoes").classList.remove("hidden");
     el("tab-estoque").classList.remove("hidden");
     el("tab-relatorios").classList.remove("hidden");
+    el("tab-financeiro").classList.remove("hidden");
   }
   if(u.perfil==="analista"){
     el("tab-estoque").classList.remove("hidden");
@@ -717,6 +820,7 @@ function fazerLogout(){
   el("tab-configuracoes").classList.add("hidden");
   el("tab-estoque").classList.add("hidden");
   el("tab-relatorios").classList.add("hidden");
+  el("tab-financeiro").classList.add("hidden");
   mudarAba("clientes");
 }
 el("inp-senha").addEventListener("keydown",e=>{if(e.key==="Enter")fazerLogin()});
@@ -728,21 +832,25 @@ function mudarAba(aba){
   el("aba-importar").classList.toggle("hidden",aba!=="importar");
   el("aba-estoque").classList.toggle("hidden",aba!=="estoque");
   el("aba-relatorios").classList.toggle("hidden",aba!=="relatorios");
+  el("aba-financeiro-dre").classList.toggle("hidden",aba!=="financeiro-dre");
   el("tab-clientes").classList.toggle("active",aba==="clientes");
   el("tab-configuracoes").classList.toggle("active",aba==="usuarios"||aba==="importar");
   el("tab-estoque").classList.toggle("active",aba==="estoque");
   el("tab-relatorios").classList.toggle("active",aba==="relatorios");
+  el("tab-financeiro").classList.toggle("active",aba==="financeiro-dre");
   el("tela-app").classList.toggle("app-wide",aba==="relatorios");
   if(aba==="usuarios")carregarUsuarios();
   if(aba==="relatorios")inicializarDatasRelatorio();
   if(aba==="estoque")carregarInfoCatalogoEstoque();
+  if(aba==="financeiro-dre"){ inicializarFiltrosFinanceiro(); carregarDRE(); }
 }
 
-// MENUS SUSPENSOS ("RELATÓRIOS" e "CONFIGURAÇÕES")
+// MENUS SUSPENSOS ("RELATÓRIOS", "CONFIGURAÇÕES" e "FINANCEIRO")
 function fecharTodosDropdowns(){
   el("drop-relatorios-menu")?.classList.add("hidden");
   el("drop-lancamentos-menu")?.classList.add("hidden");
   el("drop-configuracoes-menu")?.classList.add("hidden");
+  el("drop-financeiro-menu")?.classList.add("hidden");
   el("empresa-switch-menu")?.classList.add("hidden");
 }
 function toggleDropRelatorios(e){
@@ -765,11 +873,20 @@ function toggleDropConfiguracoes(e){
 }
 function acaoUsuariosMenu(){ fecharTodosDropdowns(); mudarAba("usuarios"); }
 function acaoImportarMenu(){ fecharTodosDropdowns(); mudarAba("importar"); }
+function toggleDropFinanceiro(e){
+  e.stopPropagation();
+  const menu=el("drop-financeiro-menu");
+  const abrir=menu.classList.contains("hidden");
+  fecharTodosDropdowns();
+  if(abrir)menu.classList.remove("hidden");
+}
+function acaoDreMenu(){ fecharTodosDropdowns(); mudarAba("financeiro-dre"); }
 document.addEventListener("click",e=>{
   const dentroRelatorios=el("tab-relatorios")?.contains(e.target);
   const dentroConfig=el("tab-configuracoes")?.contains(e.target);
+  const dentroFinanceiro=el("tab-financeiro")?.contains(e.target);
   const dentroEmpresaSwitch=el("empresa-switch-wrap")?.contains(e.target);
-  if(!dentroRelatorios&&!dentroConfig&&!dentroEmpresaSwitch)fecharTodosDropdowns();
+  if(!dentroRelatorios&&!dentroConfig&&!dentroFinanceiro&&!dentroEmpresaSwitch)fecharTodosDropdowns();
 });
 function acaoAtualizarOlistMenu(){
   fecharTodosDropdowns();
@@ -1978,6 +2095,235 @@ async function excluirLancamentoCP(id){
     await carregarLancamentosCP();
   }catch(e){
     mostrarMsgCP("Erro: " + e.message, false);
+  }
+}
+
+// FINANCEIRO (DRE)
+let planoContasFin = [];     // cache de /api/financeiro?acao=plano-contas (planoContas)
+let categoriasForcaManualFin = new Set(); // categoria_id com forca_manual=true, pra marcar ⚠ no form manual
+let lancamentosFin = [];
+let finEditandoId = null;
+
+function inicializarFiltrosFinanceiro(){
+  if(!el("fin-mes").options.length){
+    el("fin-mes").innerHTML = MESES_NOME.map((nome,i)=>`<option value="${i+1}">${nome}</option>`).join("");
+  }
+  if(!el("fin-ano").value){
+    const hoje = new Date();
+    el("fin-ano").value = hoje.getFullYear();
+    el("fin-mes").value = hoje.getMonth() + 1;
+  }
+}
+
+async function carregarDRE(){
+  const empresaSel = el("fin-empresa").value;
+  const ano = parseInt(el("fin-ano").value, 10);
+  const mes = parseInt(el("fin-mes").value, 10);
+  if(!ano || !mes) return;
+
+  el("estado-financeiro").classList.remove("hidden");
+  el("tabela-financeiro-wrap").classList.add("hidden");
+  el("fin-nao-classificado").classList.add("hidden");
+  try{
+    const qs = empresaSel === "consolidado"
+      ? `consolidado=true&ano=${ano}&mes=${mes}`
+      : `empresa=${empresaSel}&ano=${ano}&mes=${mes}`;
+    const r = await fetch(`/api/financeiro?acao=dre&${qs}`);
+    if(!r.ok) throw new Error((await r.json()).erro || `Erro ${r.status}`);
+    const dre = await r.json();
+    renderDRE(dre);
+  }catch(e){
+    el("tbody-financeiro").innerHTML = `<tr><td style="text-align:center;color:var(--red);padding:16px;">Erro ao carregar DRE: ${e.message}</td></tr>`;
+    el("tabela-financeiro-wrap").classList.remove("hidden");
+  }finally{
+    el("estado-financeiro").classList.add("hidden");
+  }
+}
+
+function renderDRE(dre){
+  if(dre.naoClassificado && dre.naoClassificado.qtd > 0){
+    el("fin-nao-classificado").classList.remove("hidden");
+    el("fin-nao-classificado").textContent = `⚠ ${dre.naoClassificado.qtd} lançamento(s) sem categoria somando ${formatarMoeda(dre.naoClassificado.total)} — não entram no DRE abaixo. Revise na Olist (ou via lançamento manual) e rode o sync de novo.`;
+  }
+
+  const linhasHtml = [];
+  dre.blocos.forEach(bloco=>{
+    linhasHtml.push(`<tr><td colspan="2" style="padding:8px 12px;font-weight:700;background:var(--s2);">${bloco.bloco}</td></tr>`);
+    bloco.grupos.forEach(g=>{
+      linhasHtml.push(`<tr>
+        <td style="padding:5px 12px 5px 28px;color:var(--mt);">${g.codigo_grupo} ${g.descricao_grupo}</td>
+        <td style="padding:5px 12px;text-align:right;">${formatarMoeda(g.valor)}</td>
+      </tr>`);
+    });
+    linhasHtml.push(`<tr>
+      <td style="padding:5px 12px;font-weight:600;">${bloco.sinal<0?"(−) ":""}Total ${bloco.bloco}</td>
+      <td style="padding:5px 12px;text-align:right;font-weight:600;">${formatarMoeda(bloco.total)}</td>
+    </tr>`);
+    if(bloco.subtotalNome){
+      linhasHtml.push(`<tr style="border-top:2px solid var(--br);border-bottom:2px solid var(--br);">
+        <td style="padding:8px 12px;font-weight:700;">${bloco.subtotalNome}</td>
+        <td style="padding:8px 12px;text-align:right;font-weight:700;${bloco.subtotalValor<0?"color:var(--red);":""}">${formatarMoeda(bloco.subtotalValor)}</td>
+      </tr>`);
+    }
+  });
+  el("tbody-financeiro").innerHTML = linhasHtml.join("");
+  el("tabela-financeiro-wrap").classList.remove("hidden");
+}
+
+// --- modal de lançamento manual ---
+
+async function carregarPlanoContasFin(){
+  if(planoContasFin.length) return; // plano de contas é fixo, não precisa recarregar toda vez
+  try{
+    const r = await fetch(`/api/financeiro?acao=plano-contas&empresa=${el("mf-empresa").value}`);
+    if(!r.ok) throw new Error(`Erro ${r.status}`);
+    const d = await r.json();
+    planoContasFin = d.planoContas || [];
+    categoriasForcaManualFin = new Set((d.categorias||[]).filter(c=>c.forca_manual).map(c=>c.categoria_id));
+    el("mf-grupo").innerHTML = planoContasFin.map(g=>{
+      const marca = (g.regime === "manual") ? "⚠ " : "";
+      return `<option value="${g.codigo_grupo}">${marca}${g.codigo_grupo} ${g.descricao_grupo}</option>`;
+    }).join("");
+  }catch(e){
+    // Não deixa uma falha aqui impedir o modal de abrir — só avisa e deixa
+    // o select de grupo vazio (o resto do modal continua usável).
+    el("mf-grupo").innerHTML = "";
+    mostrarMsgFin("Não foi possível carregar o plano de contas: " + e.message, false);
+  }
+}
+
+function inicializarFormFin(){
+  if(!el("mf-mes").options.length){
+    el("mf-mes").innerHTML = MESES_NOME.map((nome,i)=>`<option value="${i+1}">${nome}</option>`).join("");
+  }
+  if(!el("mf-ano").value){
+    const hoje = new Date();
+    el("mf-ano").value = hoje.getFullYear();
+    el("mf-mes").value = hoje.getMonth() + 1;
+  }
+  el("mf-empresa").value = el("fin-empresa").value === "tf" ? "tf" : "rampa";
+}
+
+async function abrirModalFinanceiro(){
+  inicializarFormFin();
+  cancelarEdicaoFin();
+  await carregarPlanoContasFin();
+  el("modal-fin-overlay").classList.remove("hidden");
+  await carregarLancamentosFin();
+}
+function fecharModalFin(e){ if(e.target===el("modal-fin-overlay"))el("modal-fin-overlay").classList.add("hidden"); }
+
+function mostrarMsgFin(texto, ok){
+  const d = el("mf-msg");
+  d.textContent = texto;
+  d.className = ok ? "modal-msg msg-ok" : "modal-msg msg-err";
+  d.classList.remove("hidden");
+  setTimeout(()=>d.classList.add("hidden"), 4000);
+}
+
+async function carregarLancamentosFin(){
+  el("mf-tbody").innerHTML = `<tr><td colspan="7" style="text-align:center;color:var(--mt);padding:16px;">Carregando...</td></tr>`;
+  try{
+    const r = await fetch("/api/financeiro");
+    if(!r.ok) throw new Error("Falha ao carregar lançamentos");
+    lancamentosFin = await r.json();
+    renderTabelaFin();
+  }catch(e){
+    el("mf-tbody").innerHTML = `<tr><td colspan="7" style="text-align:center;color:var(--red);padding:16px;">Erro: ${e.message}</td></tr>`;
+  }
+}
+
+function descricaoGrupoFin(codigo_grupo){
+  const g = planoContasFin.find(x=>x.codigo_grupo===codigo_grupo);
+  return g ? `${g.codigo_grupo} ${g.descricao_grupo}` : codigo_grupo;
+}
+
+function renderTabelaFin(){
+  if(!lancamentosFin.length){
+    el("mf-tbody").innerHTML = `<tr><td colspan="7" style="text-align:center;color:var(--mt);padding:16px;">Nenhum lançamento manual ainda.</td></tr>`;
+    return;
+  }
+  el("mf-tbody").innerHTML = lancamentosFin.map(l=>`
+    <tr>
+      <td>${EMPRESAS[l.empresa]?.label || l.empresa}</td>
+      <td>${l.ano}</td>
+      <td>${MESES_NOME[l.mes-1]}</td>
+      <td>${descricaoGrupoFin(l.codigo_grupo)}</td>
+      <td>${l.subitem || "—"}</td>
+      <td style="text-align:right;">${formatarMoeda(Number(l.valor))}</td>
+      <td style="text-align:right;white-space:nowrap;">
+        <button class="btn-sec" style="padding:5px 10px;font-size:12px;" onclick="editarLancamentoFin(${l.id})">✏️</button>
+        <button class="btn-danger" style="padding:5px 10px;font-size:12px;" onclick="excluirLancamentoFin(${l.id})">🗑️</button>
+      </td>
+    </tr>`).join("");
+}
+
+function editarLancamentoFin(id){
+  const l = lancamentosFin.find(x=>x.id===id);
+  if(!l) return;
+  finEditandoId = id;
+  el("mf-empresa").value = l.empresa;
+  el("mf-ano").value = l.ano;
+  el("mf-mes").value = l.mes;
+  el("mf-grupo").value = l.codigo_grupo;
+  el("mf-subitem").value = l.subitem || "";
+  el("mf-valor").value = l.valor;
+  el("mf-obs").value = l.observacao || "";
+  el("mf-btn-salvar").textContent = "Atualizar";
+  el("mf-btn-cancelar").classList.remove("hidden");
+}
+
+function cancelarEdicaoFin(){
+  finEditandoId = null;
+  el("mf-subitem").value = "";
+  el("mf-valor").value = "";
+  el("mf-obs").value = "";
+  el("mf-btn-salvar").textContent = "Salvar";
+  el("mf-btn-cancelar").classList.add("hidden");
+}
+
+async function salvarLancamentoFin(){
+  const empresa = el("mf-empresa").value;
+  const ano = parseInt(el("mf-ano").value, 10);
+  const mes = parseInt(el("mf-mes").value, 10);
+  const codigo_grupo = el("mf-grupo").value;
+  const subitem = el("mf-subitem").value.trim();
+  const valor = parseFloat(el("mf-valor").value);
+  const observacao = el("mf-obs").value.trim();
+  if(!ano || !mes || !codigo_grupo || isNaN(valor)){ mostrarMsgFin("Preencha ano, mês, grupo e valor.", false); return; }
+
+  const btn = el("mf-btn-salvar");
+  btn.disabled = true;
+  try{
+    const payload = { empresa, ano, mes, codigo_grupo, subitem: subitem || null, valor, observacao: observacao || null, usuario: usuarioAtual.login };
+    let r;
+    if(finEditandoId){
+      r = await fetch("/api/financeiro", { method:"PUT", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ id: finEditandoId, ...payload }) });
+    }else{
+      r = await fetch("/api/financeiro", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(payload) });
+    }
+    if(!r.ok){ const err = await r.json(); throw new Error(err.erro || `Erro ${r.status}`); }
+    mostrarMsgFin("✓ Lançamento salvo com sucesso!", true);
+    cancelarEdicaoFin();
+    await carregarLancamentosFin();
+    await carregarDRE();
+  }catch(e){
+    mostrarMsgFin("Erro: " + e.message, false);
+  }finally{
+    btn.disabled = false;
+  }
+}
+
+async function excluirLancamentoFin(id){
+  if(!confirm("Excluir este lançamento?"))return;
+  try{
+    const r = await fetch("/api/financeiro", { method:"DELETE", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ id }) });
+    if(!r.ok){ const err = await r.json(); throw new Error(err.erro || `Erro ${r.status}`); }
+    if(finEditandoId === id) cancelarEdicaoFin();
+    await carregarLancamentosFin();
+    await carregarDRE();
+  }catch(e){
+    mostrarMsgFin("Erro: " + e.message, false);
   }
 }
 

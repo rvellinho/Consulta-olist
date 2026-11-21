@@ -18,6 +18,14 @@
     "api/estoque.js": {
       "memory": 256,
       "maxDuration": 60
+    },
+    "api/financeiro-sync-diario.js": {
+      "memory": 256,
+      "maxDuration": 300
+    },
+    "api/financeiro.js": {
+      "memory": 256,
+      "maxDuration": 60
     }
   },
   "crons": [
@@ -40,6 +48,14 @@
     {
       "path": "/api/estoque-sync-diario?empresa=tf",
       "schedule": "15 9 * * *"
+    },
+    {
+      "path": "/api/financeiro-sync-diario",
+      "schedule": "0 8 * * *"
+    },
+    {
+      "path": "/api/financeiro-sync-diario?empresa=tf",
+      "schedule": "15 8 * * *"
     }
   ]
 }

@@ -56,6 +56,15 @@ for the same duplicated logic.
   `estoque_catalogo` up to date (cadastro + elegibilidade, via `api/_lib/estoque-classificacao.js`)
   — this is the only place that still classifies products one-by-one against Olist v2, since the
   bulk v3 endpoints don't expose the fields (`classe_produto`, `localizacao`, etc.) needed for that.
+- **`api/financeiro.js`** — Monta o DRE (`GET ?acao=dre&ano=&mes=&empresa=` ou `&consolidado=true`
+  pra somar rampa+tf), devolve o plano de contas (`GET ?acao=plano-contas`) e faz CRUD de
+  lançamentos manuais na tabela `financeiro_lancamentos_manuais` (sem `acao`, estilo
+  `api/lancamentos.js`). Só lê/agrega dados já sincronizados — nunca bate na Olist. Ver "Módulo
+  Financeiro (DRE)" abaixo.
+- **`api/financeiro-sync-diario.js`** — Daily cron (ver "Módulo Financeiro (DRE)" abaixo) que
+  mantém `financeiro_mensal` atualizada: sincroniza `financeiro_categorias` e classifica cada
+  título de contas a receber/pagar dos últimos 2 meses por categoria/competência/caixa. Mesmo
+  padrão de checkpoint de `api/estoque-sync-diario.js`.
 - **`api/usuarios.js`** — CRUD for the `usuarios` table in Supabase (admin-only in the UI).
 - **`api/lancamentos.js`** — CRUD for the `contatos_propostas` table in Supabase: manual monthly
   entry of Contatos/Propostas counts per Carteira, shown in the Relatórios tab (admin-only in the
@@ -120,15 +129,16 @@ Single file containing all CSS and JS inline (~1000 lines). No framework, no mod
   `DEMO` dataset, sets `modoDemo = true`, and shows a "DEMO" badge.
 - **Roles (`perfil`)**: `admin`, `analista`, `visualizador`. `visualizador` is read-only (no
   "Análise" column/edit form). Only `admin` sees the "⚙️ Configurações" menu (Usuários +
-  Importar, consolidated into one dropdown — see `tab-configuracoes`); Estoque is visible to
-  both `admin` and `analista`.
+  Importar, consolidated into one dropdown — see `tab-configuracoes`) and the "💰 Financeiro"
+  menu (DRE); Estoque is visible to both `admin` and `analista`.
 - **Empresa** (`empresaAtual`, `rampa` ou `tf`): escolhida numa tela própria logo após o login
   (pulada se o usuário só tiver acesso a uma — campo `empresas` do usuário) e trocável sem sair
   do app pelo seletor no cabeçalho. Clientes/Importar ficam escondidos quando a empresa não é
   `rampa` (ver "Multi-empresa" acima). Persistida em `sessionStorage["empresaEscolhida"]`.
-- **Tabs** (`mudarAba`): Clientes (default), Usuários, Importar, Estoque — each is a `<div>`
-  toggled via `.hidden`, not separate routes/pages (Usuários/Importar são acessadas pelo menu
-  Configurações, mas continuam sendo as mesmas abas internamente).
+- **Tabs** (`mudarAba`): Clientes (default), Usuários, Importar, Estoque, Financeiro/DRE — each
+  is a `<div>` toggled via `.hidden`, not separate routes/pages (Usuários/Importar/Financeiro são
+  acessadas por menus suspensos — Configurações / Financeiro —, mas continuam sendo as mesmas
+  abas internamente).
 - **Clientes tab**: paginated (100/page) search against `/api/contatos`; clicking a row opens a
   modal that lazily fetches the live credit limit (`/api/contatos?id=`) and shows/edits the
   matching `analisesBD` entry; saving posts to `/api/salvar`.
@@ -141,6 +151,14 @@ Single file containing all CSS and JS inline (~1000 lines). No framework, no mod
   product's cadastro changed and the admin doesn't want to wait for the 6am cron. Report is
   filterable/sortable/groupable client-side, and exportable to `.xls` (HTML table trick, not a
   real Excel format).
+- **Financeiro/DRE tab** (`aba-financeiro-dre`, admin-only, sem restrição por empresa — funciona
+  pra rampa/tf/consolidado independente da empresa escolhida no cabeçalho): filtro de
+  empresa/ano/mês, busca `/api/financeiro?acao=dre`, renderiza os blocos do DRE com subtotais
+  (Receita Líquida, Lucro Bruto, Resultado Antes de Juros, Lucro Líquido, Resultado do Período) e
+  um aviso vermelho quando existem lançamentos "não classificados" (categoria da Tiny não mapeada
+  no plano de contas). Botão "+ Lançamento Manual" abre `modal-fin-overlay`, que faz CRUD contra
+  `/api/financeiro` (sem `acao`) pros lançamentos que nunca vêm da Olist — ver "Módulo Financeiro
+  (DRE)" abaixo.
 
 ## Regras críticas da API Olist — LEIA ANTES DE QUALQUER ALTERAÇÃO
 
@@ -305,6 +323,80 @@ de alguma empresa cresce além do que uma chamada dá conta.
 
 ---
 
+## Módulo Financeiro (DRE) (`api/financeiro.js`, `api/financeiro-sync-diario.js`)
+
+DRE gerencial pra Rampa e TF (balanço/fluxo de caixa ficam pra depois — este módulo cobre só o
+DRE). Prioridade explícita do usuário; decisão dele sobre regime contábil (2026-11-20): **receitas
+e impostos sobre a venda por competência, despesas (incluindo CMV) por caixa** — descasamento
+entre os dois mês a mês é esperado, não é bug (ex: CMV pago num mês pode superar a receita
+reconhecida por competência nesse mesmo mês).
+
+- **Plano de contas** (`financeiro_plano_contas`, ~16-20 linhas, seed manual): mapeia
+  `codigo_grupo` (ex: `"2.06"`) pra uma `linha_dre` (slug usado por `api/financeiro.js` pra montar
+  os blocos do DRE, na ordem certa) e um `regime` (`competencia`/`caixa`/`manual`). Os grupos
+  `6.01`/`6.02` (Entradas/Saídas) têm `entra_dre=false` — nunca aparecem no relatório, mas existem
+  pra não travar um futuro fluxo de caixa.
+- **Categorias da Tiny** (`financeiro_categorias`, cache de `GET /categorias-receita-despesa`,
+  sincronizada 1x/dia): cada categoria tem `codigo_grupo` (extraído por regex do campo `grupo` da
+  Tiny) e um flag `forca_manual`. **Grupos/categorias que NUNCA são puxados automaticamente da
+  Tiny, mesmo que existam lançamentos lá** (apuração não-mensal ou valor que precisa de
+  estimativa, não o dado bruto):
+  - `financeiro_plano_contas.regime='manual'` no grupo `5.02` (Impostos sobre o resultado —
+    IRPJ/CSLL são apurados trimestralmente; um pull mensal bruto distorceria o DRE).
+  - `financeiro_categorias.forca_manual=true` nas categorias de provisão (inadimplência, 13º
+    salário, depreciação) dentro de grupos que por outro lado sincronizam normal.
+  - Pra esses casos, o lançamento é sempre manual via `financeiro_lancamentos_manuais`
+    (`codigo_grupo` + `subitem` livre, ex: `"Provisão"` vs `"Ajuste"` dentro do grupo `5.02`).
+- **Fonte de cada grupo** (`financeiro_plano_contas.fonte_tiny`): `GET /caixa` (lançamentos de
+  caixa da Olist) devolve **403 com a conexão OAuth atual** — testado ao vivo, o token de acesso
+  não tem nenhuma role de caixa/extrato entre as 48 liberadas (é permissão de app, só o Rafael
+  resolve isso ampliando o escopo no painel da Tiny). Por isso:
+  - Receita (`1.01`-`1.03`): fonte `contas_receber`, mês = **data de emissão** (`dataCompetencia`
+    nunca vem preenchida em contas a receber na prática — confirmado ao vivo em vários títulos
+    pagos; emissão já é a competência de uma venda).
+  - Imposto sobre venda (`5.01`): fonte `contas_pagar`, mês = `dataCompetencia` real do título
+    (essa sim vem preenchida em contas a pagar), buscado numa janela alargada por vencimento
+    (±1 mês) porque vencimento pode ficar longe da competência real.
+  - Despesas/CMV (`2.xx`/`3.01`/`3.02`/`4.xx`): fonte `contas_pagar`, mês = `dataLiquidacao` (data
+    em que foi de fato pago), mesma janela alargada por vencimento.
+- **`financeiro_mensal`**: uma linha por título (não por categoria somada) — chave única
+  `(empresa, titulo_tipo, titulo_id)`. A soma por categoria/mês é feita em tempo de leitura em
+  `api/financeiro.js`, nunca gravada pré-somada. **Isso não é acidental** — ver "Bug de
+  acumulação" abaixo pro motivo de ter sido desenhado assim.
+- **Classificação por histórico (stopgap, 2026-11-20)**: pra título de contas a pagar com
+  `categoria: null` na Tiny (categoria nova, criada depois do lançamento — caso real: categorias
+  de imposto só foram cadastradas em 2026-11-20, títulos pagos antes ficam sem categoria pra
+  sempre até alguém retaguear manualmente), `api/financeiro-sync-diario.js` casa o texto do campo
+  `historico` do título contra padrões (`PIS`, `COFINS`, `ICMS`, `ISS`/`ISSQN`, `SIMPLES
+  NACIONAL`) e classifica como grupo `5.01` mesmo sem categoria real, gravando com
+  `origem='tiny_historico'` (valor específico pra isso em `financeiro_mensal.origem`, distinto de
+  `tiny_caixa`/`tiny_competencia`/`manual`) — fica visualmente distinguível de uma classificação
+  oficial da Tiny. **Escopo deliberadamente restrito ao grupo `5.01`** — nunca estender esse
+  mecanismo pro grupo `5.02`, que é manual por desenho. Auto-corretivo: quando a categoria for
+  corrigida na Tiny, o próximo sync substitui a linha pela classificação real (idempotente por
+  `titulo_id`), sem precisar de script de limpeza.
+- Roda 1x/dia por empresa via cron (`vercel.json`), mesmo padrão de checkpoint/retomada de
+  `api/estoque-sync-diario.js` (`ORCAMENTO_TOTAL_MS`, `MAX_TENTATIVAS_POR_TITULO`,
+  `SALVAR_PROGRESSO_A_CADA`, `TRAVADO_APOS_MS`). Reprocessa sempre os 2 últimos meses (mês
+  corrente + anterior), não assume mês fechado como imutável. Volume medido ao vivo pra Rampa
+  (2026-11-20): ~1150 títulos pra reprocessar 2 meses, ~200s de trabalho — precisa de várias
+  chamadas por dia pra terminar (TF ainda não medido).
+
+### Bug de acumulação em `financeiro_mensal` (corrigido, 2026-11-20)
+O desenho original de `financeiro_mensal` era pré-somado (uma linha por categoria/mês, `valor`
+já agregado), com o sync acumulando em memória (`acumulado[chave].valor += valor`) e fazendo
+upsert a cada checkpoint de 20 títulos. **Quebrou na prática**: o upsert usa `Prefer:
+resolution=merge-duplicates`, que **substitui** a coluna `valor` no conflito (é um `SET col =
+EXCLUDED.col` coluna-a-coluna), não soma — então cada checkpoint sobrescrevia o total do
+checkpoint anterior pra mesma categoria/mês (e o mesmo valeria entre invocações separadas, já
+que cada chamada nova do Node começa com o acumulador vazio). Visto ao vivo: receita de
+outubro/2026 aparecia como R$8.431,09 em vez do valor real (~R$428 mil). **Lição**: um upsert com
+`merge-duplicates` nunca é seguro pra acumular um total em cima de chamadas parciais — ou a
+chave é granular o suficiente pra cada upsert ser idempotente por si só (como ficou: uma linha
+por título), ou a soma tem que acontecer inteira numa única chamada, nunca em pedaços.
+
+---
+
 ## Estrutura do banco Supabase
 
 | Tabela | Chave | Descrição |
@@ -315,6 +407,11 @@ de alguma empresa cresce além do que uma chamada dá conta.
 | `contatos_propostas` | `id` (unique em `ano`+`mes`+`carteira`) | Lançamento manual de Contatos/Propostas por mês/carteira, na aba Relatórios (Rampa-only por enquanto) |
 | `estoque_catalogo` | `produto_id` + `empresa` | Cadastro + elegibilidade de cada produto (serviço/representação), atualizado 1x/dia — ver "Rotina diária de estoque" |
 | `estoque_sync_status` | `empresa` (uma linha por empresa) | Progresso/estado da rotina diária de estoque (lista de pendentes, saltos, última conclusão, última tentativa e último erro — ver "Falha silenciosa do cron diário") |
+| `financeiro_plano_contas` | `codigo_grupo` | Mapeamento grupo→linha do DRE + regime (competência/caixa/manual) + fonte Tiny — seed manual, sem coluna `empresa` (compartilhado) |
+| `financeiro_categorias` | `categoria_id` + `empresa` | Cache de `GET /categorias-receita-despesa`, com `codigo_grupo` extraído e flag `forca_manual` |
+| `financeiro_mensal` | `empresa` + `titulo_tipo` + `titulo_id` | Uma linha por título de contas a receber/pagar já classificado (não pré-somado — ver "Módulo Financeiro (DRE)") |
+| `financeiro_lancamentos_manuais` | `id` | Lançamentos que nunca vêm da Olist (provisões, ajustes) — `codigo_grupo` + `subitem` livre opcional |
+| `financeiro_sync_status` | `empresa` (uma linha por empresa) | Progresso/estado da rotina diária financeira, mesmo padrão de `estoque_sync_status` |
 
 - CNPJ é a chave primária preferida (mais estável que IDs internos da Olist)
 - CNPJ sempre armazenado limpo (sem `.`, `/`, `-`)
@@ -326,7 +423,7 @@ de alguma empresa cresce além do que uma chamada dá conta.
 
 | Perfil | Permissões |
 |---|---|
-| `admin` | Acesso total — Clientes, Usuários, Importar, Estoque, Relatórios |
+| `admin` | Acesso total — Clientes, Usuários, Importar, Estoque, Relatórios, Financeiro/DRE |
 | `analista` | Clientes (leitura + edição de análise) e Estoque |
 | `visualizador` | Clientes (somente leitura) |
 
@@ -339,6 +436,10 @@ de alguma empresa cresce além do que uma chamada dá conta.
 3. **Loop de produtos no serverless** → timeout do Vercel, mover para o frontend
 4. **Não salvar novo refresh token após troca** → token expira, OAuth para de funcionar
 5. **`tipo: "S"` interpretado como Serviço** → é Simples (variação), não serviço
+6. **Upsert com `Prefer: resolution=merge-duplicates` pra acumular um total em cima de
+   chamadas parciais** → o upsert SUBSTITUI a coluna no conflito, não soma — cada checkpoint
+   sobrescrevia o total do checkpoint anterior (ver "Bug de acumulação" no Módulo Financeiro).
+   Granularidade tem que ser fina o suficiente pra cada upsert ser idempotente por si só
 
 ---
 
