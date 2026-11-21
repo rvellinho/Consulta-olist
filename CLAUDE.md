@@ -450,10 +450,13 @@ outubro pode só ser vendido em dezembro). Produziu ~R$627 mil de "CMV" incorret
 - **Produto sem custo cadastrado conta como custo R$0 nesse item** (não trava o cálculo da nota
   inteira) — o sync loga quantos itens de cada lote ficaram sem custo
   (`checkpoint (cmv): X/Y — N/M itens sem custo cadastrado neste lote`). **Testado ao vivo em
-  2026-11-21: 0 produtos com `preco_custo`/`preco_custo_medio` cadastrado em qualquer venda
-  recente de Rampa ou TF** — enquanto isso não mudar, o CMV aparece como R$0 no DRE (subestimado,
-  não estimado errado). O cadastro de custo é manual, direto na Tiny (tela do produto, ou um
-  import de planilha se o Tiny tiver essa opção na própria interface) — **não existe endpoint de
+  2026-11-21: Rampa com 0 produtos com `preco_custo`/`preco_custo_medio` cadastrado em qualquer
+  venda recente (CMV = R$0,00 em 256 notas) — TF já tem custo cadastrado em parte do catálogo
+  (CMV = R$3.835,85 em 260 notas, não-zero)** — pra Rampa, enquanto isso não mudar, o CMV aparece
+  como R$0 no DRE (subestimado, não estimado errado); pra TF, o valor já reflete parcialmente a
+  realidade, mas ainda subestimado enquanto nem todo produto tiver custo cadastrado. O cadastro de
+  custo é manual, direto na Tiny (tela do produto, ou um import de planilha se o Tiny tiver essa
+  opção na própria interface) — **não existe endpoint de
   API (nem v2 nem v3) pra escrever `preco_custo`**, confirmado na documentação oficial da v3
   (`PUT /produtos/{id}/preco` só aceita `preco`/`precoPromocional`). A leitura funciona normal
   pelas duas versões.
