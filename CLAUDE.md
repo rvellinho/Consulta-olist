@@ -260,27 +260,27 @@ Single file containing all CSS and JS inline (~1000 lines). No framework, no mod
   **Se precisar adicionar outro endpoint novo no futuro, checar a contagem antes**
   (`ls api/*.js | wc -l` deve ficar ≤12) — a alternativa é upgrade pro plano Pro (pago),
   decisão que é sempre do Rafael, nunca automática.
-- **⚠️ Pendência não resolvida (achado 2026-11-20): os crons de `estoque-sync-diario.js`
-  e `financeiro.js` (`?acao=sync-diario`) podem nunca estar de fato processando nada.**
-  A documentação oficial da Vercel confirma que todo cron dispara via **GET** (nunca
-  POST), com o header `x-vercel-cron-schedule` (não existe header `x-vercel-cron` — o
-  código destes dois arquivos checa um header que não existe). Só que o handler de
-  ambos tem um `if (req.method === "GET") { return status-only }` ANTES da checagem de
-  cron/segredo — ou seja, como o cron sempre chega como GET, ele sempre cai nesse
-  curto-circuito e nunca chega a processar, independente do header. Se isso for real,
-  o que de fato mantém `estoque_catalogo`/`financeiro_mensal` atualizados até hoje tem
-  sido só chamada manual (botão "Atualizar Catálogo Agora" da aba Estoque, que faz
-  `POST`) ou teste manual — não o cron agendado. **Não foi corrigido ainda** (fora do
-  escopo da fusão de arquivos de 2026-11-20, que só preservou o comportamento existente
-  pra não arriscar quebrar mais coisa de uma vez) — próxima sessão que tocar nesses dois
-  arquivos deveria confirmar com o Rafael se o cron realmente nunca rodou de verdade (dá
-  pra checar `ultima_tentativa_em` em `estoque_sync_status`/`financeiro_sync_status` e
-  comparar com os horários dos crons no `vercel.json`) e, se confirmado, decidir como
-  diferenciar "GET do cron de verdade" de "GET de leitura de status pelo frontend" (ex:
-  usar o header `x-vercel-cron-schedule` real em vez do curto-circuito por método, ou
-  mover a leitura de status pro frontend pra um `acao` GET separado e deixar o método
-  GET "nu" cair direto na lógica de processamento). `api/relatorios.js`
-  (`?acao=sync-diario`) não tem esse problema — nunca teve o curto-circuito por GET.
+- **Cron diário de estoque/financeiro nunca processava nada (achado e corrigido
+  2026-11-20).** A documentação oficial da Vercel confirma que todo cron dispara via
+  **GET** (nunca POST), marcado com o header `x-vercel-cron-schedule`. Só que o handler
+  de `api/estoque-sync-diario.js` e de `api/financeiro.js` (`?acao=sync-diario`) tinha um
+  `if (req.method === "GET") { return status-only }` ANTES de checar se era o cron de
+  verdade (e checava um header errado, `x-vercel-cron`, que nem existe) — ou seja, como
+  o cron sempre chega como GET, ele sempre caía nesse curto-circuito e nunca processava
+  nada, desde que esse código existe. Confirmado em produção comparando
+  `ultima_tentativa_em` de `estoque_sync_status`/`financeiro_sync_status` contra os
+  horários exatos dos crons no `vercel.json` — nunca bateram, só com horários de teste
+  manual. O que mantinha `estoque_catalogo` atualizado até aqui era só o botão "Atualizar
+  Catálogo Agora" (POST); o financeiro (novo nesse mesmo dia) nunca tinha rodado pelo
+  cron nem uma vez. **Corrigido**: a checagem do header real (`x-vercel-cron-schedule`)
+  agora vem ANTES do curto-circuito por método, então o cron passa direto pro
+  processamento mesmo chegando como GET — testado ao vivo nos dois arquivos (GET sem o
+  header continua só lendo status; GET com o header processa de verdade). `api/relatorios.js`
+  (`?acao=sync-diario`) nunca teve esse problema — não tinha esse curto-circuito por GET.
+  **Lição**: um `if (req.method === "GET")` bem no topo de um handler que também recebe
+  cron merece desconfiança — sempre checar primeiro na documentação do provedor qual
+  método e qual header ele realmente usa pra disparar, antes de assumir que "GET = leitura,
+  outra coisa = ação" cobre o caso do cron.
 
 ---
 
