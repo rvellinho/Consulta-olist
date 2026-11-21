@@ -137,10 +137,21 @@ async function limparForaDoCatalogo(empresa, idsDoDia) {
 module.exports = async (req, res) => {
   const empresa = String(req.query.empresa || "rampa").toLowerCase();
 
+  // A Vercel SEMPRE dispara o cron via GET (confirmado na documentação
+  // oficial — não existe método configurável em vercel.json), marcando a
+  // chamada com o header `x-vercel-cron-schedule` (não `x-vercel-cron`, que
+  // não existe e nunca bateu aqui). Por isso essa checagem tem que vir ANTES
+  // da leitura de status abaixo — caso contrário TODO disparo do cron caía
+  // no "só lê status" e nunca chegava a processar nada, todo santo dia,
+  // desde que esse arquivo existe (achado em produção, 2026-11-20 — ver
+  // CLAUDE.md "Vercel serverless — limitações").
+  const vercelCron = req.headers["x-vercel-cron-schedule"];
+
   // Leitura de status (usada pelo botão "Atualizar Catálogo" do frontend pra
   // mostrar quando foi a última sincronização e acompanhar o progresso de uma
-  // em andamento) — não dispara processamento, só lê.
-  if (req.method === "GET") {
+  // em andamento) — não dispara processamento, só lê. Só entra aqui quando
+  // NÃO é o cron de verdade.
+  if (!vercelCron && req.method === "GET") {
     try {
       const status = await lerStatus(empresa);
       return res.status(200).json({ ok: true, status });
@@ -149,7 +160,6 @@ module.exports = async (req, res) => {
     }
   }
 
-  const vercelCron = req.headers["x-vercel-cron"];
   if (CRON_SECRET && req.headers.authorization !== `Bearer ${CRON_SECRET}` && !vercelCron) {
     return res.status(401).json({ erro: "não autorizado" });
   }

@@ -315,9 +315,19 @@ async function listarIdsContasPagar(accessToken, dataIni, dataFim) {
 async function executarSyncDiario(req, res) {
   const empresa = String(req.query.empresa || "rampa").toLowerCase();
 
+  // A Vercel SEMPRE dispara o cron via GET (confirmado na documentação
+  // oficial), marcando a chamada com o header `x-vercel-cron-schedule` (não
+  // `x-vercel-cron`, que não existe e nunca bateu aqui). Por isso essa
+  // checagem tem que vir ANTES da leitura de status abaixo — caso contrário
+  // TODO disparo do cron caía no "só lê status" e nunca processava nada
+  // (achado em produção, 2026-11-20 — ver CLAUDE.md "Vercel serverless —
+  // limitações", mesmo bug do estoque-sync-diario.js).
+  const vercelCron = req.headers["x-vercel-cron-schedule"];
+
   // GET só lê o status (usado por um eventual botão "sincronizar agora" no
-  // frontend, igual ao de Estoque) — não dispara processamento.
-  if (req.method === "GET") {
+  // frontend, igual ao de Estoque) — não dispara processamento. Só entra
+  // aqui quando NÃO é o cron de verdade.
+  if (!vercelCron && req.method === "GET") {
     try {
       const status = await lerStatusSync(empresa);
       return res.status(200).json({ ok: true, status });
@@ -326,7 +336,6 @@ async function executarSyncDiario(req, res) {
     }
   }
 
-  const vercelCron = req.headers["x-vercel-cron"];
   if (CRON_SECRET && req.headers.authorization !== `Bearer ${CRON_SECRET}` && !vercelCron) {
     return res.status(401).json({ erro: "não autorizado" });
   }
