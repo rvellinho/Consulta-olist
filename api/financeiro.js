@@ -18,6 +18,7 @@
 //     dataLiquidacao (data em que foi de fato pago) pra despesa.
 const https = require("https");
 const { getAccessToken } = require("./_lib/olist-auth");
+const { getConfigEmpresa } = require("./_lib/empresas");
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
@@ -158,6 +159,89 @@ function formatarData(ano, mes, dia) { return `${ano}-${String(mes).padStart(2, 
 function addMeses(ano, mes, delta) {
   const total = ano * 12 + (mes - 1) + delta;
   return { ano: Math.floor(total / 12), mes: (total % 12) + 1 };
+}
+// new Date(ano, mes, 0) usa mes como índice do MÊS SEGUINTE (Date é 0-indexed) —
+// dia 0 desse mês seguinte é o último dia do mês humano "mes".
+function ultimoDiaDoMes(ano, mes) { return new Date(ano, mes, 0).getDate(); }
+function formatarDataBR(ano, mes, dia) { return `${String(dia).padStart(2, "0")}/${String(mes).padStart(2, "0")}/${ano}`; }
+
+// --- CMV (custo da mercadoria vendida): itens de nota de venda × custo do produto ---
+// Ver CLAUDE.md "Módulo Financeiro (DRE)" — grupos 4.01/4.02 antes vinham de
+// contas-pagar (pagamento de compra), o que o Rafael pediu pra tirar do DRE
+// (2026-11-20): compra não é custo da venda. O cálculo certo é por nota
+// emitida: quantidade vendida × custo do produto na Tiny. Só cobre 4.01
+// (Estoques) por enquanto — 4.02 (Insumos de Serviços) continua manual.
+//
+// Mesma regra de "mês fechado não muda mais" do resto do sync: a janela de
+// reprocessamento (mês atual + anterior) usa sempre o custo que estiver
+// cadastrado na Tiny no momento do processamento; depois que um mês sai dessa
+// janela, nunca mais é recalculado — o CMV fica congelado no último valor
+// calculado enquanto esse mês ainda estava na janela.
+//
+// Produto sem custo cadastrado na Tiny conta como custo 0 nesse item (em vez
+// de travar o cálculo todo) — enquanto o cadastro de custos não estiver
+// completo na Tiny, o CMV fica subestimado, não errado por estimativa.
+const SITUACOES_INVALIDAS_NOTA_VENDA_V2 = ["1", "3", "5", "10"]; // Pendente, Cancelada, Rejeitada, Denegada
+function ehErroSemResultadosV2(erro) {
+  return String(erro?.erros?.[0]?.erro || "").toLowerCase().includes("não retornou");
+}
+async function listarNotasVendaV2(tokenV2, dataInicialBR, dataFinalBR) {
+  const todas = [];
+  let pagina = 1;
+  while (true) {
+    const body = new URLSearchParams({
+      token: tokenV2, formato: "JSON", tipoNota: "S",
+      dataInicial: dataInicialBR, dataFinal: dataFinalBR, pagina: String(pagina),
+    }).toString();
+    const r = await httpsRequest("POST", "api.tiny.com.br", "/api2/notas.fiscais.pesquisa.php", body,
+      { "Content-Type": "application/x-www-form-urlencoded" });
+    const data = parseJSON(r.text);
+    if (data.retorno?.status === "Erro") {
+      if (ehErroSemResultadosV2(data.retorno)) break;
+      throw new Error(data.retorno.erros?.[0]?.erro || "Erro ao pesquisar notas fiscais");
+    }
+    const lista = (data.retorno?.notas_fiscais || []).map(n => n.nota_fiscal).filter(Boolean);
+    todas.push(...lista);
+    if (lista.length < 100) break;
+    pagina++;
+    await sleep(600);
+  }
+  return todas.filter(n => !SITUACOES_INVALIDAS_NOTA_VENDA_V2.includes(String(n.situacao)));
+}
+async function buscarDetalheNotaVendaV2(tokenV2, id) {
+  const body = new URLSearchParams({ token: tokenV2, id: String(id), formato: "JSON" }).toString();
+  const r = await httpsRequest("POST", "api.tiny.com.br", "/api2/nota.fiscal.obter.php", body,
+    { "Content-Type": "application/x-www-form-urlencoded" });
+  return parseJSON(r.text).retorno?.nota_fiscal || null;
+}
+async function buscarCustoProdutoV2(tokenV2, idProduto, cache) {
+  if (cache.has(idProduto)) return cache.get(idProduto);
+  const body = new URLSearchParams({ token: tokenV2, id: String(idProduto), formato: "JSON" }).toString();
+  const r = await httpsRequest("POST", "api.tiny.com.br", "/api2/produto.obter.php", body,
+    { "Content-Type": "application/x-www-form-urlencoded" });
+  const prod = parseJSON(r.text).retorno?.produto;
+  const custo = Number(prod?.preco_custo) || 0;
+  cache.set(idProduto, custo);
+  await sleep(600);
+  return custo;
+}
+// Calcula o CMV de uma nota (soma quantidade × custo de cada item) e devolve
+// também quantos itens ficaram sem custo cadastrado, só pra log/diagnóstico.
+async function calcularCmvNota(tokenV2, idNota, custoCache) {
+  const nota = await buscarDetalheNotaVendaV2(tokenV2, idNota);
+  let valor = 0, semCusto = 0, totalItens = 0;
+  for (const itWrap of (nota?.itens || [])) {
+    const it = itWrap?.item;
+    const idProduto = it?.id_produto;
+    const quantidade = Number(it?.quantidade) || 0;
+    if (!it) continue;
+    totalItens++;
+    if (!idProduto) { semCusto++; continue; }
+    const custo = await buscarCustoProdutoV2(tokenV2, idProduto, custoCache);
+    if (!custo) { semCusto++; continue; }
+    valor += quantidade * custo;
+  }
+  return { valor, semCusto, totalItens };
 }
 
 // --- classificação por histórico (fallback pra título sem categoria na Tiny) ---
@@ -350,7 +434,10 @@ async function executarSyncDiario(req, res) {
     await marcarTentativaSync(empresa);
 
     const accessToken = await getAccessToken(empresa);
+    const tokenV2 = getConfigEmpresa(empresa).tokenV2;
     const planoContas = await lerPlanoContasSync();
+    const grupoCmv = Object.values(planoContas).find(l => l.fonte_tiny === "notas_fiscais_itens")?.codigo_grupo || null;
+    const custoCache = new Map(); // custo do produto, em memória só durante esta chamada
 
     // Categorias são rápidas (uma lista paginada só) — sempre atualiza antes
     // de montar a fila, pra qualquer categoria nova já entrar classificada.
@@ -365,6 +452,7 @@ async function executarSyncDiario(req, res) {
     if (!status || !status.em_andamento || iniciadoHaMuito) {
       const filaReceita = [];
       const filaPagar = [];
+      const filaCmv = [];
       for (const p of periodos) {
         const iniEmissao = formatarData(p.ano, p.mes, 1);
         const fimEmissao = formatarData(p.ano, p.mes, 28);
@@ -380,6 +468,14 @@ async function executarSyncDiario(req, res) {
         const idsPagar = await listarIdsContasPagar(accessToken, formatarData(jIni.ano, jIni.mes, 1), formatarData(jFim.ano, jFim.mes, 28));
         idsPagar.forEach(id => filaPagar.push({ id, ano: p.ano, mes: p.mes }));
         await sleep(600);
+
+        if (grupoCmv) {
+          const iniBR = formatarDataBR(p.ano, p.mes, 1);
+          const fimBR = formatarDataBR(p.ano, p.mes, ultimoDiaDoMes(p.ano, p.mes));
+          const notasVenda = await listarNotasVendaV2(tokenV2, iniBR, fimBR);
+          notasVenda.forEach(n => filaCmv.push({ id: n.id, ano: p.ano, mes: p.mes }));
+          await sleep(600);
+        }
       }
       // Dedup simples por id+ano+mes (a janela de meses vizinhos pode repetir título em dois períodos-alvo)
       const vistoPagar = new Set();
@@ -391,21 +487,22 @@ async function executarSyncDiario(req, res) {
 
       status = {
         em_andamento: true,
-        pendentes: { receita: filaReceita, pagar: filaPagarUnica },
-        total: filaReceita.length + filaPagarUnica.length,
+        pendentes: { receita: filaReceita, pagar: filaPagarUnica, cmv: filaCmv },
+        total: filaReceita.length + filaPagarUnica.length + filaCmv.length,
         processados: 0,
         iniciado_em: new Date().toISOString(),
         concluido_em: null,
         ultimo_erro: null,
       };
       await salvarStatusSync(empresa, status);
-      console.log(`[financeiro-sync:${empresa}] execução nova: ${filaReceita.length} contas a receber + ${filaPagarUnica.length} contas a pagar a classificar`);
+      console.log(`[financeiro-sync:${empresa}] execução nova: ${filaReceita.length} contas a receber + ${filaPagarUnica.length} contas a pagar + ${filaCmv.length} notas de venda (cmv) a classificar`);
     } else {
-      console.log(`[financeiro-sync:${empresa}] retomando: ${status.pendentes.receita.length} receber + ${status.pendentes.pagar.length} pagar pendentes`);
+      console.log(`[financeiro-sync:${empresa}] retomando: ${status.pendentes.receita.length} receber + ${status.pendentes.pagar.length} pagar + ${(status.pendentes.cmv || []).length} cmv pendentes`);
     }
 
     const filaReceita = [...status.pendentes.receita];
     const filaPagar = [...status.pendentes.pagar];
+    const filaCmv = [...(status.pendentes.cmv || [])]; // (|| []) cobre execução que ficou em_andamento de antes desse campo existir
     // Granularidade por título (não por categoria somada): cada upsert é
     // idempotente, então um checkpoint no meio do caminho nunca sobrescreve
     // parte do total já gravado por um checkpoint anterior — a soma por
@@ -509,18 +606,49 @@ async function executarSyncDiario(req, res) {
       if (processadosDesdeCheckpoint >= SALVAR_PROGRESSO_A_CADA) {
         await salvarLote();
         status.pendentes.pagar = filaPagar;
-        status.processados = status.total - filaReceita.length - filaPagar.length;
+        status.processados = status.total - filaReceita.length - filaPagar.length - filaCmv.length;
         await salvarStatusSync(empresa, status);
         console.log(`[financeiro-sync:${empresa}] checkpoint (pagar): ${status.processados}/${status.total}`);
         processadosDesdeCheckpoint = 0;
       }
     }
 
-    await salvarLote();
-    status.pendentes = { receita: filaReceita, pagar: filaPagar };
-    status.processados = status.total - filaReceita.length - filaPagar.length;
+    let semCustoNoLote = 0, itensNoLote = 0;
+    while (grupoCmv && filaCmv.length > 0 && (Date.now() - inicioExecucao) < ORCAMENTO_TOTAL_MS) {
+      const item = filaCmv.shift();
+      await sleep(600);
+      try {
+        const { valor, semCusto, totalItens } = await calcularCmvNota(tokenV2, item.id, custoCache);
+        semCustoNoLote += semCusto;
+        itensNoLote += totalItens;
+        lote.push({
+          ano: item.ano, mes: item.mes, codigo_grupo: grupoCmv, categoria_id: null,
+          origem: "tiny_notas_itens", regime: "competencia",
+          titulo_tipo: "cmv", titulo_id: item.id, valor,
+        });
+      } catch (erroRede) {
+        console.error(`[financeiro-sync] erro na nota de venda (cmv) ${item.id}: ${erroRede.message}`);
+        item.tentativas = (item.tentativas || 0) + 1;
+        if (item.tentativas <= MAX_TENTATIVAS_POR_TITULO) filaCmv.push(item);
+      }
+      processadosDesdeCheckpoint++;
+      if (processadosDesdeCheckpoint >= SALVAR_PROGRESSO_A_CADA) {
+        await salvarLote();
+        status.pendentes.cmv = filaCmv;
+        status.processados = status.total - filaReceita.length - filaPagar.length - filaCmv.length;
+        await salvarStatusSync(empresa, status);
+        console.log(`[financeiro-sync:${empresa}] checkpoint (cmv): ${status.processados}/${status.total}` +
+          (itensNoLote ? ` — ${semCustoNoLote}/${itensNoLote} itens sem custo cadastrado neste lote` : ""));
+        processadosDesdeCheckpoint = 0;
+        semCustoNoLote = 0; itensNoLote = 0;
+      }
+    }
 
-    if (filaReceita.length === 0 && filaPagar.length === 0) {
+    await salvarLote();
+    status.pendentes = { receita: filaReceita, pagar: filaPagar, cmv: filaCmv };
+    status.processados = status.total - filaReceita.length - filaPagar.length - filaCmv.length;
+
+    if (filaReceita.length === 0 && filaPagar.length === 0 && filaCmv.length === 0) {
       status.em_andamento = false;
       status.concluido_em = new Date().toISOString();
       await salvarStatusSync(empresa, status);
@@ -530,7 +658,7 @@ async function executarSyncDiario(req, res) {
 
     await salvarStatusSync(empresa, status);
     console.error(`[financeiro-sync:${empresa}] orçamento de tempo esgotado: ${status.processados}/${status.total} — precisa de outra chamada pra terminar`);
-    return res.status(200).json({ ok: true, concluido: false, processados: status.processados, restante: filaReceita.length + filaPagar.length });
+    return res.status(200).json({ ok: true, concluido: false, processados: status.processados, restante: filaReceita.length + filaPagar.length + filaCmv.length });
 
   } catch (e) {
     console.error(`[financeiro-sync:${empresa}] erro fatal:`, e.message);

@@ -370,9 +370,10 @@ de alguma empresa cresce além do que uma chamada dá conta.
 
 DRE gerencial pra Rampa e TF (balanço/fluxo de caixa ficam pra depois — este módulo cobre só o
 DRE). Prioridade explícita do usuário; decisão dele sobre regime contábil (2026-11-20): **receitas
-e impostos sobre a venda por competência, despesas (incluindo CMV) por caixa** — descasamento
-entre os dois mês a mês é esperado, não é bug (ex: CMV pago num mês pode superar a receita
-reconhecida por competência nesse mesmo mês).
+e impostos sobre a venda por competência, despesas por caixa** — descasamento entre os dois mês a
+mês é esperado, não é bug. **Exceção, desde 2026-11-21**: CMV (grupo `4.01`) é por competência
+também (mês da nota de venda emitida), não por caixa — ver "CMV real" abaixo pro motivo (compra
+paga não é o custo da venda).
 
 - **Plano de contas** (`financeiro_plano_contas`, ~16-20 linhas, seed manual): mapeia
   `codigo_grupo` (ex: `"2.06"`) pra uma `linha_dre` (slug usado por `api/financeiro.js` pra montar
@@ -400,8 +401,11 @@ reconhecida por competência nesse mesmo mês).
   - Imposto sobre venda (`5.01`): fonte `contas_pagar`, mês = `dataCompetencia` real do título
     (essa sim vem preenchida em contas a pagar), buscado numa janela alargada por vencimento
     (±1 mês) porque vencimento pode ficar longe da competência real.
-  - Despesas/CMV (`2.xx`/`3.01`/`3.02`/`4.xx`): fonte `contas_pagar`, mês = `dataLiquidacao` (data
-    em que foi de fato pago), mesma janela alargada por vencimento.
+  - Despesas (`2.xx`/`3.01`/`3.02`): fonte `contas_pagar`, mês = `dataLiquidacao` (data em que
+    foi de fato pago), mesma janela alargada por vencimento.
+  - CMV/Estoques (`4.01`): fonte `notas_fiscais_itens` — **não** vem de `contas_pagar` desde
+    2026-11-21 (ver "CMV real" abaixo). Insumos de Serviços (`4.02`) continua `regime='manual'`,
+    sem fonte automática — só lançamento manual, igual antes.
 - **`financeiro_mensal`**: uma linha por título (não por categoria somada) — chave única
   `(empresa, titulo_tipo, titulo_id)`. A soma por categoria/mês é feita em tempo de leitura em
   `api/financeiro.js`, nunca gravada pré-somada. **Isso não é acidental** — ver "Bug de
@@ -424,6 +428,45 @@ reconhecida por competência nesse mesmo mês).
   corrente + anterior), não assume mês fechado como imutável. Volume medido ao vivo pra Rampa
   (2026-11-20): ~1150 títulos pra reprocessar 2 meses, ~200s de trabalho — precisa de várias
   chamadas por dia pra terminar (TF ainda não medido).
+
+### CMV real: nota de venda × custo do produto, não compra paga (2026-11-21)
+Desenho original (v1, 2026-11-20) sourceava `4.01`/`4.02` de `contas_pagar` por caixa — ou seja,
+"CMV" era na prática "quanto se pagou de fornecedor no mês". **Errado por desenho, não bug**:
+corrigido a pedido explícito do Rafael (compra não é o custo da venda; produto comprado em
+outubro pode só ser vendido em dezembro). Produziu ~R$627 mil de "CMV" incorreto pra Rampa
+(out+nov/2026) que foi apagado de `financeiro_mensal` na correção.
+
+- **Cálculo**: pra cada nota de venda (tipoNota=S, API V2) emitida dentro da janela de 2 meses
+  reprocessada, soma `quantidade × preco_custo` de cada item (`nota.fiscal.obter.php` →
+  `itens[].item.{id_produto,quantidade}`, depois `produto.obter.php` → `preco_custo` por
+  produto, cacheado em memória durante a chamada pra não repetir request por produto repetido
+  em várias notas). Grava uma linha em `financeiro_mensal` por nota (`titulo_tipo='cmv'`,
+  `titulo_id=<id da nota>`, `origem='tiny_notas_itens'`), mês = emissão da nota (mesma base da
+  receita, pra Lucro Bruto bater).
+- **Só cobre o grupo `4.01` (Estoques)** — mercadoria física vendida. **Não cobre `4.02` (Insumos
+  de Serviços)**: não existe hoje uma forma confiável de ligar "material gasto numa nota de
+  serviço" a produtos/custo; `4.02` continua `regime='manual'`, sem automação. Se precisar
+  automatizar isso no futuro, é um desenho novo, separado deste.
+- **Produto sem custo cadastrado conta como custo R$0 nesse item** (não trava o cálculo da nota
+  inteira) — o sync loga quantos itens de cada lote ficaram sem custo
+  (`checkpoint (cmv): X/Y — N/M itens sem custo cadastrado neste lote`). **Testado ao vivo em
+  2026-11-21: 0 produtos com `preco_custo`/`preco_custo_medio` cadastrado em qualquer venda
+  recente de Rampa ou TF** — enquanto isso não mudar, o CMV aparece como R$0 no DRE (subestimado,
+  não estimado errado). O cadastro de custo é manual, direto na Tiny (tela do produto, ou um
+  import de planilha se o Tiny tiver essa opção na própria interface) — **não existe endpoint de
+  API (nem v2 nem v3) pra escrever `preco_custo`**, confirmado na documentação oficial da v3
+  (`PUT /produtos/{id}/preco` só aceita `preco`/`precoPromocional`). A leitura funciona normal
+  pelas duas versões.
+- **Congelamento por mês, mesma regra de reprocessamento de 2 meses**: enquanto um mês está
+  dentro da janela (atual + anterior), o CMV é recalculado a cada sync com o custo que estiver na
+  Tiny **naquele dia**; quando o mês sai da janela, nunca mais é tocado — fica congelado no
+  último valor calculado enquanto ainda estava na janela (não exatamente no último dia do mês,
+  mas pouco depois, dentro do mês seguinte). Decisão explícita do Rafael: evita que cadastrar um
+  custo novo mude retroativamente o resultado de um mês já fechado há mais de 2 meses.
+- **Migration necessária** (já aplicada em produção): `financeiro_mensal.titulo_tipo` e
+  `financeiro_mensal.origem` tinham `CHECK` restringindo os valores aceitos — precisou adicionar
+  `'cmv'` e `'tiny_notas_itens'` às listas permitidas. `financeiro_plano_contas.fonte_tiny`
+  também tinha `CHECK`, precisou adicionar `'notas_fiscais_itens'`.
 
 ### Bug de acumulação em `financeiro_mensal` (corrigido, 2026-11-20)
 O desenho original de `financeiro_mensal` era pré-somado (uma linha por categoria/mês, `valor`
