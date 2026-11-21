@@ -7,7 +7,7 @@
     "api/contatos.js": {
       "memory": 256
     },
-    "api/relatorio-sync-diario.js": {
+    "api/relatorios.js": {
       "memory": 256,
       "maxDuration": 60
     },
@@ -19,13 +19,9 @@
       "memory": 256,
       "maxDuration": 60
     },
-    "api/financeiro-sync-diario.js": {
-      "memory": 256,
-      "maxDuration": 300
-    },
     "api/financeiro.js": {
       "memory": 256,
-      "maxDuration": 60
+      "maxDuration": 300
     }
   },
   "crons": [
@@ -38,7 +34,7 @@
       "schedule": "5 10 * * *"
     },
     {
-      "path": "/api/relatorio-sync-diario",
+      "path": "/api/relatorios?acao=sync-diario",
       "schedule": "0 7 * * *"
     },
     {
@@ -50,11 +46,11 @@
       "schedule": "15 9 * * *"
     },
     {
-      "path": "/api/financeiro-sync-diario",
+      "path": "/api/financeiro?acao=sync-diario",
       "schedule": "0 8 * * *"
     },
     {
-      "path": "/api/financeiro-sync-diario?empresa=tf",
+      "path": "/api/financeiro?acao=sync-diario&empresa=tf",
       "schedule": "15 8 * * *"
     }
   ]

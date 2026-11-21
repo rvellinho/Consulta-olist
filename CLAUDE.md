@@ -59,12 +59,22 @@ for the same duplicated logic.
 - **`api/financeiro.js`** — Monta o DRE (`GET ?acao=dre&ano=&mes=&empresa=` ou `&consolidado=true`
   pra somar rampa+tf), devolve o plano de contas (`GET ?acao=plano-contas`) e faz CRUD de
   lançamentos manuais na tabela `financeiro_lancamentos_manuais` (sem `acao`, estilo
-  `api/lancamentos.js`). Só lê/agrega dados já sincronizados — nunca bate na Olist. Ver "Módulo
-  Financeiro (DRE)" abaixo.
-- **`api/financeiro-sync-diario.js`** — Daily cron (ver "Módulo Financeiro (DRE)" abaixo) que
-  mantém `financeiro_mensal` atualizada: sincroniza `financeiro_categorias` e classifica cada
-  título de contas a receber/pagar dos últimos 2 meses por categoria/competência/caixa. Mesmo
-  padrão de checkpoint de `api/estoque-sync-diario.js`.
+  `api/lancamentos.js`). Essas rotas só lêem/agregam dados já sincronizados — nunca batem na
+  Olist. **Também contém o cron diário** (`?acao=sync-diario&empresa=`, nunca chamado pelo
+  frontend — só pelo cron no `vercel.json`) que mantém `financeiro_mensal` atualizada:
+  sincroniza `financeiro_categorias` e classifica cada título de contas a receber/pagar dos
+  últimos 2 meses por categoria/competência/caixa, mesmo padrão de checkpoint de
+  `api/estoque-sync-diario.js`. Fundido num arquivo só em 2026-11-20 (antes eram dois arquivos,
+  `api/financeiro.js` + `api/financeiro-sync-diario.js`) — ver "Limite de Serverless Functions
+  (Hobby)" abaixo pro motivo. Ver "Módulo Financeiro (DRE)" abaixo pro resto do detalhe.
+- **`api/relatorios.js`** — Relatório de Vendas por Notas Fiscais (aba Relatórios): endpoints
+  acionados pela tela (`acao=vendas/entradas/servicos/representacao/aguia/...`, coleta ao vivo
+  com barra de progresso no navegador) e leitura do cache já processado (`acao=cache`/
+  `cache-salvar`). Coleta compartilhada com o sync diário via `api/_lib/relatorio-coleta.js`.
+  **Também contém o cron diário** (`?acao=sync-diario`, nunca chamado pelo frontend — só pelo
+  cron no `vercel.json`) que atualiza o cache pros últimos 7 dias sozinho no servidor. Fundido
+  num arquivo só em 2026-11-20 (antes eram dois arquivos, `api/relatorios.js` +
+  `api/relatorio-sync-diario.js`) — ver "Limite de Serverless Functions (Hobby)" abaixo.
 - **`api/usuarios.js`** — CRUD for the `usuarios` table in Supabase (admin-only in the UI).
 - **`api/lancamentos.js`** — CRUD for the `contatos_propostas` table in Supabase: manual monthly
   entry of Contatos/Propostas counts per Carteira, shown in the Relatórios tab (admin-only in the
@@ -238,6 +248,39 @@ Single file containing all CSS and JS inline (~1000 lines). No framework, no mod
   `console.error`/`console.log` sozinhos não servem pra diagnosticar depois — o estado
   de erro precisa ser persistido em algum lugar que não expire (ex: Supabase), não só
   logado. Ver "Falha silenciosa do cron diário" na seção de estoque
+- **Limite de Serverless Functions (Hobby): no máximo 12 por deploy.** Descoberto em
+  produção (2026-11-20): o deploy do commit que adicionava `api/financeiro.js` +
+  `api/financeiro-sync-diario.js` (15º/16º arquivo top-level em `api/`) falhou com
+  `errorCode: "exceeded_serverless_functions_per_deployment"` — build passou, só o
+  deploy final falhou (o site continuou no ar na versão anterior, não houve downtime).
+  Cada arquivo `.js` direto em `api/` (não em `api/_lib/`, que o `_` exclui do roteamento)
+  conta uma função. Correção aplicada: fundiu dois pares de arquivo-cron-dedicado +
+  arquivo-acionado-pela-tela num arquivo só cada (`api/financeiro.js` ganhou de volta
+  `?acao=sync-diario`; `api/relatorios.js` ganhou `?acao=sync-diario`), voltando a 12.
+  **Se precisar adicionar outro endpoint novo no futuro, checar a contagem antes**
+  (`ls api/*.js | wc -l` deve ficar ≤12) — a alternativa é upgrade pro plano Pro (pago),
+  decisão que é sempre do Rafael, nunca automática.
+- **⚠️ Pendência não resolvida (achado 2026-11-20): os crons de `estoque-sync-diario.js`
+  e `financeiro.js` (`?acao=sync-diario`) podem nunca estar de fato processando nada.**
+  A documentação oficial da Vercel confirma que todo cron dispara via **GET** (nunca
+  POST), com o header `x-vercel-cron-schedule` (não existe header `x-vercel-cron` — o
+  código destes dois arquivos checa um header que não existe). Só que o handler de
+  ambos tem um `if (req.method === "GET") { return status-only }` ANTES da checagem de
+  cron/segredo — ou seja, como o cron sempre chega como GET, ele sempre cai nesse
+  curto-circuito e nunca chega a processar, independente do header. Se isso for real,
+  o que de fato mantém `estoque_catalogo`/`financeiro_mensal` atualizados até hoje tem
+  sido só chamada manual (botão "Atualizar Catálogo Agora" da aba Estoque, que faz
+  `POST`) ou teste manual — não o cron agendado. **Não foi corrigido ainda** (fora do
+  escopo da fusão de arquivos de 2026-11-20, que só preservou o comportamento existente
+  pra não arriscar quebrar mais coisa de uma vez) — próxima sessão que tocar nesses dois
+  arquivos deveria confirmar com o Rafael se o cron realmente nunca rodou de verdade (dá
+  pra checar `ultima_tentativa_em` em `estoque_sync_status`/`financeiro_sync_status` e
+  comparar com os horários dos crons no `vercel.json`) e, se confirmado, decidir como
+  diferenciar "GET do cron de verdade" de "GET de leitura de status pelo frontend" (ex:
+  usar o header `x-vercel-cron-schedule` real em vez do curto-circuito por método, ou
+  mover a leitura de status pro frontend pra um `acao` GET separado e deixar o método
+  GET "nu" cair direto na lógica de processamento). `api/relatorios.js`
+  (`?acao=sync-diario`) não tem esse problema — nunca teve o curto-circuito por GET.
 
 ---
 
@@ -323,7 +366,7 @@ de alguma empresa cresce além do que uma chamada dá conta.
 
 ---
 
-## Módulo Financeiro (DRE) (`api/financeiro.js`, `api/financeiro-sync-diario.js`)
+## Módulo Financeiro (DRE) (`api/financeiro.js` — DRE/CRUD e `?acao=sync-diario` no mesmo arquivo)
 
 DRE gerencial pra Rampa e TF (balanço/fluxo de caixa ficam pra depois — este módulo cobre só o
 DRE). Prioridade explícita do usuário; decisão dele sobre regime contábil (2026-11-20): **receitas
@@ -366,8 +409,8 @@ reconhecida por competência nesse mesmo mês).
 - **Classificação por histórico (stopgap, 2026-11-20)**: pra título de contas a pagar com
   `categoria: null` na Tiny (categoria nova, criada depois do lançamento — caso real: categorias
   de imposto só foram cadastradas em 2026-11-20, títulos pagos antes ficam sem categoria pra
-  sempre até alguém retaguear manualmente), `api/financeiro-sync-diario.js` casa o texto do campo
-  `historico` do título contra padrões (`PIS`, `COFINS`, `ICMS`, `ISS`/`ISSQN`, `SIMPLES
+  sempre até alguém retaguear manualmente), o sync diário (`api/financeiro.js`,
+  `?acao=sync-diario`) casa o texto do campo `historico` do título contra padrões (`PIS`, `COFINS`, `ICMS`, `ISS`/`ISSQN`, `SIMPLES
   NACIONAL`) e classifica como grupo `5.01` mesmo sem categoria real, gravando com
   `origem='tiny_historico'` (valor específico pra isso em `financeiro_mensal.origem`, distinto de
   `tiny_caixa`/`tiny_competencia`/`manual`) — fica visualmente distinguível de uma classificação

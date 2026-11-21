@@ -1,7 +1,7 @@
 // Lógica de coleta de dados da Olist pro Relatório de Vendas — compartilhada
 // entre api/relatorios.js (acionado pela tela, período grande, com barra de
-// progresso no navegador) e api/relatorio-sync-diario.js (cron automático,
-// período curto, roda sozinho no servidor).
+// progresso no navegador) e o sync diário (acao=sync-diario no mesmo arquivo,
+// cron automático, período curto, roda sozinho no servidor).
 const https = require("https");
 
 const TOKEN_V2 = process.env.OLIST_TOKEN;
