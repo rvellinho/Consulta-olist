@@ -84,7 +84,7 @@ async function buscarPlanoContas() {
 async function buscarMensal(empresas, ano, mes) {
   const filtroEmpresa = empresas.length === 1 ? `empresa=eq.${empresas[0]}` : `empresa=in.(${empresas.join(",")})`;
   const r = await httpsRequest("GET", supaHost(),
-    `/rest/v1/financeiro_mensal?${filtroEmpresa}&ano=eq.${ano}&mes=eq.${mes}&select=codigo_grupo,categoria_id,origem,regime,valor,titulo_tipo,titulo_id`,
+    `/rest/v1/financeiro_mensal?${filtroEmpresa}&ano=eq.${ano}&mes=eq.${mes}&select=codigo_grupo,categoria_id,origem,regime,valor,titulo_tipo,titulo_id,intercompany`,
     null, supaHeaders);
   return parseJSON(r.text);
 }
@@ -97,45 +97,76 @@ async function buscarManuais(empresas, ano, mes) {
   return parseJSON(r.text);
 }
 
+// Cada grupo/linha/bloco guarda {operacional, intercompany} em vez de um valor
+// só — ver CLAUDE.md "Intercompany Rampa↔TF". `valor`/`total`/`resultadoFinal`
+// continuam somando os dois (operacional + intercompany), sem mudar o que já
+// existia; os campos novos (*Operacional/*Intercompany) são só a abertura.
 function montarDRE(planoContas, linhasMensal, linhasManuais) {
-  const porGrupo = {};
+  const porGrupo = {}; // { [codigo_grupo]: {operacional, intercompany} }
   const naoClassificado = { total: 0, qtd: 0, itens: [] };
+
+  function somar(grupo, valor, intercompany) {
+    if (!porGrupo[grupo]) porGrupo[grupo] = { operacional: 0, intercompany: 0 };
+    if (intercompany) porGrupo[grupo].intercompany += valor;
+    else porGrupo[grupo].operacional += valor;
+  }
 
   for (const l of linhasMensal) {
     const valor = Number(l.valor) || 0;
     if (!l.codigo_grupo) {
       naoClassificado.total += valor;
       naoClassificado.qtd += 1;
-      naoClassificado.itens.push({ categoria_id: l.categoria_id, origem: l.origem, titulo_tipo: l.titulo_tipo, titulo_id: l.titulo_id, valor });
+      naoClassificado.itens.push({ categoria_id: l.categoria_id, origem: l.origem, titulo_tipo: l.titulo_tipo, titulo_id: l.titulo_id, valor, intercompany: !!l.intercompany });
       continue;
     }
-    porGrupo[l.codigo_grupo] = (porGrupo[l.codigo_grupo] || 0) + valor;
+    somar(l.codigo_grupo, valor, !!l.intercompany);
   }
   for (const l of linhasManuais) {
     if (!l.codigo_grupo) continue;
-    porGrupo[l.codigo_grupo] = (porGrupo[l.codigo_grupo] || 0) + (Number(l.valor) || 0);
+    // Lançamentos manuais (provisões/ajustes) nunca são intercompany — esse
+    // esquema só existe pra lançamentos que vêm da Olist (nota de venda da
+    // Rampa pra TF, ou despesa marcada manualmente num título real).
+    somar(l.codigo_grupo, Number(l.valor) || 0, false);
   }
 
-  const porLinhaDre = {};
+  const porLinhaDre = {}; // { [linha_dre]: {operacional, intercompany} }
   const gruposPorLinhaDre = {};
   for (const grupo of planoContas) {
     if (!grupo.entra_dre) continue;
-    const valor = porGrupo[grupo.codigo_grupo] || 0;
-    porLinhaDre[grupo.linha_dre] = (porLinhaDre[grupo.linha_dre] || 0) + valor;
+    const valores = porGrupo[grupo.codigo_grupo] || { operacional: 0, intercompany: 0 };
+    if (!porLinhaDre[grupo.linha_dre]) porLinhaDre[grupo.linha_dre] = { operacional: 0, intercompany: 0 };
+    porLinhaDre[grupo.linha_dre].operacional += valores.operacional;
+    porLinhaDre[grupo.linha_dre].intercompany += valores.intercompany;
     (gruposPorLinhaDre[grupo.linha_dre] = gruposPorLinhaDre[grupo.linha_dre] || []).push({
-      codigo_grupo: grupo.codigo_grupo, descricao_grupo: grupo.descricao_grupo, valor,
+      codigo_grupo: grupo.codigo_grupo, descricao_grupo: grupo.descricao_grupo,
+      valor: valores.operacional + valores.intercompany,
+      valorOperacional: valores.operacional, valorIntercompany: valores.intercompany,
     });
   }
 
-  let acumulado = 0;
+  let acumulado = 0, acumuladoOperacional = 0, acumuladoIntercompany = 0;
   const blocos = ESTRUTURA_DRE.map(def => {
     const grupos = def.linhas.flatMap(ld => gruposPorLinhaDre[ld] || []);
-    const total = def.linhas.reduce((s, ld) => s + (porLinhaDre[ld] || 0), 0);
+    const totalOperacional = def.linhas.reduce((s, ld) => s + (porLinhaDre[ld]?.operacional || 0), 0);
+    const totalIntercompany = def.linhas.reduce((s, ld) => s + (porLinhaDre[ld]?.intercompany || 0), 0);
+    const total = totalOperacional + totalIntercompany;
     acumulado += def.sinal * total;
-    return { bloco: def.bloco, sinal: def.sinal, total, grupos, subtotalNome: def.subtotalNome, subtotalValor: def.subtotalNome ? acumulado : null };
+    acumuladoOperacional += def.sinal * totalOperacional;
+    acumuladoIntercompany += def.sinal * totalIntercompany;
+    return {
+      bloco: def.bloco, sinal: def.sinal, total, totalOperacional, totalIntercompany, grupos,
+      subtotalNome: def.subtotalNome,
+      subtotalValor: def.subtotalNome ? acumulado : null,
+      subtotalOperacional: def.subtotalNome ? acumuladoOperacional : null,
+      subtotalIntercompany: def.subtotalNome ? acumuladoIntercompany : null,
+    };
   });
 
-  return { blocos, resultadoFinal: acumulado, naoClassificado };
+  return {
+    blocos, resultadoFinal: acumulado,
+    resultadoFinalOperacional: acumuladoOperacional, resultadoFinalIntercompany: acumuladoIntercompany,
+    naoClassificado,
+  };
 }
 
 // ============================================================================
@@ -164,6 +195,26 @@ function addMeses(ano, mes, delta) {
 // dia 0 desse mês seguinte é o último dia do mês humano "mes".
 function ultimoDiaDoMes(ano, mes) { return new Date(ano, mes, 0).getDate(); }
 function formatarDataBR(ano, mes, dia) { return `${String(dia).padStart(2, "0")}/${String(mes).padStart(2, "0")}/${ano}`; }
+
+// --- intercompany Rampa↔TF ---
+// Rampa vende pra TF abaixo do custo; em contrapartida a TF paga algumas
+// despesas da Rampa (e, mais raro, o inverso também acontece). Decisão do
+// Rafael (2026-11-21): separar esses lançamentos numa coluna própria no DRE
+// das duas empresas, sem mudar o total que já existia (total = operacional +
+// intercompany — ver montarDRE).
+//   - Receita/CMV da Rampa: automático — toda nota de venda pro cliente TF
+//     (cadastro na Tiny da Rampa: "TF COMERCIO E SERVICOS LTDA", id 893415936,
+//     CNPJ 51.251.441/0001-05) marca intercompany=true sozinho, todo sync.
+//   - Despesas de QUALQUER empresa (titulo_tipo=pagar): nunca automático —
+//     não tem padrão (nome de fornecedor varia) — só manual, via
+//     acao=marcar-intercompany no handler principal. Por isso o campo
+//     `intercompany` nunca entra no payload do lote nos dois ramos de
+//     contas-pagar: fica de fora do upsert, que preserva o que já tiver no
+//     banco (ver "Bug de acumulação" — upsert com merge-duplicates só
+//     sobrescreve coluna que estiver no payload).
+const ID_CLIENTE_TF_NA_RAMPA = "893415936";
+const CNPJ_TF = "51251441000105";
+function limparCnpj(v) { return String(v || "").replace(/\D/g, ""); }
 
 // --- CMV (custo da mercadoria vendida): itens de nota de venda × custo do produto ---
 // Ver CLAUDE.md "Módulo Financeiro (DRE)" — grupos 4.01/4.02 antes vinham de
@@ -241,7 +292,8 @@ async function calcularCmvNota(tokenV2, idNota, custoCache) {
     if (!custo) { semCusto++; continue; }
     valor += quantidade * custo;
   }
-  return { valor, semCusto, totalItens };
+  const intercompanyTF = limparCnpj(nota?.cliente?.cpf_cnpj) === CNPJ_TF;
+  return { valor, semCusto, totalItens, intercompanyTF, clienteNome: nota?.cliente?.nome || null };
 }
 
 // --- classificação por histórico (fallback pra título sem categoria na Tiny) ---
@@ -527,10 +579,13 @@ async function executarSyncDiario(req, res) {
           const codigoGrupo = cat?.codigo_grupo || null;
           const linha = codigoGrupo ? planoContas[codigoGrupo] : null;
           if (!linha || linha.fonte_tiny === "contas_receber") {
+            const intercompany = empresa === "rampa" && String(d.cliente?.id) === ID_CLIENTE_TF_NA_RAMPA;
+            const descricao = d.cliente?.nome || d.historico || null;
             lote.push({
               ano: item.ano, mes: item.mes, codigo_grupo: codigoGrupo, categoria_id: catId ?? null,
               origem: "tiny_competencia", regime: "competencia",
               titulo_tipo: "receber", titulo_id: item.id, valor: Number(d.valor) || 0,
+              intercompany, descricao,
             });
           }
         }
@@ -573,6 +628,10 @@ async function executarSyncDiario(req, res) {
           }
           const linha = codigoGrupo ? planoContas[codigoGrupo] : null;
 
+          // descricao é só informativo (pra tela de apontamento manual — ver
+          // acao=titulos) — sempre recalculado no sync, nunca preservado como o
+          // intercompany, que fica de fora do payload nos dois ramos abaixo.
+          const descricao = d.contato?.nome || d.historico || null;
           if (linha && linha.regime === "competencia" && linha.fonte_tiny === "contas_pagar") {
             // Imposto sobre venda (5.01): conta no mês da dataCompetencia real, não do vencimento usado pra listar.
             if (d.dataCompetencia === formatarYYYYMM(item.ano, item.mes)) {
@@ -580,6 +639,7 @@ async function executarSyncDiario(req, res) {
                 ano: item.ano, mes: item.mes, codigo_grupo: codigoGrupo, categoria_id: viaHistorico ? null : catId,
                 origem: viaHistorico ? "tiny_historico" : "tiny_competencia", regime: "competencia",
                 titulo_tipo: "pagar", titulo_id: item.id, valor: Number(d.valor) || 0,
+                descricao,
               });
             }
           } else if ((!linha || linha.regime === "caixa") && (d.situacao === "pago" || d.situacao === "parcial")) {
@@ -593,6 +653,7 @@ async function executarSyncDiario(req, res) {
                 ano: item.ano, mes: item.mes, codigo_grupo: codigoGrupo, categoria_id: catId ?? null,
                 origem: "tiny_caixa", regime: "caixa",
                 titulo_tipo: "pagar", titulo_id: item.id, valor,
+                descricao,
               });
             }
           }
@@ -618,13 +679,14 @@ async function executarSyncDiario(req, res) {
       const item = filaCmv.shift();
       await sleep(600);
       try {
-        const { valor, semCusto, totalItens } = await calcularCmvNota(tokenV2, item.id, custoCache);
+        const { valor, semCusto, totalItens, intercompanyTF, clienteNome } = await calcularCmvNota(tokenV2, item.id, custoCache);
         semCustoNoLote += semCusto;
         itensNoLote += totalItens;
         lote.push({
           ano: item.ano, mes: item.mes, codigo_grupo: grupoCmv, categoria_id: null,
           origem: "tiny_notas_itens", regime: "competencia",
           titulo_tipo: "cmv", titulo_id: item.id, valor,
+          intercompany: empresa === "rampa" && intercompanyTF, descricao: clienteNome,
         });
       } catch (erroRede) {
         console.error(`[financeiro-sync] erro na nota de venda (cmv) ${item.id}: ${erroRede.message}`);
@@ -673,7 +735,7 @@ async function executarSyncDiario(req, res) {
 
 module.exports = async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
   if (req.method === "OPTIONS") return res.status(200).end();
 
@@ -700,6 +762,28 @@ module.exports = async (req, res) => {
         ]);
         const dre = montarDRE(planoContas, linhasMensal, linhasManuais);
         return res.status(200).json({ ano, mes, empresa: consolidado ? "consolidado" : empresas[0], ...dre });
+      }
+
+      if (acao === "titulos") {
+        // Drill-down por grupo/mês/empresa — alimenta a tela de apontamento
+        // manual do intercompany (um ou mais codigo_grupo, separados por vírgula,
+        // pra cobrir uma linha_dre que tenha vários grupos).
+        const empresaTit = String(req.query.empresa || "rampa").toLowerCase();
+        const anoTit = parseInt(req.query.ano, 10);
+        const mesTit = parseInt(req.query.mes, 10);
+        const grupos = String(req.query.codigo_grupo || "").split(",").map(s => s.trim()).filter(Boolean);
+        if (!anoTit || !mesTit || !grupos.length) {
+          return res.status(400).json({ erro: "empresa, ano, mes e codigo_grupo são obrigatórios" });
+        }
+        const filtroGrupo = grupos.length === 1
+          ? `codigo_grupo=eq.${encodeURIComponent(grupos[0])}`
+          : `codigo_grupo=in.(${grupos.map(encodeURIComponent).join(",")})`;
+        const r = await httpsRequest("GET", supaHost(),
+          `/rest/v1/financeiro_mensal?empresa=eq.${empresaTit}&ano=eq.${anoTit}&mes=eq.${mesTit}&${filtroGrupo}` +
+          `&select=titulo_tipo,titulo_id,codigo_grupo,valor,origem,descricao,intercompany&order=valor.desc`,
+          null, supaHeaders);
+        const data = parseJSON(r.text);
+        return res.status(200).json(Array.isArray(data) ? data : []);
       }
 
       if (acao === "plano-contas") {
@@ -746,6 +830,23 @@ module.exports = async (req, res) => {
       if (r.status >= 400) return res.status(400).json({ erro: r.text });
       const data = parseJSON(r.text);
       return res.status(200).json(Array.isArray(data) ? data[0] : data);
+    }
+
+    if (req.method === "PATCH" && req.query.acao === "marcar-intercompany") {
+      // Apontamento manual (ambas empresas, titulo_tipo=pagar na prática — ver
+      // CLAUDE.md "Intercompany Rampa↔TF"): nunca sobrescrito pelo sync diário,
+      // que não inclui esse campo no payload das despesas (ver executarSyncDiario).
+      const { empresa, titulo_tipo, titulo_id, intercompany } = parseBody(req.body);
+      if (!empresa || !titulo_tipo || !titulo_id || typeof intercompany !== "boolean") {
+        return res.status(400).json({ erro: "empresa, titulo_tipo, titulo_id e intercompany (boolean) são obrigatórios" });
+      }
+      const payload = JSON.stringify({ intercompany });
+      const r = await httpsRequest("PATCH", supaHost(),
+        `/rest/v1/financeiro_mensal?empresa=eq.${encodeURIComponent(String(empresa).toLowerCase())}` +
+        `&titulo_tipo=eq.${encodeURIComponent(titulo_tipo)}&titulo_id=eq.${encodeURIComponent(titulo_id)}`,
+        payload, { ...supaHeaders, "Content-Length": Buffer.byteLength(payload), Prefer: "return=minimal" });
+      if (r.status >= 400) return res.status(400).json({ erro: r.text });
+      return res.status(200).json({ ok: true });
     }
 
     if (req.method === "PUT") {

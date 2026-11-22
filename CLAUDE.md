@@ -471,6 +471,45 @@ outubro pode só ser vendido em dezembro). Produziu ~R$627 mil de "CMV" incorret
   `'cmv'` e `'tiny_notas_itens'` às listas permitidas. `financeiro_plano_contas.fonte_tiny`
   também tinha `CHECK`, precisou adicionar `'notas_fiscais_itens'`.
 
+### Intercompany Rampa↔TF (2026-11-22)
+A Rampa vende pra TF abaixo do custo; em contrapartida a TF paga algumas despesas da Rampa (e,
+mais raro, o inverso também acontece). Pedido explícito do Rafael: separar esses lançamentos numa
+coluna própria no DRE das duas empresas (**Operacional** vs **Intercompany Rampa↔TF**), sem mudar
+o total que já existia (`total = operacional + intercompany` em todo bloco/subtotal — ver
+`montarDRE` em `api/financeiro.js`).
+
+- **Receita/CMV da Rampa (grupos `1.01` e `4.01`): automático.** Toda nota de venda da Rampa pro
+  cliente TF (cadastro na Tiny da própria Rampa: "TF COMERCIO E SERVICOS LTDA", id `893415936`,
+  CNPJ `51.251.441/0001-05`) marca `intercompany=true` sozinho, a cada sync — tanto na receita
+  (`d.cliente.id === ID_CLIENTE_TF_NA_RAMPA`) quanto no CMV (`calcularCmvNota` compara o CNPJ do
+  cliente da nota contra `CNPJ_TF`). Na tela, esse apontamento aparece como texto fixo
+  ("✓ automático" / "Automático — nota de venda pro cliente TF"), sem checkbox — mexer nele na mão
+  seria sobrescrito no sync do dia seguinte.
+- **Despesas de QUALQUER empresa (`titulo_tipo=pagar`): sempre manual.** Não tem padrão
+  confiável pra detectar sozinho (nome de fornecedor varia, não é sempre "TF" no texto) — por
+  isso **Rafael pediu que a marcação manual exista simetricamente nas duas empresas** ("vamos
+  permitir que na Rampa também possa ser anotado se uma despesa for da TF, então ambas as
+  empresas podemos registrar essa informação"). Endpoint `PATCH /api/financeiro?acao=marcar-intercompany`
+  (`{empresa, titulo_tipo, titulo_id, intercompany}`) grava direto na linha do `financeiro_mensal`
+  já existente — não cria lançamento novo.
+- **Por que o sync nunca apaga uma marcação manual**: o upsert do sync diário monta o payload de
+  cada título sem o campo `intercompany` nos dois ramos de contas-pagar (`executarSyncDiario`) —
+  só `descricao` é sempre recalculado. Como o upsert é `Prefer: resolution=merge-duplicates` (ver
+  "Bug de acumulação" abaixo — substitui coluna a coluna, só as que vierem no payload), uma coluna
+  de fora do payload fica intocada no conflito. Então marcar manual e depois rodar o sync não
+  reseta a marcação — mas **nunca colocar `intercompany` no payload do lote de contas-pagar**, ou
+  esse comportamento quebra.
+- **Tela** (`index.html`): cada linha de grupo no DRE ganhou um botão 🔍 (`abrirModalTitulos`) que
+  abre um modal com o drill-down de títulos daquele grupo/mês/empresa (`acao=titulos`, novo no
+  backend) — uma tabela com empresa/tipo/descrição/valor e, só nas linhas de despesa, um checkbox
+  (`marcarIntercompany`) que chama o PATCH acima e recarrega o DRE inteiro pra recalcular as
+  colunas na hora.
+- **Coluna `descricao`** (nome do contato/histórico do título): sempre recalculada a cada sync,
+  existe só pra dar contexto na tela de drill-down (não é usada em nenhum cálculo do DRE).
+- **Testado ao vivo em 2026-11-22**: 3 ciclos completos do sync (Rampa, 1410/1410 títulos, zero
+  erro) e a tela (login → seleção de empresa → Financeiro/DRE → drill-down → marcar/desmarcar
+  checkbox, PATCH confirmado e DRE recalculando em tempo real).
+
 ### Bug de acumulação em `financeiro_mensal` (corrigido, 2026-11-20)
 O desenho original de `financeiro_mensal` era pré-somado (uma linha por categoria/mês, `valor`
 já agregado), com o sync acumulando em memória (`acumulado[chave].valor += valor`) e fazendo
@@ -498,7 +537,7 @@ por título), ou a soma tem que acontecer inteira numa única chamada, nunca em 
 | `estoque_sync_status` | `empresa` (uma linha por empresa) | Progresso/estado da rotina diária de estoque (lista de pendentes, saltos, última conclusão, última tentativa e último erro — ver "Falha silenciosa do cron diário") |
 | `financeiro_plano_contas` | `codigo_grupo` | Mapeamento grupo→linha do DRE + regime (competência/caixa/manual) + fonte Tiny — seed manual, sem coluna `empresa` (compartilhado) |
 | `financeiro_categorias` | `categoria_id` + `empresa` | Cache de `GET /categorias-receita-despesa`, com `codigo_grupo` extraído e flag `forca_manual` |
-| `financeiro_mensal` | `empresa` + `titulo_tipo` + `titulo_id` | Uma linha por título de contas a receber/pagar já classificado (não pré-somado — ver "Módulo Financeiro (DRE)") |
+| `financeiro_mensal` | `empresa` + `titulo_tipo` + `titulo_id` | Uma linha por título de contas a receber/pagar já classificado (não pré-somado — ver "Módulo Financeiro (DRE)"). Colunas `intercompany` (bool, default `false`) e `descricao` (texto) — ver "Intercompany Rampa↔TF" |
 | `financeiro_lancamentos_manuais` | `id` | Lançamentos que nunca vêm da Olist (provisões, ajustes) — `codigo_grupo` + `subitem` livre opcional |
 | `financeiro_sync_status` | `empresa` (uma linha por empresa) | Progresso/estado da rotina diária financeira, mesmo padrão de `estoque_sync_status` |
 

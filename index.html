@@ -659,6 +659,34 @@
   </div>
 </div>
 
+<!-- MODAL TÍTULOS (apontamento intercompany Rampa↔TF) -->
+<div id="modal-titulos-overlay" class="overlay hidden" onclick="fecharModalTitulos(event)">
+  <div class="modal">
+    <div class="modal-hdr">
+      <div class="modal-av">↔️</div>
+      <div class="modal-hdr-info">
+        <h2 id="mt-titulo">Lançamentos</h2>
+        <p class="c-razao">Marque quais despesas são contrapartida entre Rampa e TF — elas saem da coluna Operacional e entram na coluna Intercompany no DRE.</p>
+      </div>
+      <button class="close-btn" onclick="document.getElementById('modal-titulos-overlay').classList.add('hidden')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div id="mt-msg" class="modal-msg hidden"></div>
+      <div class="table-wrap">
+        <table style="width:100%;border-collapse:collapse;">
+          <thead><tr>
+            <th>Empresa</th><th>Tipo</th><th>Descrição</th><th style="text-align:right;">Valor</th><th style="text-align:center;">Intercompany Rampa↔TF</th>
+          </tr></thead>
+          <tbody id="mt-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="modal-ftr">
+      <button class="btn-sec" onclick="document.getElementById('modal-titulos-overlay').classList.add('hidden')">Fechar</button>
+    </div>
+  </div>
+</div>
+
 <script>
 let usuarioAtual=null, paginaAtual=1, buscaAtual="", temProxima=false, clienteSel=null, modoDemo=false;
 let empresaAtual="rampa";
@@ -2140,34 +2168,122 @@ async function carregarDRE(){
   }
 }
 
+// Guarda o contexto da última carga do DRE (empresa/ano/mês), pra alimentar o
+// drill-down de títulos sem precisar reconsultar os selects do filtro.
+let dreContexto = { empresa: "rampa", ano: null, mes: null };
+
 function renderDRE(dre){
+  dreContexto = { empresa: dre.empresa, ano: dre.ano, mes: dre.mes };
   if(dre.naoClassificado && dre.naoClassificado.qtd > 0){
     el("fin-nao-classificado").classList.remove("hidden");
     el("fin-nao-classificado").textContent = `⚠ ${dre.naoClassificado.qtd} lançamento(s) sem categoria somando ${formatarMoeda(dre.naoClassificado.total)} — não entram no DRE abaixo. Revise na Olist (ou via lançamento manual) e rode o sync de novo.`;
   }
 
   const linhasHtml = [];
+  linhasHtml.push(`<tr>
+    <th style="padding:5px 12px;text-align:left;"></th>
+    <th style="padding:5px 12px;text-align:right;color:var(--mt);font-size:12px;">Operacional</th>
+    <th style="padding:5px 12px;text-align:right;color:var(--mt);font-size:12px;">Intercompany Rampa↔TF</th>
+    <th style="padding:5px 12px;text-align:right;">Total</th>
+  </tr>`);
   dre.blocos.forEach(bloco=>{
-    linhasHtml.push(`<tr><td colspan="2" style="padding:8px 12px;font-weight:700;background:var(--s2);">${bloco.bloco}</td></tr>`);
+    linhasHtml.push(`<tr><td colspan="4" style="padding:8px 12px;font-weight:700;background:var(--s2);">${bloco.bloco}</td></tr>`);
     bloco.grupos.forEach(g=>{
       linhasHtml.push(`<tr>
-        <td style="padding:5px 12px 5px 28px;color:var(--mt);">${g.codigo_grupo} ${g.descricao_grupo}</td>
+        <td style="padding:5px 12px 5px 28px;color:var(--mt);">
+          ${g.codigo_grupo} ${g.descricao_grupo}
+          <button class="btn-sec" style="padding:1px 7px;font-size:11px;margin-left:6px;" title="Ver lançamentos / apontar intercompany" onclick="abrirModalTitulos('${g.codigo_grupo}','${g.descricao_grupo.replace(/'/g,"\\'")}')">🔍</button>
+        </td>
+        <td style="padding:5px 12px;text-align:right;">${formatarMoeda(g.valorOperacional)}</td>
+        <td style="padding:5px 12px;text-align:right;${g.valorIntercompany?"color:var(--am);font-weight:600;":"color:var(--mt);"}">${formatarMoeda(g.valorIntercompany)}</td>
         <td style="padding:5px 12px;text-align:right;">${formatarMoeda(g.valor)}</td>
       </tr>`);
     });
     linhasHtml.push(`<tr>
       <td style="padding:5px 12px;font-weight:600;">${bloco.sinal<0?"(−) ":""}Total ${bloco.bloco}</td>
+      <td style="padding:5px 12px;text-align:right;font-weight:600;">${formatarMoeda(bloco.totalOperacional)}</td>
+      <td style="padding:5px 12px;text-align:right;font-weight:600;">${formatarMoeda(bloco.totalIntercompany)}</td>
       <td style="padding:5px 12px;text-align:right;font-weight:600;">${formatarMoeda(bloco.total)}</td>
     </tr>`);
     if(bloco.subtotalNome){
       linhasHtml.push(`<tr style="border-top:2px solid var(--br);border-bottom:2px solid var(--br);">
         <td style="padding:8px 12px;font-weight:700;">${bloco.subtotalNome}</td>
+        <td style="padding:8px 12px;text-align:right;font-weight:700;${bloco.subtotalOperacional<0?"color:var(--red);":""}">${formatarMoeda(bloco.subtotalOperacional)}</td>
+        <td style="padding:8px 12px;text-align:right;font-weight:700;${bloco.subtotalIntercompany<0?"color:var(--red);":""}">${formatarMoeda(bloco.subtotalIntercompany)}</td>
         <td style="padding:8px 12px;text-align:right;font-weight:700;${bloco.subtotalValor<0?"color:var(--red);":""}">${formatarMoeda(bloco.subtotalValor)}</td>
       </tr>`);
     }
   });
   el("tbody-financeiro").innerHTML = linhasHtml.join("");
   el("tabela-financeiro-wrap").classList.remove("hidden");
+}
+
+// --- modal de títulos / apontamento intercompany ---
+
+async function abrirModalTitulos(codigoGrupo, descricaoGrupo){
+  el("mt-titulo").textContent = `${codigoGrupo} ${descricaoGrupo}`;
+  el("modal-titulos-overlay").classList.remove("hidden");
+  el("mt-tbody").innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--mt);padding:16px;">Carregando...</td></tr>`;
+  try{
+    const { empresa, ano, mes } = dreContexto;
+    const empresasBusca = empresa === "consolidado" ? ["rampa","tf"] : [empresa];
+    const listas = await Promise.all(empresasBusca.map(async emp=>{
+      const r = await fetch(`/api/financeiro?acao=titulos&empresa=${emp}&ano=${ano}&mes=${mes}&codigo_grupo=${encodeURIComponent(codigoGrupo)}`);
+      if(!r.ok) throw new Error((await r.json()).erro || `Erro ${r.status}`);
+      const linhas = await r.json();
+      return linhas.map(l=>({ ...l, empresa: emp }));
+    }));
+    renderTabelaTitulos(listas.flat());
+  }catch(e){
+    el("mt-tbody").innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--red);padding:16px;">Erro: ${e.message}</td></tr>`;
+  }
+}
+
+function fecharModalTitulos(e){ if(e.target===el("modal-titulos-overlay"))el("modal-titulos-overlay").classList.add("hidden"); }
+
+function renderTabelaTitulos(linhas){
+  if(!linhas.length){
+    el("mt-tbody").innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--mt);padding:16px;">Nenhum lançamento nesse grupo/mês.</td></tr>`;
+    return;
+  }
+  el("mt-tbody").innerHTML = linhas.map(l=>{
+    // O toggle só vale pra despesas (titulo_tipo=pagar) — receita/CMV da Rampa
+    // já é marcada automaticamente pelo sync (nota de venda pro cliente TF) e
+    // seria sobrescrita no dia seguinte se mexessem na mão aqui.
+    const editavel = l.titulo_tipo === "pagar";
+    const checked = l.intercompany ? "checked" : "";
+    const toggle = editavel
+      ? `<input type="checkbox" ${checked} onchange="marcarIntercompany('${l.empresa}','${l.titulo_tipo}',${l.titulo_id},this.checked,this)" />`
+      : `<span title="Automático — nota de venda pro cliente TF" style="color:var(--mt);">${l.intercompany ? "✓ automático" : "—"}</span>`;
+    return `<tr>
+      <td>${EMPRESAS[l.empresa]?.label || l.empresa}</td>
+      <td>${l.titulo_tipo}</td>
+      <td>${l.descricao || "—"}</td>
+      <td style="text-align:right;">${formatarMoeda(Number(l.valor))}</td>
+      <td style="text-align:center;">${toggle}</td>
+    </tr>`;
+  }).join("");
+}
+
+async function marcarIntercompany(empresa, titulo_tipo, titulo_id, intercompany, checkboxEl){
+  checkboxEl.disabled = true;
+  try{
+    const r = await fetch("/api/financeiro?acao=marcar-intercompany", {
+      method: "PATCH", headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({ empresa, titulo_tipo, titulo_id, intercompany }),
+    });
+    if(!r.ok) throw new Error((await r.json()).erro || `Erro ${r.status}`);
+    await carregarDRE(); // recalcula as colunas Operacional/Intercompany na tela de fundo
+  }catch(e){
+    checkboxEl.checked = !intercompany; // desfaz visualmente
+    const d = el("mt-msg");
+    d.textContent = "Erro ao marcar: " + e.message;
+    d.className = "modal-msg msg-err";
+    d.classList.remove("hidden");
+    setTimeout(()=>d.classList.add("hidden"), 4000);
+  }finally{
+    checkboxEl.disabled = false;
+  }
 }
 
 // --- modal de lançamento manual ---
