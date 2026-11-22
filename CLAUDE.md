@@ -471,6 +471,27 @@ outubro pode só ser vendido em dezembro). Produziu ~R$627 mil de "CMV" incorret
   `'cmv'` e `'tiny_notas_itens'` às listas permitidas. `financeiro_plano_contas.fonte_tiny`
   também tinha `CHECK`, precisou adicionar `'notas_fiscais_itens'`.
 
+#### Bug: falha passageira da Tiny virava "custo zero" (corrigido, 2026-11-22)
+`buscarDetalheNotaVendaV2` e `buscarCustoProdutoV2` não checavam `retorno.status === "Erro"` —
+se a Tiny respondesse HTTP 200 com um erro no corpo (instabilidade, rate-limit momentâneo), o
+código simplesmente não achava `retorno.nota_fiscal`/`retorno.produto`, e `custo` virava `0`
+silenciosamente, sem lançar exceção e **sem entrar na fila de retentativa** (`filaCmv`/
+`MAX_TENTATIVAS_POR_TITULO`, que só é acionada por exceção). Visto em produção: a contagem de
+notas com CMV zerado mudava a cada sync (12 → 31 → 28 em Rampa, por exemplo) mesmo com o
+catálogo de custos estável — um script de diagnóstico (consultando os mesmos produtos/notas
+direto na Tiny) não achou nenhum produto de verdade sem custo entre os que apareciam zerados.
+Piorou porque um script de debug bateu na mesma conta/token da Tiny ao mesmo tempo que o sync de
+produção, aumentando a chance de a Tiny recusar/atrasar alguma chamada pontual.
+- **Corrigido**: as duas funções agora checam `retorno.status === "Erro"` e lançam exceção
+  (mesmo padrão que `listarNotasVendaV2` já usava) — o erro propaga pro `catch` em
+  `executarSyncDiario` que devolve a nota pra `filaCmv` (até `MAX_TENTATIVAS_POR_TITULO` vezes),
+  em vez de gravar CMV subestimado de forma permanente.
+- **Lição**: o mesmo padrão de "resposta HTTP 200 com erro no corpo" que já tinha mordido outras
+  partes do projeto (ver `listarNotasVendaV2`, que já tratava isso) apareceu de novo em código
+  novo que não seguiu o padrão — ao escrever uma chamada nova pra Tiny, sempre checar
+  `retorno.status === "Erro"` explicitamente, nunca confiar que um campo ausente no JSON (ex:
+  `produto` ausente) significa "sem custo"/"vazio" em vez de "a chamada falhou".
+
 ### Intercompany Rampa↔TF (2026-11-22)
 A Rampa vende pra TF abaixo do custo; em contrapartida a TF paga algumas despesas da Rampa (e,
 mais raro, o inverso também acontece). Pedido explícito do Rafael: separar esses lançamentos numa

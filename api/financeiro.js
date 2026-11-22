@@ -263,14 +263,28 @@ async function buscarDetalheNotaVendaV2(tokenV2, id) {
   const body = new URLSearchParams({ token: tokenV2, id: String(id), formato: "JSON" }).toString();
   const r = await httpsRequest("POST", "api.tiny.com.br", "/api2/nota.fiscal.obter.php", body,
     { "Content-Type": "application/x-www-form-urlencoded" });
-  return parseJSON(r.text).retorno?.nota_fiscal || null;
+  const data = parseJSON(r.text);
+  if (data.retorno?.status === "Erro") {
+    throw new Error(data.retorno.erros?.[0]?.erro || `erro ao obter nota ${id}`);
+  }
+  return data.retorno?.nota_fiscal || null;
 }
 async function buscarCustoProdutoV2(tokenV2, idProduto, cache) {
   if (cache.has(idProduto)) return cache.get(idProduto);
   const body = new URLSearchParams({ token: tokenV2, id: String(idProduto), formato: "JSON" }).toString();
   const r = await httpsRequest("POST", "api.tiny.com.br", "/api2/produto.obter.php", body,
     { "Content-Type": "application/x-www-form-urlencoded" });
-  const prod = parseJSON(r.text).retorno?.produto;
+  const data = parseJSON(r.text);
+  // Erro de verdade (ex: instabilidade/rate-limit da Tiny) precisa propagar pra
+  // entrar na fila de retentativa do chamador — NUNCA cachear nem tratar como
+  // "produto sem custo" (custo 0), senão uma falha passageira da Tiny vira CMV
+  // subestimado permanentemente (achado em produção, 2026-11-22: contagem de
+  // notas com CMV zerado mudava a cada sync sem nenhum produto de verdade sem
+  // custo — ver CLAUDE.md "Módulo Financeiro (DRE)").
+  if (data.retorno?.status === "Erro") {
+    throw new Error(data.retorno.erros?.[0]?.erro || `erro ao obter produto ${idProduto}`);
+  }
+  const prod = data.retorno?.produto;
   const custo = Number(prod?.preco_custo) || 0;
   cache.set(idProduto, custo);
   await sleep(600);
