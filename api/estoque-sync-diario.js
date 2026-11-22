@@ -228,6 +228,12 @@ module.exports = async (req, res) => {
           categoria: p.categoria || null, fornecedor: p.nome_fornecedor || null, unidade: p.unidade || null,
           estoque_minimo: parseFloat(p.estoque_minimo || 0),
           elegivel, motivo_exclusao: motivoExclusao,
+          // Custo atual do produto, de graça — já vem no mesmo retorno de
+          // produto.obter.php usado pra classificação, sem chamada extra à
+          // Olist. Usado pelo módulo Financeiro (CMV) via estoque_catalogo,
+          // em vez de o sync do financeiro buscar isso ao vivo na Olist (ver
+          // CLAUDE.md "CMV real" / congelamento de custo mensal).
+          custo_atual: Number(p.preco_custo) || 0,
           atualizado_em: new Date().toISOString(),
         });
       }

@@ -223,15 +223,24 @@ function limparCnpj(v) { return String(v || "").replace(/\D/g, ""); }
 // emitida: quantidade vendida × custo do produto na Tiny. Só cobre 4.01
 // (Estoques) por enquanto — 4.02 (Insumos de Serviços) continua manual.
 //
-// Mesma regra de "mês fechado não muda mais" do resto do sync: a janela de
-// reprocessamento (mês atual + anterior) usa sempre o custo que estiver
-// cadastrado na Tiny no momento do processamento; depois que um mês sai dessa
-// janela, nunca mais é recalculado — o CMV fica congelado no último valor
-// calculado enquanto esse mês ainda estava na janela.
+// Custo do produto: NUNCA busca na Olist aqui — vem de estoque_catalogo
+// (coluna custo_atual, já capturada de graça pelo sync diário de Estoque, ver
+// api/estoque-sync-diario.js) mais a tabela financeiro_custo_mensal, que
+// congela o custo por produto/mês (2026-11-22, correção de bug real):
+//   - mês atual (ainda aberto): usa sempre custo_atual (o mês ainda não tem
+//     "custo final", é esperado seguir o que estiver na Tiny agora).
+//   - mês anterior (ainda dentro da janela de 2 meses reprocessada): usa o
+//     custo CONGELADO desse produto nesse mês/empresa, se já existir; se não
+//     existir ainda (primeira vez que esse produto aparece no mês anterior),
+//     congela agora com o custo_atual do momento e nunca mais toca nisso —
+//     auto-recuperável contra cron perdido, sem depender de cair exatamente
+//     no último dia do mês. Isso evita o bug original: mudar o custo de um
+//     produto em novembro não pode retroagir e mudar o CMV de outubro, que já
+//     foi fechado com o custo que era real em outubro.
 //
-// Produto sem custo cadastrado na Tiny conta como custo 0 nesse item (em vez
-// de travar o cálculo todo) — enquanto o cadastro de custos não estiver
-// completo na Tiny, o CMV fica subestimado, não errado por estimativa.
+// Produto sem custo cadastrado conta como custo 0 nesse item (em vez de
+// travar o cálculo todo) — enquanto o cadastro de custos não estiver completo
+// na Tiny, o CMV fica subestimado, não errado por estimativa.
 const SITUACOES_INVALIDAS_NOTA_VENDA_V2 = ["1", "3", "5", "10"]; // Pendente, Cancelada, Rejeitada, Denegada
 function ehErroSemResultadosV2(erro) {
   return String(erro?.erros?.[0]?.erro || "").toLowerCase().includes("não retornou");
@@ -269,30 +278,54 @@ async function buscarDetalheNotaVendaV2(tokenV2, id) {
   }
   return data.retorno?.nota_fiscal || null;
 }
-async function buscarCustoProdutoV2(tokenV2, idProduto, cache) {
-  if (cache.has(idProduto)) return cache.get(idProduto);
-  const body = new URLSearchParams({ token: tokenV2, id: String(idProduto), formato: "JSON" }).toString();
-  const r = await httpsRequest("POST", "api.tiny.com.br", "/api2/produto.obter.php", body,
-    { "Content-Type": "application/x-www-form-urlencoded" });
-  const data = parseJSON(r.text);
-  // Erro de verdade (ex: instabilidade/rate-limit da Tiny) precisa propagar pra
-  // entrar na fila de retentativa do chamador — NUNCA cachear nem tratar como
-  // "produto sem custo" (custo 0), senão uma falha passageira da Tiny vira CMV
-  // subestimado permanentemente (achado em produção, 2026-11-22: contagem de
-  // notas com CMV zerado mudava a cada sync sem nenhum produto de verdade sem
-  // custo — ver CLAUDE.md "Módulo Financeiro (DRE)").
-  if (data.retorno?.status === "Erro") {
-    throw new Error(data.retorno.erros?.[0]?.erro || `erro ao obter produto ${idProduto}`);
+// Custo atual de cada produto do catálogo (coluna custo_atual, preenchida de
+// graça pelo sync diário de Estoque — ver api/estoque-sync-diario.js) — uma
+// leitura só no Supabase pra empresa inteira, nada de bater na Olist produto
+// a produto aqui (era assim que o antigo buscarCustoProdutoV2 fazia).
+async function lerCustoAtualCatalogo(empresa) {
+  const mapa = new Map();
+  const limit = 1000;
+  let offset = 0;
+  while (true) {
+    const r = await httpsRequest("GET", supaHost(),
+      `/rest/v1/estoque_catalogo?empresa=eq.${empresa}&select=produto_id,custo_atual&limit=${limit}&offset=${offset}`,
+      null, supaHeaders);
+    const linhas = parseJSON(r.text);
+    if (!Array.isArray(linhas)) break;
+    linhas.forEach(l => mapa.set(Number(l.produto_id), Number(l.custo_atual) || 0));
+    if (linhas.length < limit) break;
+    offset += limit;
   }
-  const prod = data.retorno?.produto;
-  const custo = Number(prod?.preco_custo) || 0;
-  cache.set(idProduto, custo);
-  await sleep(600);
-  return custo;
+  return mapa;
+}
+// Custos já congelados do mês anterior (financeiro_custo_mensal) — só esse
+// mês precisa, é o único que pode estar "fechando" nesta chamada.
+async function lerCustoCongeladoMes(empresa, ano, mes) {
+  const mapa = new Map();
+  const r = await httpsRequest("GET", supaHost(),
+    `/rest/v1/financeiro_custo_mensal?empresa=eq.${empresa}&ano=eq.${ano}&mes=eq.${mes}&select=produto_id,custo`,
+    null, supaHeaders);
+  const linhas = parseJSON(r.text);
+  if (Array.isArray(linhas)) linhas.forEach(l => mapa.set(Number(l.produto_id), Number(l.custo) || 0));
+  return mapa;
+}
+// Grava os congelamentos novos descobertos nesta chamada. ignore-duplicates
+// (nunca merge-duplicates): uma vez congelado um produto/mês, a linha é
+// definitiva — se outra chamada (do mesmo dia ou de dias seguintes, enquanto
+// esse mês ainda for "mês anterior") tentar congelar de novo, o insert é
+// ignorado e o valor original permanece intocado.
+async function salvarCongelamentos(novosCongelamentos) {
+  if (!novosCongelamentos.size) return;
+  const payload = JSON.stringify([...novosCongelamentos.values()]);
+  await httpsRequest("POST", supaHost(), "/rest/v1/financeiro_custo_mensal?on_conflict=empresa,produto_id,ano,mes", payload,
+    { ...supaHeaders, "Content-Length": Buffer.byteLength(payload), Prefer: "resolution=ignore-duplicates,return=minimal" });
+  novosCongelamentos.clear();
 }
 // Calcula o CMV de uma nota (soma quantidade × custo de cada item) e devolve
 // também quantos itens ficaram sem custo cadastrado, só pra log/diagnóstico.
-async function calcularCmvNota(tokenV2, idNota, custoCache) {
+// `obterCusto(idProduto)` resolve o custo certo (atual ou congelado, ver
+// comentário acima sobre congelamento) — nunca busca nada na Olist aqui.
+async function calcularCmvNota(tokenV2, idNota, obterCusto) {
   const nota = await buscarDetalheNotaVendaV2(tokenV2, idNota);
   let valor = 0, semCusto = 0, totalItens = 0;
   for (const itWrap of (nota?.itens || [])) {
@@ -302,7 +335,7 @@ async function calcularCmvNota(tokenV2, idNota, custoCache) {
     if (!it) continue;
     totalItens++;
     if (!idProduto) { semCusto++; continue; }
-    const custo = await buscarCustoProdutoV2(tokenV2, idProduto, custoCache);
+    const custo = obterCusto(idProduto);
     if (!custo) { semCusto++; continue; }
     valor += quantidade * custo;
   }
@@ -503,7 +536,6 @@ async function executarSyncDiario(req, res) {
     const tokenV2 = getConfigEmpresa(empresa).tokenV2;
     const planoContas = await lerPlanoContasSync();
     const grupoCmv = Object.values(planoContas).find(l => l.fonte_tiny === "notas_fiscais_itens")?.codigo_grupo || null;
-    const custoCache = new Map(); // custo do produto, em memória só durante esta chamada
 
     // Categorias são rápidas (uma lista paginada só) — sempre atualiza antes
     // de montar a fila, pra qualquer categoria nova já entrar classificada.
@@ -514,6 +546,23 @@ async function executarSyncDiario(req, res) {
     const mesAtual = { ano: hoje.getFullYear(), mes: hoje.getMonth() + 1 };
     const mesAnterior = mesAlvoAnterior(mesAtual.ano, mesAtual.mes);
     const periodos = [mesAtual, mesAnterior]; // reprocessa os 2 últimos meses, não assume mês fechado como imutável
+
+    // Custo pro CMV: nunca busca na Olist aqui (ver comentário em cima de
+    // calcularCmvNota) — lê o custo atual de todo o catálogo de uma vez e o
+    // que já estiver congelado do mês anterior, de uma vez cada.
+    const custoAtualPorProduto = grupoCmv ? await lerCustoAtualCatalogo(empresa) : new Map();
+    const custoCongeladoMesAnterior = grupoCmv ? await lerCustoCongeladoMes(empresa, mesAnterior.ano, mesAnterior.mes) : new Map();
+    const novosCongelamentos = new Map(); // chave produtoId -> linha pra inserir em financeiro_custo_mensal
+    function obterCustoProduto(idProduto, ano, mes) {
+      const custoAtual = custoAtualPorProduto.get(Number(idProduto)) || 0;
+      if (ano !== mesAnterior.ano || mes !== mesAnterior.mes) return custoAtual; // mês atual (aberto): sempre o custo de agora
+      if (custoCongeladoMesAnterior.has(Number(idProduto))) return custoCongeladoMesAnterior.get(Number(idProduto));
+      // primeira vez que esse produto aparece no mês anterior: congela agora
+      // com o custo atual e nunca mais muda (ver salvarCongelamentos).
+      custoCongeladoMesAnterior.set(Number(idProduto), custoAtual);
+      novosCongelamentos.set(Number(idProduto), { empresa, produto_id: idProduto, ano, mes, custo: custoAtual });
+      return custoAtual;
+    }
 
     if (!status || !status.em_andamento || iniciadoHaMuito) {
       const filaReceita = [];
@@ -693,7 +742,8 @@ async function executarSyncDiario(req, res) {
       const item = filaCmv.shift();
       await sleep(600);
       try {
-        const { valor, semCusto, totalItens, intercompanyTF, clienteNome } = await calcularCmvNota(tokenV2, item.id, custoCache);
+        const obterCusto = (idProduto) => obterCustoProduto(idProduto, item.ano, item.mes);
+        const { valor, semCusto, totalItens, intercompanyTF, clienteNome } = await calcularCmvNota(tokenV2, item.id, obterCusto);
         semCustoNoLote += semCusto;
         itensNoLote += totalItens;
         lote.push({
@@ -710,6 +760,7 @@ async function executarSyncDiario(req, res) {
       processadosDesdeCheckpoint++;
       if (processadosDesdeCheckpoint >= SALVAR_PROGRESSO_A_CADA) {
         await salvarLote();
+        await salvarCongelamentos(novosCongelamentos);
         status.pendentes.cmv = filaCmv;
         status.processados = status.total - filaReceita.length - filaPagar.length - filaCmv.length;
         await salvarStatusSync(empresa, status);
@@ -721,6 +772,7 @@ async function executarSyncDiario(req, res) {
     }
 
     await salvarLote();
+    await salvarCongelamentos(novosCongelamentos);
     status.pendentes = { receita: filaReceita, pagar: filaPagar, cmv: filaCmv };
     status.processados = status.total - filaReceita.length - filaPagar.length - filaCmv.length;
 
