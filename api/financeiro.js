@@ -635,6 +635,7 @@ async function executarSyncDiario(req, res) {
       await sleep(600);
       try {
         const rd = await httpsRequest("GET", "api.tiny.com.br", `/public-api/v3/contas-receber/${item.id}`, null, { Authorization: "Bearer " + accessToken });
+        if (rd.status !== 200) throw new Error(`contas-receber/${item.id}: HTTP ${rd.status} - ${rd.text.slice(0, 200)}`);
         const d = parseJSON(rd.text);
         const catId = d.categoria?.id;
         const cat = catId != null ? categorias[catId] : null;
@@ -673,6 +674,7 @@ async function executarSyncDiario(req, res) {
       await sleep(600);
       try {
         const rd = await httpsRequest("GET", "api.tiny.com.br", `/public-api/v3/contas-pagar/${item.id}`, null, { Authorization: "Bearer " + accessToken });
+        if (rd.status !== 200) throw new Error(`contas-pagar/${item.id}: HTTP ${rd.status} - ${rd.text.slice(0, 200)}`);
         const d = parseJSON(rd.text);
         const catId = d.categoria?.id;
         const cat = catId != null ? categorias[catId] : null;
