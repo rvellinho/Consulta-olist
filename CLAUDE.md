@@ -646,11 +646,15 @@ pesado no frontend, rate-limit) a janela fica sem nenhuma linha e sem nenhum err
 tela. Achado comparando nota a nota contra a Tiny pra investigar uma reclamação de receita
 errada: dois buracos reais no cache "produto" da Rampa — **17 a 22/10/2026** (38 notas, R$
 123.854,90) e **12 a 15/11/2026** (18 notas, R$ 66.459,90) — nenhum alerta indicava isso, o
-relatório só mostrava menos venda do que existia de verdade. Corrigido re-coletando os dois
-períodos manualmente. **Ainda não corrigido (risco que permanece)**: o padrão delete-then-insert
-em si — qualquer resync futuro de um período pode abrir o mesmo buraco se falhar no meio. Uma
-correção futura precisaria só apagar depois de confirmar que a nova coleta veio não-vazia (ou
-comparar contagem antes de trocar).
+relatório só mostrava menos venda do que existia de verdade. **Dado corrigido** re-coletando os
+dois períodos manualmente (rodando a mesma lógica de `executarSyncDiario` localmente, com janela
+arbitrária em vez dos últimos 7 dias — bateu num rate-limit da Tiny na primeira tentativa,
+confirmando a própria causa suspeita; resolvido esperando a API liberar e espaçando mais as
+chamadas). Outubro da Rampa foi de R$ 369.843,66 pra **R$ 493.698,56** em "produto" depois do
+backfill. **Risco que permanece (não corrigido)**: o padrão delete-then-insert em si — qualquer
+resync futuro de um período pode abrir o mesmo buraco se falhar no meio (rate-limit incluído, como
+aconteceu aqui mesmo durante a correção). Uma correção futura precisaria só apagar depois de
+confirmar que a nova coleta veio não-vazia (ou comparar contagem antes de trocar).
 
 ### Bug: resposta de erro da Tiny virava título com valor zero, sem retentativa (corrigido, 2026-11-23)
 `executarSyncDiario` buscava o detalhe de cada título (`GET /public-api/v3/contas-receber/{id}` e
