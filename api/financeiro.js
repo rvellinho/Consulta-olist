@@ -607,7 +607,13 @@ async function listarIdsContasReceber(accessToken, dataIni, dataFim) {
       `/public-api/v3/contas-receber?dataInicialEmissao=${dataIni}&dataFinalEmissao=${dataFim}&limit=${limit}&offset=${offset}`,
       null, { Authorization: "Bearer " + accessToken });
     const data = parseJSON(r.text);
-    const itens = data.itens || [];
+    // Mesmo bug já visto em api/estoque.js ("página perdida por rate-limit virava
+    // lista vazia, tratada como fim da paginação") — aqui fazia o título simplesmente
+    // nunca entrar na fila (nem processado, nem "não classificado"), sem erro nenhum.
+    if (r.status !== 200 || !Array.isArray(data.itens)) {
+      throw new Error(`contas-receber (listagem offset=${offset}): HTTP ${r.status} - ${r.text.slice(0, 200)}`);
+    }
+    const itens = data.itens;
     itens.forEach(it => ids.push(it.id));
     const total = data.paginacao?.total ?? itens.length;
     offset += limit;
@@ -628,7 +634,12 @@ async function listarIdsContasPagar(accessToken, dataIni, dataFim) {
       `/public-api/v3/contas-pagar?dataInicialVencimento=${dataIni}&dataFinalVencimento=${dataFim}&limit=${limit}&offset=${offset}`,
       null, { Authorization: "Bearer " + accessToken });
     const data = parseJSON(r.text);
-    const itens = Array.isArray(data) ? data : (data.itens || []);
+    const itens = Array.isArray(data) ? data : data.itens;
+    // Mesmo bug de "página perdida por rate-limit virava lista vazia" de
+    // listarIdsContasReceber acima — ver comentário lá.
+    if (r.status !== 200 || !Array.isArray(itens)) {
+      throw new Error(`contas-pagar (listagem offset=${offset}): HTTP ${r.status} - ${r.text.slice(0, 200)}`);
+    }
     itens.forEach(it => ids.push(it.id));
     const total = data.paginacao?.total ?? itens.length;
     offset += limit;
@@ -1031,11 +1042,14 @@ module.exports = async (req, res) => {
       if (acao === "titulos") {
         // Drill-down por grupo/mês/empresa — alimenta a tela de apontamento
         // manual do intercompany (um ou mais codigo_grupo, separados por vírgula,
-        // pra cobrir uma linha_dre que tenha vários grupos).
+        // pra cobrir uma linha_dre que tenha vários grupos). Com `leaf`, filtra
+        // ainda mais fino pro nível 3 (mesmo rótulo que resolverLeaf monta pro
+        // DRE) — usado pela lupa de cada sub-linha da árvore.
         const empresaTit = String(req.query.empresa || "rampa").toLowerCase();
         const anoTit = parseInt(req.query.ano, 10);
         const mesTit = parseInt(req.query.mes, 10);
         const grupos = String(req.query.codigo_grupo || "").split(",").map(s => s.trim()).filter(Boolean);
+        const leafFiltro = req.query.leaf != null ? String(req.query.leaf) : null;
         if (!anoTit || !mesTit || !grupos.length) {
           return res.status(400).json({ erro: "empresa, ano, mes e codigo_grupo são obrigatórios" });
         }
@@ -1044,10 +1058,15 @@ module.exports = async (req, res) => {
           : `codigo_grupo=in.(${grupos.map(encodeURIComponent).join(",")})`;
         const r = await httpsRequest("GET", supaHost(),
           `/rest/v1/financeiro_mensal?empresa=eq.${empresaTit}&ano=eq.${anoTit}&mes=eq.${mesTit}&${filtroGrupo}` +
-          `&select=titulo_tipo,titulo_id,codigo_grupo,valor,origem,descricao,historico,intercompany&order=valor.desc`,
+          `&select=titulo_tipo,titulo_id,codigo_grupo,categoria_id,valor,origem,descricao,historico,intercompany&order=valor.desc`,
           null, supaHeaders);
-        const data = parseJSON(r.text);
-        return res.status(200).json(Array.isArray(data) ? data : []);
+        let data = parseJSON(r.text);
+        data = Array.isArray(data) ? data : [];
+        if (leafFiltro != null) {
+          const categoriasPorEmpresa = await buscarCategoriasPorEmpresa([empresaTit]);
+          data = data.filter(l => resolverLeaf({ ...l, empresa: empresaTit }, categoriasPorEmpresa) === leafFiltro);
+        }
+        return res.status(200).json(data);
       }
 
       if (acao === "plano-contas") {

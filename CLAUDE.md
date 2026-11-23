@@ -747,6 +747,60 @@ de 2 meses. **Lição**: qualquer regra de exclusão que nasce DEPOIS que o dado
 upsert-only precisa de uma saída explícita de `DELETE` pro caso já gravado — só mudar a lógica de
 inserção daqui pra frente não limpa o passado.
 
+### Lupa (drill-down) também no nível 3 da árvore do DRE (2026-11-23)
+Depois da árvore de nível 3 (ver "Módulo Financeiro (DRE)" acima — expande cada grupo pra ver a
+composição por subcategoria), pedido do Rafael: cada sub-linha (leaf) também precisa de uma lupa
+pra ver os títulos que a compõem, não só o grupo inteiro. `acao=titulos` ganhou um parâmetro
+opcional `leaf` (a mesma string que `resolverLeaf` monta pro rótulo do nível 3) — com ele, o
+endpoint busca os títulos do grupo normalmente e filtra server-side recalculando `resolverLeaf`
+de cada linha, comparando com o texto recebido. `abrirModalTitulos` no frontend ganhou um 3º
+parâmetro opcional (`leaf`) que, quando presente, entra na query string.
+
+### `listarIdsContasReceber`/`listarIdsContasPagar` tinham o mesmo bug de "página perdida" do Estoque (corrigido, 2026-11-23)
+Mesmo padrão já documentado em "Página perdida por rate-limit da Olist virava estoque zerado"
+(seção de Relatório de Estoque) e no erro 7 de "Erros conhecidos" — `const itens = data.itens ||
+[]` sem checar o status HTTP antes. Se uma página da listagem de contas a receber/pagar (`GET
+/public-api/v3/contas-receber`/`contas-pagar`) respondesse com erro (rate-limit, instabilidade),
+o título simplesmente nunca entrava na fila de processamento — nem como classificado, nem como
+"não classificado" — ficava invisível, sem erro nenhum. Achado investigando por que duas notas de
+"apoio em vendas" (Concretize Muros e Brambilla, ver acima) não tinham sido reprocessadas em
+nenhuma das rodadas de hoje mesmo com a exclusão já corrigida no código: o título delas
+simplesmente não estava sendo buscado. **Corrigido**: as duas funções agora lançam erro quando
+`status !== 200` ou `itens` não é array, em vez de tratar como fim da paginação — mesmo padrão
+aplicado em `api/estoque.js`.
+
+### Totais Rampa não bateram entre DRE e Relatório de Vendas — investigação de 2026-11-23
+Comparando NF a NF (relatório de vendas × títulos de contas a receber classificados no grupo
+`1.01`), restaram só 3 casos reais de um total de ~R$76 mil em NFs aparentemente "sem
+referência" (a maioria tinha "Ref. ao pedido de venda nº X" no histórico em vez de "Ref. a NF nº
+X" — já estava corretamente contada, só não bate com o regex de verificação usado na investigação):
+- **Kalil (NF 013421, R$1.620,05) e Dario Neves (NF 013438, R$248,56)**: busca ampla (ago-dez,
+  qualquer mês) não achou NENHUM título de contas a receber pra essas NFs na Tiny — ambas são
+  NFs "Emitida" normais, pagas via Pix, mas aparentemente nunca geraram um título no módulo
+  financeiro da Tiny. **Não é bug do sync** — é uma lacuna do lado da Tiny/processo (venda
+  faturada sem o título correspondente nunca ter sido criado); não tem o que corrigir no código,
+  só fica documentado como gap conhecido.
+- **Germano Petersen (NF 013394, R$1.390,00)**: esse sim é um limite real do sync — o título
+  (único, sem parcelas) tem `data`="30/09/2026", um dia **antes** da emissão real da NF
+  (01/10/2026), e o histórico é "Ref. ao pedido de venda nº 992" (não "Ref. a NF"), então nem a
+  correção por NF salva — o título nunca é buscado porque a janela de busca de contas a receber
+  usa o dia 1 exato do mês alvo como início.
+  - **Tentativa de correção abortada**: cheguei a alargar o início da busca do mês mais antigo
+    reprocessado em 5 dias pra trás — resolveu o Germano, mas também trouxe de volta 4 títulos que
+    são **de verdade** de setembro (Shopping das Calcinhas R$5.834,40, Terra Mats R$1.229,58,
+    Nova Vicenza R$321,50, e — mais grave — uma nota de Castanhel que também é "apoio em vendas"
+    mas cujo RPS não bateu no mapa da janela, R$5.000) sendo contados em outubro só porque não
+    tinham "Ref. a NF" pra corrigir o mês, inflando a Receita Bruta de outubro em R$13.775,48.
+    **Revertido** — as 5 linhas foram apagadas manualmente e o alargamento de janela foi tirado do
+    código. **Lição**: alargar uma janela de busca pra pegar um caso de borda, sem uma forma
+    confiável de resolver o mês certo de cada título que ela trouxer de mais, troca um gap
+    pequeno e visível (um título que falta) por um erro maior e silencioso (título do mês errado
+    contado como receita) — o custo de um alargamento genérico pode ser pior que o problema
+    original. Esse R$1.390 do Germano Petersen fica como gap conhecido, não corrigido.
+- Gap residual (~R$2.500 de ~R$495 mil, não totalmente rastreado) provavelmente é arredondamento
+  de parcela/taxa espalhado entre os ~230 títulos do grupo `1.01` — não investigado item a item,
+  ordem de grandeza pequena (~0,5% do total).
+
 ---
 
 ## Estrutura do banco Supabase
