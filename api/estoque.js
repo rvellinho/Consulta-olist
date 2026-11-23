@@ -34,8 +34,12 @@ function parseJSON(text) { try { return JSON.parse(text); } catch { return {}; }
 
 async function buscarCatalogoElegivel(empresa) {
   const supaHost = SUPABASE_URL.replace("https://", "");
+  // `estoque_catalogo` agora também guarda produto inativado na Tiny (desde
+  // 2026-11-23, pro CMV do módulo Financeiro não perder o custo de um
+  // produto descontinuado — ver api/estoque-sync-diario.js). Esse relatório
+  // é sobre estoque ATUAL, então continua só com produto ativo.
   const r = await httpsRequest("GET", supaHost,
-    `/rest/v1/estoque_catalogo?elegivel=eq.true&empresa=eq.${empresa}&select=produto_id,sku,nome,categoria,fornecedor,unidade,estoque_minimo`,
+    `/rest/v1/estoque_catalogo?elegivel=eq.true&ativo=eq.true&empresa=eq.${empresa}&select=produto_id,sku,nome,categoria,fornecedor,unidade,estoque_minimo`,
     null, { apikey: SUPABASE_KEY, Authorization: "Bearer " + SUPABASE_KEY });
   return parseJSON(r.text);
 }

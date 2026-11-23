@@ -56,13 +56,21 @@ function httpsRequest(method, hostname, path, body, headers) {
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 function parseJSON(text) { try { return JSON.parse(text); } catch { return {}; } }
 
-async function buscarTodosProdutosAtivos(empresa) {
-  const { tokenV2 } = getConfigEmpresa(empresa);
+// Busca produtos ativos (situacao=A) E inativos (situacao=I) — produto
+// inativado na Tiny continua precisando de custo pro CMV de um mês em que
+// ele ainda estava ativo e foi vendido (decisão do Rafael, 2026-11-23: um
+// produto descontinuado HOJE não deixa de ter sido vendido com custo real
+// no mês em que ainda estava ativo). Antes só buscava situacao=A, então um
+// produto inativado desaparecia de `estoque_catalogo` e o CMV passava a
+// contar custo 0 pra ele retroativamente, mesmo em meses anteriores à
+// inativação. A aba Estoque (api/estoque.js) continua só mostrando produto
+// ativo — ver coluna `ativo` abaixo e o filtro em buscarCatalogoElegivel.
+async function buscarProdutosPorSituacao(tokenV2, situacao) {
   const produtos = [];
   let pagina = 1;
   while (true) {
     const body = new URLSearchParams({
-      token: tokenV2, pesquisa: " ", situacao: "A",
+      token: tokenV2, pesquisa: " ", situacao,
       pagina: String(pagina), formato: "JSON",
     }).toString();
     const r = await httpsRequest("POST", "api.tiny.com.br", "/api2/produtos.pesquisa.php", body,
@@ -70,12 +78,19 @@ async function buscarTodosProdutosAtivos(empresa) {
     const data = parseJSON(r.text);
     const lista = data.retorno?.produtos || [];
     if (!lista.length) break;
-    lista.forEach(p => { if (p.produto) produtos.push({ id: p.produto.id, nome: p.produto.nome }); });
+    lista.forEach(p => { if (p.produto) produtos.push({ id: p.produto.id, nome: p.produto.nome, ativo: situacao === "A" }); });
     if (lista.length < 100) break;
     pagina++;
     await sleep(600);
   }
   return produtos;
+}
+async function buscarTodosProdutos(empresa) {
+  const { tokenV2 } = getConfigEmpresa(empresa);
+  const ativos = await buscarProdutosPorSituacao(tokenV2, "A");
+  await sleep(600);
+  const inativos = await buscarProdutosPorSituacao(tokenV2, "I");
+  return [...ativos, ...inativos];
 }
 
 async function lerStatus(empresa) {
@@ -177,7 +192,7 @@ module.exports = async (req, res) => {
     await marcarTentativa(empresa);
 
     if (!status || !status.em_andamento || iniciadoHaMuito) {
-      const todos = await buscarTodosProdutosAtivos(empresa);
+      const todos = await buscarTodosProdutos(empresa);
       status = {
         em_andamento: true,
         pendentes: todos,
@@ -190,7 +205,7 @@ module.exports = async (req, res) => {
         ultimo_erro: null,
       };
       await salvarStatus(empresa, status);
-      console.log(`[estoque-sync:${empresa}] execução nova: ${todos.length} produtos ativos encontrados`);
+      console.log(`[estoque-sync:${empresa}] execução nova: ${todos.length} produtos encontrados (ativos + inativos)`);
     } else {
       console.log(`[estoque-sync:${empresa}] retomando execução anterior: ${status.pendentes.length} ainda pendentes`);
     }
@@ -227,6 +242,7 @@ module.exports = async (req, res) => {
           produto_id: p.id, sku: p.codigo || "", nome: p.nome,
           categoria: p.categoria || null, fornecedor: p.nome_fornecedor || null, unidade: p.unidade || null,
           estoque_minimo: parseFloat(p.estoque_minimo || 0),
+          ativo: p.situacao === "A",
           elegivel, motivo_exclusao: motivoExclusao,
           // Custo atual do produto, de graça — já vem no mesmo retorno de
           // produto.obter.php usado pra classificação, sem chamada extra à

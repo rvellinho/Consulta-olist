@@ -437,12 +437,21 @@ outubro pode só ser vendido em dezembro). Produziu ~R$627 mil de "CMV" incorret
 (out+nov/2026) que foi apagado de `financeiro_mensal` na correção.
 
 - **Cálculo**: pra cada nota de venda (tipoNota=S, API V2) emitida dentro da janela de 2 meses
-  reprocessada, soma `quantidade × preco_custo` de cada item (`nota.fiscal.obter.php` →
-  `itens[].item.{id_produto,quantidade}`, depois `produto.obter.php` → `preco_custo` por
-  produto, cacheado em memória durante a chamada pra não repetir request por produto repetido
-  em várias notas). Grava uma linha em `financeiro_mensal` por nota (`titulo_tipo='cmv'`,
-  `titulo_id=<id da nota>`, `origem='tiny_notas_itens'`), mês = emissão da nota (mesma base da
-  receita, pra Lucro Bruto bater).
+  reprocessada, soma `quantidade × custo` de cada item (`nota.fiscal.obter.php` →
+  `itens[].item.{id_produto,quantidade}`). Grava uma linha em `financeiro_mensal` por nota
+  (`titulo_tipo='cmv'`, `titulo_id=<id da nota>`, `origem='tiny_notas_itens'`), mês = emissão da
+  nota (mesma base da receita, pra Lucro Bruto bater).
+- **Custo do produto (desde 2026-11-22, substitui o desenho original que buscava
+  `preco_custo` direto na Tiny a cada item)**: nunca bate na Tiny durante o sync do financeiro —
+  lê `estoque_catalogo.custo_atual` (já populado pela sincronização diária de estoque, de graça,
+  no mesmo `produto.obter.php` usado pra classificação — ver "Rotina diária de estoque"). Motivo:
+  buscar custo ao vivo a cada sync fazia o CMV de um mês **já fechado** mudar retroativamente
+  sempre que alguém corrigia o custo de um produto na Tiny depois. Por isso existe
+  `financeiro_custo_mensal` (`empresa+produto_id+ano+mes`, insert `ignore-duplicates`, nunca
+  `merge`): a primeira vez que um produto aparece no "mês anterior" (dos 2 da janela), o custo
+  daquele momento é congelado ali e nunca mais muda pra aquele mês; o "mês atual" (mais recente da
+  janela) sempre usa `custo_atual` ao vivo. `obterCustoProduto(idProduto, ano, mes)` em
+  `api/financeiro.js` decide entre os dois.
 - **Só cobre o grupo `4.01` (Estoques)** — mercadoria física vendida. **Não cobre `4.02` (Insumos
   de Serviços)**: não existe hoje uma forma confiável de ligar "material gasto numa nota de
   serviço" a produtos/custo; `4.02` continua `regime='manual'`, sem automação. Se precisar
@@ -491,6 +500,32 @@ produção, aumentando a chance de a Tiny recusar/atrasar alguma chamada pontual
   novo que não seguiu o padrão — ao escrever uma chamada nova pra Tiny, sempre checar
   `retorno.status === "Erro"` explicitamente, nunca confiar que um campo ausente no JSON (ex:
   `produto` ausente) significa "sem custo"/"vazio" em vez de "a chamada falhou".
+
+#### Bug: produto inativado na Tiny perdia o custo no CMV (corrigido, 2026-11-23)
+`estoque_catalogo` só guardava produto **ativo** (`situacao=A` na busca de
+`api/estoque-sync-diario.js`) — produto inativado/descontinuado na Tiny saía do catálogo (a
+limpeza em `limparForaDoCatalogo` existe exatamente pra isso) e `custo_atual` deixava de existir
+pra ele. Problema: o CMV usa esse valor pra **qualquer mês da janela de 2 meses**, incluindo
+vendas feitas quando o produto ainda estava ativo — um produto vendido em outubro e inativado
+depois (ex: antes do fechamento de outubro acontecer) virava custo R$0 no CMV daquele mês, por
+estar inativo **hoje**, não por estar sem custo cadastrado. Achado ao vivo (Rampa, 2026-11-23):
+`PJO221114`/`PJO221117`, ambos com `preco_custo` cadastrado normal na Tiny (`situacao: "I"`),
+ficaram de fora do catálogo e contaram R$0 de custo em 3 notas de outubro.
+- **Corrigido**: `api/estoque-sync-diario.js` agora busca `situacao=A` **e** `situacao=I`
+  (`buscarTodosProdutos`, duas passadas de `produtos.pesquisa.php`) e grava os dois em
+  `estoque_catalogo`, com uma coluna nova `ativo` (boolean, migration aplicada em produção)
+  marcando qual é qual — `p.situacao === "A"` no retorno do `produto.obter.php` de cada item,
+  não o resultado da busca (mais preciso, evita qualquer divergência entre as duas chamadas).
+  **Nunca mais remover produto inativo do catálogo** — ele só some de verdade se nem aparecer
+  mais em nenhuma das duas buscas (produto excluído de fato).
+- **`api/financeiro.js` (`lerCustoAtualCatalogo`) não filtra por `ativo`** — lê todo mundo,
+  então o CMV já pega custo de produto inativo automaticamente, sem mudança nenhuma lá.
+- **`api/estoque.js` (`buscarCatalogoElegivel`) passou a filtrar `ativo=eq.true`** — a aba
+  Estoque é sobre estoque **atual**, então continua só mostrando produto ativo; sem esse filtro
+  novo, produto descontinuado passaria a aparecer ali também (regressão que esse filtro evita).
+- **Decisão do Rafael**: "esses itens estão inativos hoje, mas estavam ativos em outubro, então
+  tem que ter o custo considerado" — situação atual do produto na Tiny não deve retroagir sobre
+  o custo de um mês em que ele ainda estava ativo e foi vendido.
 
 ### Intercompany Rampa↔TF (2026-11-22)
 A Rampa vende pra TF abaixo do custo; em contrapartida a TF paga algumas despesas da Rampa (e,
