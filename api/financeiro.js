@@ -118,6 +118,7 @@ function resolverLeaf(l, categoriasPorEmpresa) {
   }
   if (l.titulo_tipo === "cmv") return "Custo calculado pela nota (sem categoria)";
   if (l.origem === "tiny_historico") return "Classificado por histórico (sem categoria na Tiny)";
+  if (l.origem === "ajuste_conciliacao") return "1.01.05 Ajuste de conciliação (Relatório de Vendas)";
   if (l.subitem) return l.subitem; // lançamento manual
   return "Sem subcategoria";
 }
@@ -649,6 +650,77 @@ async function listarIdsContasPagar(accessToken, dataIni, dataFim) {
   return ids;
 }
 
+// --- reconciliação com o Relatório de Vendas (ver CLAUDE.md "Totais Rampa
+// não bateram..." / devolução 1.01.04) ---
+// Só Rampa: relatorio_cache (fonte do Relatório de Vendas) não tem coluna
+// empresa — é Rampa-only por desenho (ver CLAUDE.md "Multi-empresa").
+// Fecha dois problemas de uma vez, de forma idempotente e autocorretiva:
+//   1. Devolução nunca existia no DRE — grava como leaf "1.01.04 (-)
+//      Devoluções e estornos" (categoria REAL da Tiny — Rafael apontou esse
+//      código de propósito, já existe no plano de contas, só nunca era usada
+//      porque devolução não passa por título de contas a receber), negativa.
+//   2. NF que existe no Relatório de Vendas mas não tem título em contas a
+//      receber (ou cujo título cai fora da janela de busca — casos reais:
+//      Kalil, Dario Neves, Germano Petersen) nunca vão ser achados título a
+//      título com 100% de confiabilidade (tentativa de alargar a janela de
+//      busca já foi revertida por trazer título de mês errado — ver
+//      CLAUDE.md "Totais Rampa não bateram..."). Em vez de caçar caso a
+//      caso, fecha a diferença com um ajuste explícito: total do Relatório
+//      de Vendas (fonte já validada pelo Rafael, com cancelamento/
+//      revalidação/backfill de buraco já corrigidos) menos o que já está
+//      classificado em 1.01 vindo de contas a receber. Recalculado do zero
+//      a cada chamada do sync (idempotente) — se um título "sumido"
+//      aparecer depois, o ajuste encolhe sozinho no próximo sync, nunca
+//      duplica nem acumula.
+const CATEGORIA_DEVOLUCAO_RAMPA = 361455287; // "1.01.04 (-) Devoluções e estornos" — categoria real da Tiny
+const CODIGO_GRUPO_VENDA_INTERNA = "1.01";
+
+async function somarRelatorioCache(tipo, dataIniIso, dataFimIso) {
+  const r = await httpsRequest("GET", supaHost(),
+    `/rest/v1/relatorio_cache?tipo=eq.${tipo}&data=gte.${dataIniIso}&data=lte.${dataFimIso}&select=valor`,
+    null, supaHeaders);
+  const linhas = parseJSON(r.text);
+  return (Array.isArray(linhas) ? linhas : []).reduce((s, l) => s + (Number(l.valor) || 0), 0);
+}
+
+async function somarClassificadoReceber(empresa, ano, mes, codigoGrupo) {
+  const r = await httpsRequest("GET", supaHost(),
+    `/rest/v1/financeiro_mensal?empresa=eq.${empresa}&ano=eq.${ano}&mes=eq.${mes}` +
+    `&codigo_grupo=eq.${codigoGrupo}&titulo_tipo=eq.receber&select=valor`,
+    null, supaHeaders);
+  const linhas = parseJSON(r.text);
+  return (Array.isArray(linhas) ? linhas : []).reduce((s, l) => s + (Number(l.valor) || 0), 0);
+}
+
+async function sincronizarConciliacaoRelatorioVendas(empresa, periodosFechados) {
+  if (empresa !== "rampa") return; // relatorio_cache (Relatório de Vendas) é Rampa-only
+  for (const p of periodosFechados) {
+    const dataIni = formatarData(p.ano, p.mes, 1);
+    const dataFim = formatarData(p.ano, p.mes, ultimoDiaDoMes(p.ano, p.mes));
+    const [totalProduto, totalDevolucao, totalClassificado] = await Promise.all([
+      somarRelatorioCache("produto", dataIni, dataFim),
+      somarRelatorioCache("devolucao", dataIni, dataFim),
+      somarClassificadoReceber(empresa, p.ano, p.mes, CODIGO_GRUPO_VENDA_INTERNA),
+    ]);
+    const ajuste = totalProduto - totalClassificado;
+    const chave = p.ano * 100 + p.mes; // sem colisão: IDs reais da Tiny têm 8-9 dígitos
+    const linhas = [
+      {
+        ano: p.ano, mes: p.mes, codigo_grupo: CODIGO_GRUPO_VENDA_INTERNA, categoria_id: CATEGORIA_DEVOLUCAO_RAMPA,
+        origem: "relatorio_cache", regime: "competencia", titulo_tipo: "devolucao", titulo_id: chave,
+        valor: -totalDevolucao, descricao: "Devoluções (Relatório de Vendas)",
+      },
+      {
+        ano: p.ano, mes: p.mes, codigo_grupo: CODIGO_GRUPO_VENDA_INTERNA, categoria_id: null,
+        origem: "ajuste_conciliacao", regime: "competencia", titulo_tipo: "ajuste_conciliacao", titulo_id: chave,
+        valor: ajuste, descricao: "Ajuste de conciliação com o Relatório de Vendas",
+      },
+    ];
+    await upsertMensal(empresa, linhas);
+    console.log(`[financeiro-sync:${empresa}] conciliação ${p.ano}-${p.mes}: produto=${totalProduto.toFixed(2)} devolucao=${totalDevolucao.toFixed(2)} classificado=${totalClassificado.toFixed(2)} ajuste=${ajuste.toFixed(2)}`);
+  }
+}
+
 async function executarSyncDiario(req, res) {
   const empresa = String(req.query.empresa || "rampa").toLowerCase();
 
@@ -985,6 +1057,18 @@ async function executarSyncDiario(req, res) {
     status.processados = status.total - filaReceita.length - filaPagar.length - filaCmv.length;
 
     if (filaReceita.length === 0 && filaPagar.length === 0 && filaCmv.length === 0) {
+      // Só roda depois que a fila de contas a receber terminou de verdade —
+      // senão o "classificado" usado pra calcular o ajuste fica incompleto
+      // (sync que precisou de várias chamadas pra terminar). E só pro mês
+      // ANTERIOR (fechado), nunca pro mês atual: o cache do Relatório de
+      // Vendas (relatorio_cache) é alimentado pelo sync diário de
+      // Relatórios, que só revisita os últimos 7 dias (ver api/relatorios.js)
+      // — confirmado ao vivo (2026-11-23): o mês corrente tinha um buraco
+      // justamente nos dias mais recentes (faltavam exatamente os últimos
+      // dias antes de hoje). Comparar o DRE contra um cache incompleto do
+      // mês em andamento geraria um "ajuste" negativo artificial, subtraindo
+      // receita real. O mês anterior já está fechado e totalmente coletado.
+      await sincronizarConciliacaoRelatorioVendas(empresa, [mesAnterior]);
       status.em_andamento = false;
       status.concluido_em = new Date().toISOString();
       await salvarStatusSync(empresa, status);

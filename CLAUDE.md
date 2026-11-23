@@ -797,9 +797,54 @@ X" — já estava corretamente contada, só não bate com o regex de verificaç�
     pequeno e visível (um título que falta) por um erro maior e silencioso (título do mês errado
     contado como receita) — o custo de um alargamento genérico pode ser pior que o problema
     original. Esse R$1.390 do Germano Petersen fica como gap conhecido, não corrigido.
-- Gap residual (~R$2.500 de ~R$495 mil, não totalmente rastreado) provavelmente é arredondamento
-  de parcela/taxa espalhado entre os ~230 títulos do grupo `1.01` — não investigado item a item,
-  ordem de grandeza pequena (~0,5% do total).
+- Gap residual original (~R$300 de ~R$493 mil) nunca foi rastreado item a item — resolvido junto
+  com o resto pela reconciliação abaixo, não por achar a causa exata dele.
+
+### Devolução no DRE + reconciliação automática contra o Relatório de Vendas (2026-11-23)
+Decisão do Rafael: devolução tem que constar no DRE (leaf `1.01.04 (-) Devoluções e estornos`) e
+**os dois relatórios têm que bater, sem nenhum resíduo** — não dava pra deixar Kalil + Dario Neves
++ Germano Petersen (R$3.258,61, ver investigação acima) e o resíduo de ~R$300 só documentados como
+gap aceitável. Tentar achar cada título individualmente (inclusive alargando a janela de busca) já
+tinha se mostrado arriscado — ver "tentativa de correção abortada" acima, que trocou um gap pequeno
+por um erro maior. Em vez de caçar título a título, `api/financeiro.js` ganhou uma reconciliação
+automática contra o Relatório de Vendas (`relatorio_cache`), que é a fonte que o Rafael já validou
+como correta (cancelamento, revalidação e backfill de buracos já corrigidos nela — ver seções
+abaixo):
+- **`1.01.04 (-) Devoluções e estornos`**: não é um rótulo sintético novo — é a categoria **real**
+  da própria Tiny (`categoria_id` 361455287, já existia no plano de contas da Rampa, só nunca era
+  usada porque devolução não passa por título de contas a receber). O sync grava uma linha
+  (`titulo_tipo='devolucao'`) com esse `categoria_id`, valor negativo = soma de
+  `relatorio_cache` tipo `devolucao` no mês, e `resolverLeaf` resolve ela automaticamente pela
+  categoria, sem código especial.
+- **`1.01.05 Ajuste de conciliação (Relatório de Vendas)`**: fecha o resto da diferença. A cada
+  sync, calcula `ajuste = soma(relatorio_cache tipo='produto' no mês) - soma(financeiro_mensal
+  titulo_tipo='receber' codigo_grupo='1.01' no mês)` e grava como uma linha própria
+  (`titulo_tipo='ajuste_conciliacao'`, sem categoria). **Idempotente e autocorretivo**: recalculado
+  do zero a cada chamada do sync (upsert por `titulo_id = ano*100+mes`, uma linha por mês/empresa)
+  — se um título "sumido" (tipo Kalil/Dario Neves/Germano) aparecer na Tiny depois, o ajuste encolhe
+  sozinho no próximo sync, nunca duplica nem acumula. Testado ao vivo pra outubro/2026 Rampa: Receita
+  Bruta (grupo `1.01`) foi de R$490.042,46 pra **R$490.164,21** — bate em cima do centavo com a linha
+  "Notas de Produto" do Relatório de Vendas (R$493.601,56 − R$3.437,35 de devolução).
+- **Só Rampa, só pro mês ANTERIOR (fechado), nunca pro mês atual**: `relatorio_cache` não tem
+  coluna `empresa` (Relatório de Vendas é Rampa-only, ver "Multi-empresa"), e pro mês em andamento
+  o cache está estruturalmente incompleto — o sync diário de Relatórios só revisita os últimos 7
+  dias (`api/relatorios.js`), então o mês corrente sempre tem buraco justo nos dias mais recentes.
+  Confirmado ao vivo (2026-11-23): aplicar a mesma conta em novembro/2026 (mês aberto) dava um
+  ajuste de **-R$14.227,71** — não porque a receita estivesse errada, mas porque o cache de
+  novembro só tinha dados até dia 19, faltando os últimos dias antes de "hoje". Comparar contra um
+  cache parcial geraria um ajuste negativo artificial, subtraindo receita real. Por isso a
+  reconciliação roda só com `mesAnterior` (nunca `periodos` inteiro), e só depois que a fila de
+  contas a receber termina de verdade (senão o "classificado" usado no cálculo fica incompleto).
+- **Não cobre `1.01.03 Serviços prestados`** — a reconciliação compara só contra `relatorio_cache`
+  tipo `produto`; se um mês futuro tiver serviço de verdade classificado em `1.01.03` (frete etc,
+  não "apoio em vendas"), ele continua separado e intocado pela conciliação (confirmado: em
+  out/nov-2026 a Rampa não tinha nada em `1.01.03`, só `1.01.01`).
+- **Lição**: perseguir reconciliação exata título a título contra uma fonte externa (Tiny) é um
+  objetivo sem fim garantido — sempre pode haver um caso novo de borda. Reconciliar contra uma
+  fonte interna já validada e auditável (o próprio Relatório de Vendas, cujos bugs de buraco/
+  cancelamento/revalidação já foram caçados e corrigidos à parte) e fechar a diferença com uma
+  linha visível e recalculada do zero a cada sync é mais robusto do que tentar prever todo caso de
+  título ausente/fora de janela.
 
 ---
 
