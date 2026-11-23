@@ -32,20 +32,34 @@ function httpsRequest(method, hostname, path, body, headers) {
 
 function parseJSON(text) { try { return JSON.parse(text); } catch { return {}; } }
 
-async function buscarCatalogoElegivel(empresa) {
+async function buscarCatalogoElegivel(empresa, incluirInativos) {
   const supaHost = SUPABASE_URL.replace("https://", "");
   // `estoque_catalogo` agora também guarda produto inativado na Tiny (desde
   // 2026-11-23, pro CMV do módulo Financeiro não perder o custo de um
   // produto descontinuado — ver api/estoque-sync-diario.js). Esse relatório
-  // é sobre estoque ATUAL, então continua só com produto ativo.
+  // é sobre estoque ATUAL, então por padrão só traz produto ativo — a tela
+  // tem um checkbox "mostrar inativos" (desmarcado por padrão) pra incluir
+  // os dois quando precisar olhar um produto descontinuado.
+  const filtroAtivo = incluirInativos ? "" : "&ativo=eq.true";
   const r = await httpsRequest("GET", supaHost,
-    `/rest/v1/estoque_catalogo?elegivel=eq.true&ativo=eq.true&empresa=eq.${empresa}&select=produto_id,sku,nome,categoria,fornecedor,unidade,estoque_minimo`,
+    `/rest/v1/estoque_catalogo?elegivel=eq.true${filtroAtivo}&empresa=eq.${empresa}&select=produto_id,sku,nome,categoria,fornecedor,unidade,estoque_minimo,ativo`,
     null, { apikey: SUPABASE_KEY, Authorization: "Bearer " + SUPABASE_KEY });
   return parseJSON(r.text);
 }
 
 // GET /estoque (v3) — saldo/reservado/disponível de até 100 produtos por
 // chamada, paginado. Não filtra por ID, então pagina o catálogo inteiro.
+//
+// Importante: uma página que falhar (rate-limit, erro transitório da Olist)
+// tem que INTERROMPER com erro, nunca ser tratada como "fim da lista". Antes
+// (até 2026-11-23) `data.itens || []` virava `[]` numa resposta de erro, e
+// como `[]` é "menor que o limit", o loop simplesmente parava ali — o
+// relatório seguia em frente com só as páginas anteriores, mostrando os
+// produtos das páginas que faltaram com estoque 0 (zerado), sem erro nenhum
+// visível. Achado ao vivo: TECO2055 (produto da 2ª página) apareceu zerado
+// num load e certo no load seguinte, exatamente o padrão de uma página
+// perdida por instabilidade/rate-limit da Olist durante um sync pesado
+// rodando em paralelo (financeiro/estoque-sync-diario).
 async function buscarEstoqueTodos(accessToken) {
   const mapa = {};
   const limit = 100;
@@ -55,7 +69,10 @@ async function buscarEstoqueTodos(accessToken) {
       `/public-api/v3/estoque?limit=${limit}&offset=${offset}`,
       null, { Authorization: "Bearer " + accessToken });
     const data = parseJSON(r.text);
-    const itens = data.itens || [];
+    if (r.status !== 200 || !Array.isArray(data.itens)) {
+      throw new Error(`Falha ao buscar estoque na Olist (offset ${offset}, status ${r.status}): ${r.text.slice(0, 300)}`);
+    }
+    const itens = data.itens;
     itens.forEach(it => {
       mapa[it.idProduto] = {
         saldo: Number(it.saldo) || 0,
@@ -83,7 +100,10 @@ async function buscarComprasPendentes(accessToken) {
         `/public-api/v3/ordem-compra?situacao=${situacao}&limit=${limit}&offset=${offset}`,
         null, { Authorization: "Bearer " + accessToken });
       const data = parseJSON(r.text);
-      const ordens = data.itens || [];
+      if (r.status !== 200 || !Array.isArray(data.itens)) {
+        throw new Error(`Falha ao buscar ordens de compra na Olist (situacao ${situacao}, offset ${offset}, status ${r.status}): ${r.text.slice(0, 300)}`);
+      }
+      const ordens = data.itens;
       for (const ordem of ordens) {
         let itensOrdem = ordem.itens;
         if (!itensOrdem) {
@@ -114,10 +134,11 @@ module.exports = async (req, res) => {
 
   const acao = req.query.acao;
   const empresa = String(req.query.empresa || "rampa").toLowerCase();
+  const incluirInativos = String(req.query.inativos || "").toLowerCase() === "true";
 
   try {
     if (acao === "relatorio") {
-      const catalogo = await buscarCatalogoElegivel(empresa);
+      const catalogo = await buscarCatalogoElegivel(empresa, incluirInativos);
       if (!catalogo.length) {
         return res.status(200).json({ relatorio: [], catalogoVazio: true });
       }
@@ -138,7 +159,7 @@ module.exports = async (req, res) => {
         const necessidade = estoqueMinimo - dispMaisCompras;
         return {
           id: p.produto_id, sku: p.sku || "", nome: p.nome, unidade: p.unidade || "",
-          categoria: p.categoria || "—", fornecedor: p.fornecedor || "—",
+          categoria: p.categoria || "—", fornecedor: p.fornecedor || "—", ativo: p.ativo,
           estoqueFisico: e.saldo, estoqueReservado: e.reservado, estoqueDisponivel: e.disponivel,
           emCompra, dispMaisCompras, estoqueMinimo, necessidade,
         };

@@ -338,6 +338,10 @@
         <input type="checkbox" id="est-agrupar" onchange="filtrarEstoque()" style="width:14px;height:14px;accent-color:var(--ac);" />
         Agrupar produtos iguais
       </label>
+      <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;white-space:nowrap;padding:8px 12px;border:1.5px solid var(--br);border-radius:8px;background:#fff;">
+        <input type="checkbox" id="est-inativos" onchange="carregarEstoque()" style="width:14px;height:14px;accent-color:var(--ac);" />
+        Mostrar inativos
+      </label>
     </div>
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
       <div style="font-size:12px;color:var(--mt);" id="estoque-rodape"></div>
@@ -1551,7 +1555,8 @@ async function carregarEstoque() {
   el("msg-estoque").textContent = "Buscando estoque, compras pendentes e catálogo...";
 
   try {
-    const r = await fetch(`/api/estoque?acao=relatorio&empresa=${empresaAtual}`);
+    const inativos = el("est-inativos")?.checked ? "&inativos=true" : "";
+    const r = await fetch(`/api/estoque?acao=relatorio&empresa=${empresaAtual}${inativos}`);
     const data = await r.json();
     if (!r.ok) throw new Error(data.erro || "Erro ao buscar o relatório");
     if (data.catalogoVazio) throw new Error('Catálogo ainda não sincronizado — clique em "Atualizar Catálogo Agora" primeiro.');
@@ -2559,8 +2564,10 @@ function celulaEstoque(col, p) {
   switch (col.key) {
     case "sku":
       return `<td style="${baseTxt}font-family:monospace;font-size:12px;">${v||"—"}</td>`;
-    case "nome":
-      return `<td style="${baseTxt}" title="${escAttr(v)}">${v||""}</td>`;
+    case "nome": {
+      const tagInativo = p.ativo === false ? ' <span style="font-size:10px;color:var(--mt);border:1px solid var(--br);border-radius:4px;padding:1px 4px;">inativo</span>' : "";
+      return `<td style="${baseTxt}" title="${escAttr(v)}">${v||""}${tagInativo}</td>`;
+    }
     case "categoria":
     case "fornecedor":
       return `<td style="${baseTxt}font-size:12px;color:var(--mt);" title="${escAttr(v)}">${v||"—"}</td>`;
