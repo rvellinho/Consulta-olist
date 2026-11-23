@@ -579,6 +579,34 @@ outubro/2026 aparecia como R$8.431,09 em vez do valor real (~R$428 mil). **Liç�
 chave é granular o suficiente pra cada upsert ser idempotente por si só (como ficou: uma linha
 por título), ou a soma tem que acontecer inteira numa única chamada, nunca em pedaços.
 
+### Bug: janela de busca cortava no dia 28 de todo mês (corrigido, 2026-11-23)
+`executarSyncDiario` montava o fim da janela de busca (emissão pra contas a receber, vencimento
+pra contas a pagar) com `formatarData(ano, mes, 28)` — dia **fixo**, não o último dia real do
+mês. Resultado: títulos emitidos/vencidos nos dias 29, 30 e 31 nunca eram nem buscados na Tiny —
+não apareciam nem classificados nem em "não classificado", simplesmente não existiam pro DRE.
+Isso afeta todo mês com mais de 28 dias (ou seja, todos exceto fevereiro), toda vez que o sync
+roda. Achado ao vivo verificando a receita de outubro/2026 da Rampa direto na Tiny: 8 títulos de
+contas a receber emitidos em 29-30/10, R$ 20.700,31, estavam fora da janela e por isso ausentes
+do DRE. **Corrigido**: as duas janelas agora usam `ultimoDiaDoMes(ano, mes)` (helper que já
+existia, usada em outro lugar do arquivo) em vez do `28` fixo. **Lição**: nunca hardcodar um
+número de dia como "fim do mês" — mesmo um "quase sempre certo" como 28 (que só erra em 10 dos 12
+meses) é um bug silencioso, porque não dá erro nenhum, só omite dado sem avisar.
+
+### Bug: buraco no cache de Relatórios de Vendas por delete-then-insert não atômico (achado, 2026-11-23)
+`salvarNoCache` (`api/_lib/relatorio-coleta.js`) sempre apaga as linhas do período antes de
+regravar (`DELETE` seguido de `INSERT`) — pensado pra limpar nota que deixou de valer (devolução
+cancelada, pedido que ganhou NF própria). Problema: se a coleta daquele período falhar ou vier
+vazia/parcial por qualquer motivo depois do DELETE (timeout da Tiny, aba fechada no meio do loop
+pesado no frontend, rate-limit) a janela fica sem nenhuma linha e sem nenhum erro visível na
+tela. Achado comparando nota a nota contra a Tiny pra investigar uma reclamação de receita
+errada: dois buracos reais no cache "produto" da Rampa — **17 a 22/10/2026** (38 notas, R$
+123.854,90) e **12 a 15/11/2026** (18 notas, R$ 66.459,90) — nenhum alerta indicava isso, o
+relatório só mostrava menos venda do que existia de verdade. Corrigido re-coletando os dois
+períodos manualmente. **Ainda não corrigido (risco que permanece)**: o padrão delete-then-insert
+em si — qualquer resync futuro de um período pode abrir o mesmo buraco se falhar no meio. Uma
+correção futura precisaria só apagar depois de confirmar que a nova coleta veio não-vazia (ou
+comparar contagem antes de trocar).
+
 ---
 
 ## Estrutura do banco Supabase

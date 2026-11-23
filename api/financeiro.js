@@ -570,7 +570,7 @@ async function executarSyncDiario(req, res) {
       const filaCmv = [];
       for (const p of periodos) {
         const iniEmissao = formatarData(p.ano, p.mes, 1);
-        const fimEmissao = formatarData(p.ano, p.mes, 28);
+        const fimEmissao = formatarData(p.ano, p.mes, ultimoDiaDoMes(p.ano, p.mes));
         const idsReceber = await listarIdsContasReceber(accessToken, iniEmissao, fimEmissao);
         idsReceber.forEach(id => filaReceita.push({ id, ano: p.ano, mes: p.mes }));
         await sleep(600);
@@ -580,7 +580,7 @@ async function executarSyncDiario(req, res) {
         // num mês vizinho.
         const jIni = addMeses(p.ano, p.mes, -1);
         const jFim = addMeses(p.ano, p.mes, 1);
-        const idsPagar = await listarIdsContasPagar(accessToken, formatarData(jIni.ano, jIni.mes, 1), formatarData(jFim.ano, jFim.mes, 28));
+        const idsPagar = await listarIdsContasPagar(accessToken, formatarData(jIni.ano, jIni.mes, 1), formatarData(jFim.ano, jFim.mes, ultimoDiaDoMes(jFim.ano, jFim.mes)));
         idsPagar.forEach(id => filaPagar.push({ id, ano: p.ano, mes: p.mes }));
         await sleep(600);
 
