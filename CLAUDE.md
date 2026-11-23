@@ -366,6 +366,51 @@ de alguma empresa cresce além do que uma chamada dá conta.
 
 ---
 
+## Relatório de Estoque (`api/estoque.js`)
+
+### Página perdida por rate-limit da Olist virava estoque zerado, sem erro nenhum (corrigido, 2026-11-23)
+`buscarEstoqueTodos` e `buscarComprasPendentes` paginam `GET /public-api/v3/estoque` e
+`GET /public-api/v3/ordem-compra` em páginas de 100. Até aqui, cada página fazia
+`const itens = data.itens || []` — se a Olist respondesse com erro (rate-limit 429, instabilidade
+momentânea) em vez de 200, `data.itens` vinha `undefined`, virava `[]`, e como `[]` é "menor que o
+limit" o loop simplesmente **parava ali, sem lançar erro nenhum**. O relatório seguia em frente só
+com as páginas que deram certo — todo produto que só existia nas páginas perdidas aparecia com
+estoque 0 (zerado), indistinguível de um produto que realmente está zerado na Olist.
+
+Achado ao vivo: usuário reportou TECO2055 (Tapume Ecológico 2,00 X 0,55) aparecendo zerado num
+load e com saldo correto (77 un) no load seguinte, poucos minutos depois, sem nenhuma mudança real
+de estoque na Tiny entre os dois. Esse produto fica na 2ª página da paginação (offset 100-200) —
+bateu exatamente com o padrão de "página 1 ok, página 2 falhou e foi tratada como fim da lista".
+No momento do diagnóstico havia sync pesado rodando em paralelo (`api/financeiro.js` +
+`api/estoque-sync-diario.js`, ambos batendo na Olist ao mesmo tempo), com rate-limit confirmado
+nos logs (`API Bloqueada - Excedido o número de acessos a API`) — reproduzido ao vivo durante o
+teste da correção (ver abaixo).
+
+- **Corrigido**: as duas funções agora checam `r.status !== 200 || !Array.isArray(data.itens)` e
+  lançam erro explícito (com status + trecho do corpo da resposta) em vez de tratar como fim da
+  paginação. O endpoint devolve 500 com a mensagem de erro, e a tela mostra "Erro: ..." em vez de
+  silenciosamente exibir estoque errado que parece legítimo. Testado ao vivo: nessa própria sessão
+  de debug, uma tentativa real bateu em rate-limit (429) durante o teste e a tela mostrou o erro
+  corretamente em vez de dar zero.
+- **Lição**: o mesmo padrão de "trate falha como lista vazia" que apareceu aqui é parecido com o
+  bug de `retorno.status === "Erro"` não checado em outras partes do projeto (ver "Bug: falha
+  passageira da Tiny virava custo zero" no Módulo Financeiro) — mas aqui era pior, porque uma
+  lista vazia some silenciosamente dentro de uma paginação em vez de gerar um valor óbvio de
+  "faltou". Em qualquer loop de paginação contra a Olist, uma resposta que não seja 200 com
+  `itens` como array **tem que lançar erro**, nunca ser tratada como "não tem mais nada".
+
+### Filtro "Mostrar inativos" (desmarcado por padrão, desde 2026-11-23)
+Depois que `estoque_catalogo` passou a guardar produto inativo também (ver "Catálogo grande..."
+abaixo e o bug do CMV), o relatório de Estoque ganhou um checkbox "Mostrar inativos" (desmarcado
+por padrão) em vez de decidir isso no código: no dia a dia o relatório só mostra produto ativo
+(`acao=relatorio` sem `&inativos=true`); marcando a caixa, o fetch manda `&inativos=true` e
+`buscarCatalogoElegivel` tira o filtro `ativo=eq.true` da query, trazendo os dois. Produto inativo
+aparece com uma tag "inativo" ao lado do nome na tabela (visível só com a coluna larga o
+suficiente — truncamento normal de nome longo pode escondê-la, mesmo comportamento das outras
+colunas).
+
+---
+
 ## Módulo Financeiro (DRE) (`api/financeiro.js` — DRE/CRUD e `?acao=sync-diario` no mesmo arquivo)
 
 DRE gerencial pra Rampa e TF (balanço/fluxo de caixa ficam pra depois — este módulo cobre só o
@@ -607,6 +652,22 @@ em si — qualquer resync futuro de um período pode abrir o mesmo buraco se fal
 correção futura precisaria só apagar depois de confirmar que a nova coleta veio não-vazia (ou
 comparar contagem antes de trocar).
 
+### Bug: resposta de erro da Tiny virava título com valor zero, sem retentativa (corrigido, 2026-11-23)
+`executarSyncDiario` buscava o detalhe de cada título (`GET /public-api/v3/contas-receber/{id}` e
+`/contas-pagar/{id}`) e usava o corpo da resposta (`d.valor`, `d.categoria`) sem checar o status
+HTTP antes. Quando a Tiny respondia com erro (rate-limit, instabilidade pontual — mesmo padrão já
+visto e documentado no cálculo do CMV), `parseJSON` devolvia `{}`, e o título entrava no
+`financeiro_mensal` com **valor R$0,00 e sem categoria**, de forma silenciosa — sem cair na fila
+de retentativa (`MAX_TENTATIVAS_POR_TITULO`), que só é acionada por exceção. Achado investigando a
+mesma reclamação de receita errada: ~50 títulos de contas a receber de outubro/2026 da Rampa
+gravados como R$0,00, mas com valor real e não-zero na Tiny (confirmado ao vivo em 3 deles —
+R$9.858, R$4.112,55, R$1.039,20). **Corrigido**: as duas chamadas agora lançam erro quando
+`status !== 200`, caindo na mesma lógica de retentativa que erro de rede já usava. **Lição**:
+mesmo padrão do bug do CMV ("200 com erro no corpo" — ver seção de CMV) apareceu de novo em
+outra parte do mesmo arquivo que não tinha a checagem — ao adicionar uma chamada nova pra Tiny,
+sempre checar o status/corpo de erro explicitamente, nunca confiar que um campo ausente significa
+"zero"/"sem categoria" em vez de "a chamada falhou".
+
 ---
 
 ## Estrutura do banco Supabase
@@ -652,6 +713,11 @@ comparar contagem antes de trocar).
    chamadas parciais** → o upsert SUBSTITUI a coluna no conflito, não soma — cada checkpoint
    sobrescrevia o total do checkpoint anterior (ver "Bug de acumulação" no Módulo Financeiro).
    Granularidade tem que ser fina o suficiente pra cada upsert ser idempotente por si só
+7. **`data.itens || []` numa página de paginação contra a Olist** → uma resposta de erro
+   (rate-limit, instabilidade) vira lista vazia, que o loop lê como "fim dos dados" — produto
+   das páginas seguintes aparece com valor zerado, sem erro nenhum visível (ver "Página perdida
+   por rate-limit" no Relatório de Estoque). Sempre checar `status !== 200` / `itens` não ser
+   array e lançar erro, nunca tratar como lista vazia
 
 ---
 
