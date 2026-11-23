@@ -17,6 +17,7 @@ const {
   buscarTodosPedidos, buscarDetalhePedido,
   extrairReferenciaOrigem, buscarVendedorDaNotaOrigem,
   salvarNoCache,
+  revalidarNotas, revalidarNotasServico, revalidarPedidos,
 } = lib;
 
 // ============================================================================
@@ -28,6 +29,27 @@ const {
 // ============================================================================
 
 const DIAS_JANELA_DIARIA = 7;
+
+// Revalidação: nota/pedido que ficou "fantasma" no cache porque foi cancelada
+// DEPOIS do sync normal (ex: cancelamento coincidiu com uma falha do cron na
+// janela de 7 dias — caso real, ver CLAUDE.md "Relatório de Vendas"). Só usa
+// as listagens (já trazem a situação), sem detalhe nota a nota, então dá pra
+// olhar uma janela bem mais larga sem pesar no tempo de execução.
+const DIAS_JANELA_REVALIDACAO = 45;
+
+async function revalidarCacheSync(dataInicial, dataFinal) {
+  const removidos = {};
+  removidos.produto = await revalidarNotas("produto", "S", dataInicial, dataFinal);
+  await sleep(600);
+  removidos.devolucao = await revalidarNotas("devolucao", "E", dataInicial, dataFinal);
+  await sleep(600);
+  removidos.servico = await revalidarNotasServico(dataInicial, dataFinal);
+  await sleep(600);
+  removidos.representacao = await revalidarPedidos("representacao", MARCADOR_REPRESENTACAO, MARGEM_DIAS_REPRESENTACAO, dataInicial, dataFinal);
+  await sleep(600);
+  removidos.aguia = await revalidarPedidos("aguia", MARCADOR_AGUIA, MARGEM_DIAS_AGUIA, dataInicial, dataFinal);
+  return removidos;
+}
 
 async function coletarProdutosSync(dataInicial, dataFinal) {
   const notas = await buscarTodasNotas("S", dataInicial, dataFinal);
@@ -173,10 +195,14 @@ async function executarSyncDiario(req, res) {
     await salvarNoCache("servico", dataInicial, dataFinal, servicos);
     await salvarNoCache("representacao", dataInicial, dataFinal, representacao);
 
+    const dataInicialRevalidacao = somarDiasBR(hoje, -DIAS_JANELA_REVALIDACAO);
+    const removidos = await revalidarCacheSync(dataInicialRevalidacao, dataFinal);
+
     return res.status(200).json({
       ok: true,
       periodo: { dataInicial, dataFinal },
       contagens: { produtos: produtos.length, aguia: aguia.length, devolucoes: devolucoes.length, servicos: servicos.length, representacao: representacao.length },
+      revalidacao: { periodo: { dataInicial: dataInicialRevalidacao, dataFinal }, removidos },
     });
   } catch (e) {
     return res.status(500).json({ erro: e.message, stack: e.stack });

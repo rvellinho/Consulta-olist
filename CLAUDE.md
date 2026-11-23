@@ -654,7 +654,52 @@ chamadas). Outubro da Rampa foi de R$ 369.843,66 pra **R$ 493.698,56** em "produ
 backfill. **Risco que permanece (não corrigido)**: o padrão delete-then-insert em si — qualquer
 resync futuro de um período pode abrir o mesmo buraco se falhar no meio (rate-limit incluído, como
 aconteceu aqui mesmo durante a correção). Uma correção futura precisaria só apagar depois de
-confirmar que a nova coleta veio não-vazia (ou comparar contagem antes de trocar).
+confirmar que a nova coleta veio não-vazia (ou comparar contagem antes de trocar). **Atenuado
+(não eliminado) em 2026-11-23** pela revalidação de situação abaixo, que pelo menos detecta e
+limpa um buraco desse tipo na janela dos últimos 45 dias — fora dela, o risco continua.
+
+### Bug: 12 pedidos de representação de outubro faltando no cache (achado e corrigido, 2026-11-23)
+Mesma causa-raiz do bug acima (buraco por delete-then-insert não atômico), mas no tipo
+`representação`, achado de um jeito diferente: o Rafael mandou a lista de vendas de representação
+de outubro da Carteira 5 que ele mesmo acompanha em paralelo (35 linhas) pra comparar com o
+sistema. 22 batiam, 13 não — comparação ao vivo com a Tiny (`buscarTodosPedidos` pro marcador
+"rep", sem gravar nada) confirmou que 12 desses pedidos existem de verdade como representação em
+outubro (R$ 62.578,40) e só não estavam no cache; o 13º item da lista do Rafael era um valor
+digitado errado (R$ 2.500,00 duma MGF Leaves que na Tiny é R$ 8.188,00 — mesmo pedido, mesmo
+cliente, mesma data). **Corrigido**: recoletada a representação inteira de outubro (34 pedidos,
+R$ 263.615,15) e regravada no cache, substituindo as 22 linhas antigas.
+
+### Revalidação de situação — nota cancelada DEPOIS do sync fica fantasma no relatório (corrigido, 2026-11-23)
+Achado pelo Rafael comparando o relatório com o controle paralelo dele: a nota 013461 (pedido
+1071, TF Comércio e Serviços, R$ 97,00, emitida 15/10/2026) aparecia como venda válida no
+relatório, mas está **Cancelada** (`situacao: "3"`) na Tiny — confirmado ao vivo direto na API.
+O sync diário já filtra nota cancelada (`SITUACOES_INVALIDAS`), então se essa nota fosse coletada
+hoje ela nem entraria — o problema é que ela foi coletada **antes** de ser cancelada (quando ainda
+era válida) e o sync diário só reconfere os últimos 7 dias; uma vez que a data de emissão "sai"
+dessa janela, a nota nunca mais é revisitada, então um cancelamento que aconteça depois disso
+(mesmo um cancelamento normal, dentro do prazo curto que a SEFAZ permite) pode nunca ser
+percebido — inclusive porque esse período (15-22/10) coincide com o buraco de rate-limit já
+documentado acima, então é provável que o cron tenha simplesmente falhado bem no dia em que
+precisava reconferir essa nota.
+- **Corrigido com uma segunda checagem no sync diário** (`revalidarNotas`/`revalidarNotasServico`/
+  `revalidarPedidos` em `api/_lib/relatorio-coleta.js`, chamadas por `revalidarCacheSync` em
+  `api/relatorios.js`): a cada rodada do cron, além da coleta normal dos últimos 7 dias, uma
+  passada adicional releia a **listagem** (não o detalhe nota a nota — a listagem já traz a
+  situação/se o pedido continua "faturado" com o marcador) numa janela de **45 dias** e apaga do
+  cache qualquer nota/pedido que não esteja mais na lista de válidos. Por usar só a listagem
+  (poucas chamadas paginadas, sem bater no detalhe de cada nota), essa passada é barata e não
+  pesa no tempo de execução mesmo numa janela bem maior que os 7 dias da coleta normal.
+  Testado ao vivo rodando manualmente: removeu a nota de R$97 e mais uma outra nota "produto"
+  cancelada que ninguém tinha reportado ainda.
+- **Não cobre tudo**: 45 dias é uma margem de segurança generosa sobre o prazo curto de
+  cancelamento de NF-e pela SEFAZ, mas se uma nota for cancelada depois disso (bem incomum, mas
+  não impossível), ainda ficaria fantasma até alguém notar. Também não cobre o caso de um pedido
+  de representação que ganhou nota fiscal própria depois (isso exigiria olhar o detalhe do
+  pedido, não só a listagem) — só o caso de cancelamento/mudança de situação, que foi o problema
+  real encontrado.
+- **Lição**: um sync que só olha "os últimos N dias" previne atraso de dado chegando, mas não
+  protege contra dado que **deixa de valer** depois de já ter sido salvo — isso precisa de uma
+  conferência própria, separada da coleta normal, voltando a olhar pra trás periodicamente.
 
 ### Bug: resposta de erro da Tiny virava título com valor zero, sem retentativa (corrigido, 2026-11-23)
 `executarSyncDiario` buscava o detalhe de cada título (`GET /public-api/v3/contas-receber/{id}` e

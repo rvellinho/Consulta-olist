@@ -356,6 +356,67 @@ async function atualizarStatusCache(isoInicialDesteSync) {
     payload, { ...supaHeaders, "Content-Length": Buffer.byteLength(payload), Prefer: "return=minimal" });
 }
 
+// ── Revalidação (pega nota/pedido que deixou de valer DEPOIS de já estar no
+// cache — ex: nota cancelada alguns dias após emitida, mas o sync diário só
+// olha os últimos 7 dias, então se o cancelamento coincidir com uma falha do
+// cron naquela janela, a nota cancelada fica "fantasma" pra sempre no
+// relatório). Olha só a listagem (que já traz a situação), nunca o detalhe
+// nota a nota — por isso dá pra rodar numa janela bem mais larga (semanas)
+// sem pesar no tempo de execução. Ver CLAUDE.md "Relatório de Vendas" pro
+// caso real que motivou isso (nota 013461, R$97, cancelada depois do sync).
+async function buscarIdsCache(tipo, dataInicial, dataFinal) {
+  const supaHost = SUPABASE_URL.replace("https://", "");
+  const isoInicial = paraIso(dataInicial);
+  const isoFinal = paraIso(dataFinal);
+  const r = await httpsRequest("GET", supaHost,
+    `/rest/v1/relatorio_cache?tipo=eq.${tipo}&data=gte.${isoInicial}&data=lte.${isoFinal}&select=id_olist`,
+    null, supaHeaders);
+  const data = parseJSON(r.text);
+  return (Array.isArray(data) ? data : []).map(l => l.id_olist).filter(Boolean);
+}
+
+async function removerDoCachePorId(tipo, ids) {
+  if (!ids.length) return;
+  const supaHost = SUPABASE_URL.replace("https://", "");
+  const lista = ids.map(id => `"${id}"`).join(",");
+  await httpsRequest("DELETE", supaHost,
+    `/rest/v1/relatorio_cache?tipo=eq.${tipo}&id_olist=in.(${lista})`,
+    null, { ...supaHeaders, Prefer: "return=minimal" });
+}
+
+// tipoCache: "produto" | "devolucao"; tipoNotaOlist: "S" | "E" — reaproveita
+// buscarTodasNotas, que já filtra por situação válida na própria listagem.
+async function revalidarNotas(tipoCache, tipoNotaOlist, dataInicial, dataFinal) {
+  const validas = await buscarTodasNotas(tipoNotaOlist, dataInicial, dataFinal);
+  const idsValidos = new Set(validas.map(n => String(n.id)));
+  const idsCache = await buscarIdsCache(tipoCache, dataInicial, dataFinal);
+  const idsFicticios = idsCache.filter(id => !idsValidos.has(String(id)));
+  await removerDoCachePorId(tipoCache, idsFicticios);
+  return idsFicticios.length;
+}
+
+async function revalidarNotasServico(dataInicial, dataFinal) {
+  const validas = await buscarTodasNotasServico(dataInicial, dataFinal);
+  const idsValidos = new Set(validas.map(n => String(n.id)));
+  const idsCache = await buscarIdsCache("servico", dataInicial, dataFinal);
+  const idsFicticios = idsCache.filter(id => !idsValidos.has(String(id)));
+  await removerDoCachePorId("servico", idsFicticios);
+  return idsFicticios.length;
+}
+
+// tipoCache: "representacao" | "aguia" — reaproveita buscarTodosPedidos
+// (situação "faturado" + marcador), sem buscar detalhe pedido a pedido.
+async function revalidarPedidos(tipoCache, marcador, margemDias, dataInicial, dataFinal) {
+  const inicioBuscado = somarDiasBR(dataInicial, -margemDias);
+  const fimBuscado = somarDiasBR(dataFinal, margemDias);
+  const validos = await buscarTodosPedidos("faturado", marcador, inicioBuscado, fimBuscado);
+  const idsValidos = new Set(validos.map(p => String(p.id)));
+  const idsCache = await buscarIdsCache(tipoCache, dataInicial, dataFinal);
+  const idsFicticios = idsCache.filter(id => !idsValidos.has(String(id)));
+  await removerDoCachePorId(tipoCache, idsFicticios);
+  return idsFicticios.length;
+}
+
 module.exports = {
   TOKEN_V2, SUPABASE_URL, SUPABASE_KEY, supaHeaders,
   DESCRICOES_SERVICO_EXCLUIDAS, FINALIDADES_DEVOLUCAO,
@@ -369,4 +430,5 @@ module.exports = {
   buscarTodosPedidos, buscarDetalhePedido,
   extrairReferenciaOrigem, buscarVendedorDaNotaOrigem,
   salvarNoCache,
+  revalidarNotas, revalidarNotasServico, revalidarPedidos,
 };
