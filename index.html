@@ -679,7 +679,7 @@
       <div class="table-wrap">
         <table style="width:100%;border-collapse:collapse;">
           <thead><tr>
-            <th>Empresa</th><th>Tipo</th><th>Descrição</th><th style="text-align:right;">Valor</th><th style="text-align:center;">Intercompany Rampa↔TF</th>
+            <th>Empresa</th><th>Tipo</th><th>Descrição</th><th>Histórico</th><th style="text-align:right;">Valor</th><th style="text-align:center;">Intercompany Rampa↔TF</th>
           </tr></thead>
           <tbody id="mt-tbody"></tbody>
         </table>
@@ -2176,12 +2176,14 @@ async function carregarDRE(){
 // Guarda o contexto da última carga do DRE (empresa/ano/mês), pra alimentar o
 // drill-down de títulos sem precisar reconsultar os selects do filtro.
 let dreContexto = { empresa: "rampa", ano: null, mes: null };
+let dreNaoClassificadoItens = [];
 
 function renderDRE(dre){
   dreContexto = { empresa: dre.empresa, ano: dre.ano, mes: dre.mes };
+  dreNaoClassificadoItens = (dre.naoClassificado && dre.naoClassificado.itens) || [];
   if(dre.naoClassificado && dre.naoClassificado.qtd > 0){
     el("fin-nao-classificado").classList.remove("hidden");
-    el("fin-nao-classificado").textContent = `⚠ ${dre.naoClassificado.qtd} lançamento(s) sem categoria somando ${formatarMoeda(dre.naoClassificado.total)} — não entram no DRE abaixo. Revise na Olist (ou via lançamento manual) e rode o sync de novo.`;
+    el("fin-nao-classificado").innerHTML = `⚠ ${dre.naoClassificado.qtd} lançamento(s) sem categoria somando ${formatarMoeda(dre.naoClassificado.total)} — não entram no DRE abaixo. Revise na Olist (ou via lançamento manual) e rode o sync de novo. <button class="btn-sec" style="padding:1px 7px;font-size:11px;margin-left:4px;" onclick="abrirModalNaoClassificado()">Ver lançamentos</button>`;
   }
 
   const linhasHtml = [];
@@ -2191,11 +2193,14 @@ function renderDRE(dre){
     <th style="padding:5px 12px;text-align:right;color:var(--mt);font-size:12px;">Intercompany Rampa↔TF</th>
     <th style="padding:5px 12px;text-align:right;">Total</th>
   </tr>`);
-  dre.blocos.forEach(bloco=>{
+  dre.blocos.forEach((bloco,bi)=>{
     linhasHtml.push(`<tr><td colspan="4" style="padding:8px 12px;font-weight:700;background:var(--s2);">${bloco.bloco}</td></tr>`);
-    bloco.grupos.forEach(g=>{
+    bloco.grupos.forEach((g,gi)=>{
+      const gid = `dre-leafs-${bi}-${gi}`;
+      const temLeafs = g.leafs && g.leafs.length > 0;
       linhasHtml.push(`<tr>
         <td style="padding:5px 12px 5px 28px;color:var(--mt);">
+          ${temLeafs ? `<span style="cursor:pointer;display:inline-block;width:14px;" onclick="toggleDreLeafs('${gid}',this)" title="Ver composição (nível 3)">▸</span>` : `<span style="display:inline-block;width:14px;"></span>`}
           ${g.codigo_grupo} ${g.descricao_grupo}
           <button class="btn-sec" style="padding:1px 7px;font-size:11px;margin-left:6px;" title="Ver lançamentos / apontar intercompany" onclick="abrirModalTitulos('${g.codigo_grupo}','${g.descricao_grupo.replace(/'/g,"\\'")}')">🔍</button>
         </td>
@@ -2203,6 +2208,16 @@ function renderDRE(dre){
         <td style="padding:5px 12px;text-align:right;${g.valorIntercompany?"color:var(--am);font-weight:600;":"color:var(--mt);"}">${formatarMoeda(g.valorIntercompany)}</td>
         <td style="padding:5px 12px;text-align:right;">${formatarMoeda(g.valor)}</td>
       </tr>`);
+      if(temLeafs){
+        g.leafs.forEach(lf=>{
+          linhasHtml.push(`<tr class="${gid}" style="display:none;">
+            <td style="padding:3px 12px 3px 52px;color:var(--mt);font-size:12.5px;">${lf.descricao}</td>
+            <td style="padding:3px 12px;text-align:right;font-size:12.5px;color:var(--mt);">${formatarMoeda(lf.valorOperacional)}</td>
+            <td style="padding:3px 12px;text-align:right;font-size:12.5px;${lf.valorIntercompany?"color:var(--am);":"color:var(--mt);"}">${formatarMoeda(lf.valorIntercompany)}</td>
+            <td style="padding:3px 12px;text-align:right;font-size:12.5px;color:var(--mt);">${formatarMoeda(lf.valor)}</td>
+          </tr>`);
+        });
+      }
     });
     linhasHtml.push(`<tr>
       <td style="padding:5px 12px;font-weight:600;">${bloco.sinal<0?"(−) ":""}Total ${bloco.bloco}</td>
@@ -2223,12 +2238,26 @@ function renderDRE(dre){
   el("tabela-financeiro-wrap").classList.remove("hidden");
 }
 
+function abrirModalNaoClassificado(){
+  el("mt-titulo").textContent = "Lançamentos sem categoria";
+  el("modal-titulos-overlay").classList.remove("hidden");
+  renderTabelaTitulos(dreNaoClassificadoItens.map(l=>({ ...l, empresa: l.empresa || dreContexto.empresa })));
+}
+
+function toggleDreLeafs(gid, arrowEl){
+  const linhas = document.querySelectorAll(`.${gid}`);
+  if(!linhas.length) return;
+  const aberto = linhas[0].style.display !== "none";
+  linhas.forEach(tr=> tr.style.display = aberto ? "none" : "");
+  arrowEl.textContent = aberto ? "▸" : "▾";
+}
+
 // --- modal de títulos / apontamento intercompany ---
 
 async function abrirModalTitulos(codigoGrupo, descricaoGrupo){
   el("mt-titulo").textContent = `${codigoGrupo} ${descricaoGrupo}`;
   el("modal-titulos-overlay").classList.remove("hidden");
-  el("mt-tbody").innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--mt);padding:16px;">Carregando...</td></tr>`;
+  el("mt-tbody").innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--mt);padding:16px;">Carregando...</td></tr>`;
   try{
     const { empresa, ano, mes } = dreContexto;
     const empresasBusca = empresa === "consolidado" ? ["rampa","tf"] : [empresa];
@@ -2240,7 +2269,7 @@ async function abrirModalTitulos(codigoGrupo, descricaoGrupo){
     }));
     renderTabelaTitulos(listas.flat());
   }catch(e){
-    el("mt-tbody").innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--red);padding:16px;">Erro: ${e.message}</td></tr>`;
+    el("mt-tbody").innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--red);padding:16px;">Erro: ${e.message}</td></tr>`;
   }
 }
 
@@ -2248,7 +2277,7 @@ function fecharModalTitulos(e){ if(e.target===el("modal-titulos-overlay"))el("mo
 
 function renderTabelaTitulos(linhas){
   if(!linhas.length){
-    el("mt-tbody").innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--mt);padding:16px;">Nenhum lançamento nesse grupo/mês.</td></tr>`;
+    el("mt-tbody").innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--mt);padding:16px;">Nenhum lançamento nesse grupo/mês.</td></tr>`;
     return;
   }
   el("mt-tbody").innerHTML = linhas.map(l=>{
@@ -2260,10 +2289,12 @@ function renderTabelaTitulos(linhas){
     const toggle = editavel
       ? `<input type="checkbox" ${checked} onchange="marcarIntercompany('${l.empresa}','${l.titulo_tipo}',${l.titulo_id},this.checked,this)" />`
       : `<span title="Automático — nota de venda pro cliente TF" style="color:var(--mt);">${l.intercompany ? "✓ automático" : "—"}</span>`;
+    const descricao = l.categoriaRaw ? `<span style="color:var(--red);font-weight:600;">${l.categoriaRaw}</span> — ${l.descricao || "—"}` : (l.descricao || "—");
     return `<tr>
       <td>${EMPRESAS[l.empresa]?.label || l.empresa}</td>
       <td>${l.titulo_tipo}</td>
-      <td>${l.descricao || "—"}</td>
+      <td>${descricao}</td>
+      <td style="font-size:12.5px;color:var(--mt);max-width:260px;">${l.historico ? l.historico.replace(/\n/g,"<br>") : "—"}</td>
       <td style="text-align:right;">${formatarMoeda(Number(l.valor))}</td>
       <td style="text-align:center;">${toggle}</td>
     </tr>`;

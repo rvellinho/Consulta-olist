@@ -19,6 +19,7 @@
 const https = require("https");
 const { getAccessToken } = require("./_lib/olist-auth");
 const { getConfigEmpresa } = require("./_lib/empresas");
+const { DESCRICOES_SERVICO_EXCLUIDAS } = require("./_lib/relatorio-coleta");
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
@@ -84,9 +85,41 @@ async function buscarPlanoContas() {
 async function buscarMensal(empresas, ano, mes) {
   const filtroEmpresa = empresas.length === 1 ? `empresa=eq.${empresas[0]}` : `empresa=in.(${empresas.join(",")})`;
   const r = await httpsRequest("GET", supaHost(),
-    `/rest/v1/financeiro_mensal?${filtroEmpresa}&ano=eq.${ano}&mes=eq.${mes}&select=codigo_grupo,categoria_id,origem,regime,valor,titulo_tipo,titulo_id,intercompany`,
+    `/rest/v1/financeiro_mensal?${filtroEmpresa}&ano=eq.${ano}&mes=eq.${mes}&select=empresa,codigo_grupo,categoria_id,origem,regime,valor,titulo_tipo,titulo_id,intercompany,descricao,historico`,
     null, supaHeaders);
   return parseJSON(r.text);
+}
+
+// Nível 3 do DRE (ver CLAUDE.md "árvore de nível 3"): categoria_id já carrega
+// o código de 3 níveis da própria Tiny (ex: "1.01.03 Serviços prestados"),
+// extraído como codigo_leaf/descricao_raw em financeiro_categorias — uma
+// leitura por empresa (categoria_id é um ID da conta Olist daquela empresa,
+// então não dá pra misturar entre rampa/tf no consolidado).
+async function buscarCategoriasPorEmpresa(empresas) {
+  const porEmpresa = {};
+  for (const empresa of empresas) {
+    const r = await httpsRequest("GET", supaHost(),
+      `/rest/v1/financeiro_categorias?empresa=eq.${empresa}&select=categoria_id,descricao_raw`, null, supaHeaders);
+    const linhas = parseJSON(r.text);
+    const mapa = {};
+    (Array.isArray(linhas) ? linhas : []).forEach(l => { mapa[l.categoria_id] = l.descricao_raw; });
+    porEmpresa[empresa] = mapa;
+  }
+  return porEmpresa;
+}
+// Rótulo da subcategoria (nível 3) de uma linha de financeiro_mensal/manuais.
+// Nem toda linha tem categoria_id (CMV vem do item da nota, não de uma
+// categoria financeira; histórico é um fallback sem categoria na Tiny) —
+// essas ganham um rótulo sintético em vez de ficarem sem nível 3.
+function resolverLeaf(l, categoriasPorEmpresa) {
+  if (l.categoria_id != null) {
+    const descricao = categoriasPorEmpresa[l.empresa]?.[l.categoria_id];
+    if (descricao) return descricao;
+  }
+  if (l.titulo_tipo === "cmv") return "Custo calculado pela nota (sem categoria)";
+  if (l.origem === "tiny_historico") return "Classificado por histórico (sem categoria na Tiny)";
+  if (l.subitem) return l.subitem; // lançamento manual
+  return "Sem subcategoria";
 }
 
 async function buscarManuais(empresas, ano, mes) {
@@ -101,14 +134,20 @@ async function buscarManuais(empresas, ano, mes) {
 // só — ver CLAUDE.md "Intercompany Rampa↔TF". `valor`/`total`/`resultadoFinal`
 // continuam somando os dois (operacional + intercompany), sem mudar o que já
 // existia; os campos novos (*Operacional/*Intercompany) são só a abertura.
-function montarDRE(planoContas, linhasMensal, linhasManuais) {
+function montarDRE(planoContas, linhasMensal, linhasManuais, categoriasPorEmpresa) {
   const porGrupo = {}; // { [codigo_grupo]: {operacional, intercompany} }
+  const porGrupoLeaf = {}; // { [codigo_grupo]: { [descricaoLeaf]: {operacional, intercompany} } }
   const naoClassificado = { total: 0, qtd: 0, itens: [] };
 
-  function somar(grupo, valor, intercompany) {
+  function somar(grupo, valor, intercompany, leaf) {
     if (!porGrupo[grupo]) porGrupo[grupo] = { operacional: 0, intercompany: 0 };
     if (intercompany) porGrupo[grupo].intercompany += valor;
     else porGrupo[grupo].operacional += valor;
+
+    if (!porGrupoLeaf[grupo]) porGrupoLeaf[grupo] = {};
+    if (!porGrupoLeaf[grupo][leaf]) porGrupoLeaf[grupo][leaf] = { operacional: 0, intercompany: 0 };
+    if (intercompany) porGrupoLeaf[grupo][leaf].intercompany += valor;
+    else porGrupoLeaf[grupo][leaf].operacional += valor;
   }
 
   for (const l of linhasMensal) {
@@ -116,17 +155,22 @@ function montarDRE(planoContas, linhasMensal, linhasManuais) {
     if (!l.codigo_grupo) {
       naoClassificado.total += valor;
       naoClassificado.qtd += 1;
-      naoClassificado.itens.push({ categoria_id: l.categoria_id, origem: l.origem, titulo_tipo: l.titulo_tipo, titulo_id: l.titulo_id, valor, intercompany: !!l.intercompany });
+      naoClassificado.itens.push({
+        empresa: l.empresa, categoria_id: l.categoria_id,
+        categoriaRaw: categoriasPorEmpresa[l.empresa]?.[l.categoria_id] || null,
+        origem: l.origem, titulo_tipo: l.titulo_tipo, titulo_id: l.titulo_id, valor,
+        intercompany: !!l.intercompany, descricao: l.descricao, historico: l.historico,
+      });
       continue;
     }
-    somar(l.codigo_grupo, valor, !!l.intercompany);
+    somar(l.codigo_grupo, valor, !!l.intercompany, resolverLeaf(l, categoriasPorEmpresa));
   }
   for (const l of linhasManuais) {
     if (!l.codigo_grupo) continue;
     // Lançamentos manuais (provisões/ajustes) nunca são intercompany — esse
     // esquema só existe pra lançamentos que vêm da Olist (nota de venda da
     // Rampa pra TF, ou despesa marcada manualmente num título real).
-    somar(l.codigo_grupo, Number(l.valor) || 0, false);
+    somar(l.codigo_grupo, Number(l.valor) || 0, false, l.subitem || "Lançamento manual");
   }
 
   const porLinhaDre = {}; // { [linha_dre]: {operacional, intercompany} }
@@ -137,10 +181,17 @@ function montarDRE(planoContas, linhasMensal, linhasManuais) {
     if (!porLinhaDre[grupo.linha_dre]) porLinhaDre[grupo.linha_dre] = { operacional: 0, intercompany: 0 };
     porLinhaDre[grupo.linha_dre].operacional += valores.operacional;
     porLinhaDre[grupo.linha_dre].intercompany += valores.intercompany;
+    const leafs = Object.entries(porGrupoLeaf[grupo.codigo_grupo] || {})
+      .map(([descricao, v]) => ({
+        descricao, valor: v.operacional + v.intercompany,
+        valorOperacional: v.operacional, valorIntercompany: v.intercompany,
+      }))
+      .sort((a, b) => Math.abs(b.valor) - Math.abs(a.valor));
     (gruposPorLinhaDre[grupo.linha_dre] = gruposPorLinhaDre[grupo.linha_dre] || []).push({
       codigo_grupo: grupo.codigo_grupo, descricao_grupo: grupo.descricao_grupo,
       valor: valores.operacional + valores.intercompany,
       valorOperacional: valores.operacional, valorIntercompany: valores.intercompany,
+      leafs,
     });
   }
 
@@ -278,6 +329,87 @@ async function buscarDetalheNotaVendaV2(tokenV2, id) {
   }
   return data.retorno?.nota_fiscal || null;
 }
+
+// --- receita: data de emissão da NF (não da parcela) + exclusão de notas de
+// "apoio em vendas" (ver CLAUDE.md "Receita classificada pela parcela..." e
+// "Comissão de apoio em vendas...") ---
+
+// Um título de contas a receber referencia a nota ("Ref. a NF nº 13434...")
+// no histórico — mas o campo "data" do TÍTULO é a emissão do próprio título,
+// não da NF. Pra venda parcelada no cartão, a Tiny cria a 2ª/3ª parcela como
+// um título novo, com "data" de quando essa parcela foi registrada (semanas
+// depois) — não a emissão real da venda. O Rafael pediu que receita sempre
+// conte pela emissão da NF (decisão dele, nunca por quando o valor é
+// recebido). Resolve isso buscando a NF pelo número referenciado no
+// histórico; cacheado por número de NF dentro da mesma execução do sync
+// (vários títulos/parcelas costumam referenciar a mesma NF).
+const PADRAO_HISTORICO_REF_NF = /Ref\.\s*a\s*NF\s*n[ºo]\.?\s*(\d+)/i;
+async function buscarDataEmissaoNotaPorNumero(tokenV2, numero, cache) {
+  if (cache.has(numero)) return cache.get(numero);
+  await sleep(600);
+  const body = new URLSearchParams({ token: tokenV2, formato: "JSON", numero: String(numero) }).toString();
+  const r = await httpsRequest("POST", "api.tiny.com.br", "/api2/notas.fiscais.pesquisa.php", body,
+    { "Content-Type": "application/x-www-form-urlencoded" });
+  const data = parseJSON(r.text);
+  let resultado = null;
+  if (data.retorno?.status !== "Erro") {
+    const nf = (data.retorno?.notas_fiscais || [])[0]?.nota_fiscal;
+    const dataEmissaoBR = nf?.data_emissao; // "dd/mm/yyyy"
+    if (dataEmissaoBR) {
+      const [dia, mes, ano] = dataEmissaoBR.split("/").map(Number);
+      if (ano && mes) resultado = { ano, mes };
+    }
+  }
+  cache.set(numero, resultado);
+  return resultado;
+}
+
+// Notas de serviço de "apoio em vendas" (comissão emitida quando vamos
+// receber o valor, não uma venda de verdade pro cliente — decisão do
+// Rafael, 2026-11-23) já são excluídas do Relatório de Vendas por descrição
+// (ver DESCRICOES_SERVICO_EXCLUIDAS em relatorio-coleta.js) — o DRE não tinha
+// esse filtro porque a categoria financeira ("1.01.03 Serviços prestados") é
+// a mesma usada por serviço de verdade (ex: frete). Só dá pra diferenciar
+// pela descrição da própria nota de serviço, então resolve o RPS referenciado
+// no número do documento do título ("000125/01" → RPS 125) contra uma lista
+// de notas de serviço buscada 1x por execução (mapa numero_rps → id), e só
+// busca o detalhe (descrição) das que o título realmente referencia.
+async function buscarMapaRpsParaId(tokenV2, dataInicialBR, dataFinalBR) {
+  const mapa = new Map();
+  let pagina = 1;
+  while (true) {
+    const body = new URLSearchParams({
+      token: tokenV2, formato: "JSON", dataInicial: dataInicialBR, dataFinal: dataFinalBR, pagina: String(pagina),
+    }).toString();
+    const r = await httpsRequest("POST", "api.tiny.com.br", "/api2/notas.servico.pesquisa.php", body,
+      { "Content-Type": "application/x-www-form-urlencoded" });
+    const data = parseJSON(r.text);
+    if (data.retorno?.status === "Erro") {
+      if (String(data.retorno.erros?.[0]?.erro || "").toLowerCase().includes("não retornou")) break;
+      throw new Error(data.retorno.erros?.[0]?.erro || "erro ao pesquisar notas de serviço");
+    }
+    const lista = (data.retorno?.notas_servico || []).map(n => n.nota_servico).filter(Boolean);
+    lista.forEach(n => { if (n.numero_rps) mapa.set(String(parseInt(n.numero_rps, 10)), n.id); });
+    if (lista.length < 100) break;
+    pagina++;
+    await sleep(600);
+  }
+  return mapa;
+}
+async function buscarDescricaoNotaServicoPorId(tokenV2, id, cache) {
+  if (cache.has(id)) return cache.get(id);
+  await sleep(600);
+  const body = new URLSearchParams({ token: tokenV2, id: String(id), formato: "JSON" }).toString();
+  const r = await httpsRequest("POST", "api.tiny.com.br", "/api2/nota.servico.obter.php", body,
+    { "Content-Type": "application/x-www-form-urlencoded" });
+  const descricao = parseJSON(r.text)?.retorno?.nota_fiscal?.servico?.descricao || null;
+  cache.set(id, descricao);
+  return descricao;
+}
+function ehServicoApoioEmVendas(descricao) {
+  const texto = String(descricao || "").toLowerCase();
+  return DESCRICOES_SERVICO_EXCLUIDAS.some(d => texto.includes(d));
+}
 // Custo atual de cada produto do catálogo (coluna custo_atual, preenchida de
 // graça pelo sync diário de Estoque — ver api/estoque-sync-diario.js) — uma
 // leitura só no Supabase pra empresa inteira, nada de bater na Olist produto
@@ -396,7 +528,7 @@ async function lerPlanoContasSync() {
 
 async function lerCategoriasMapeadas(empresa) {
   const r = await httpsRequest("GET", supaHost(),
-    `/rest/v1/financeiro_categorias?empresa=eq.${empresa}&select=categoria_id,codigo_grupo,forca_manual`, null, supaHeaders);
+    `/rest/v1/financeiro_categorias?empresa=eq.${empresa}&select=categoria_id,codigo_grupo,codigo_leaf,forca_manual`, null, supaHeaders);
   const linhas = parseJSON(r.text);
   const mapa = {};
   (Array.isArray(linhas) ? linhas : []).forEach(l => { mapa[l.categoria_id] = l; });
@@ -451,6 +583,17 @@ async function upsertMensal(empresa, linhas) {
   const payload = JSON.stringify(linhas.map(l => ({ ...l, empresa, atualizado_em: new Date().toISOString() })));
   await httpsRequest("POST", supaHost(), "/rest/v1/financeiro_mensal?on_conflict=empresa,titulo_tipo,titulo_id", payload,
     { ...supaHeaders, "Content-Length": Buffer.byteLength(payload), Prefer: "resolution=merge-duplicates,return=minimal" });
+}
+
+// Remove um título que passou a ser excluído do DRE (ex: "apoio em vendas"
+// classificado depois de já ter sido gravado por uma execução anterior, antes
+// dessa exclusão existir) — upsert nunca apaga, só sobrescreve quem ele
+// recebe, então sem isso um título excluído hoje continuava com a linha
+// antiga parada em financeiro_mensal pra sempre.
+async function excluirMensal(empresa, tituloTipo, tituloId) {
+  await httpsRequest("DELETE", supaHost(),
+    `/rest/v1/financeiro_mensal?empresa=eq.${empresa}&titulo_tipo=eq.${tituloTipo}&titulo_id=eq.${tituloId}`,
+    null, { ...supaHeaders, Prefer: "return=minimal" });
 }
 
 // --- receita (contas-receber, por emissão = competência de uma venda) ---
@@ -546,6 +689,19 @@ async function executarSyncDiario(req, res) {
     const mesAtual = { ano: hoje.getFullYear(), mes: hoje.getMonth() + 1 };
     const mesAnterior = mesAlvoAnterior(mesAtual.ano, mesAtual.mes);
     const periodos = [mesAtual, mesAnterior]; // reprocessa os 2 últimos meses, não assume mês fechado como imutável
+
+    // Mapa numero_rps -> id de nota de serviço, pra detectar e excluir
+    // "Serviço de apoio em vendas" (ver buscarMapaRpsParaId acima) — busca 1x
+    // por execução, numa janela um pouco mais larga que os 2 meses
+    // reprocessados (a nota de serviço referenciada pode ter sido emitida
+    // perto da virada do mês).
+    const janelaRpsIni = addMeses(mesAnterior.ano, mesAnterior.mes, -1);
+    const janelaRpsFim = addMeses(mesAtual.ano, mesAtual.mes, 1);
+    const mapaRpsParaId = await buscarMapaRpsParaId(tokenV2,
+      formatarDataBR(janelaRpsIni.ano, janelaRpsIni.mes, 1),
+      formatarDataBR(janelaRpsFim.ano, janelaRpsFim.mes, ultimoDiaDoMes(janelaRpsFim.ano, janelaRpsFim.mes)));
+    const cacheDescricaoServico = new Map(); // id nota serviço -> descrição
+    const cacheDataEmissaoNf = new Map(); // número NF -> {ano, mes} | null
 
     // Custo pro CMV: nunca busca na Olist aqui (ver comentário em cima de
     // calcularCmvNota) — lê o custo atual de todo o catálogo de uma vez e o
@@ -643,14 +799,53 @@ async function executarSyncDiario(req, res) {
           const codigoGrupo = cat?.codigo_grupo || null;
           const linha = codigoGrupo ? planoContas[codigoGrupo] : null;
           if (!linha || linha.fonte_tiny === "contas_receber") {
-            const intercompany = empresa === "rampa" && String(d.cliente?.id) === ID_CLIENTE_TF_NA_RAMPA;
-            const descricao = d.cliente?.nome || d.historico || null;
-            lote.push({
-              ano: item.ano, mes: item.mes, codigo_grupo: codigoGrupo, categoria_id: catId ?? null,
-              origem: "tiny_competencia", regime: "competencia",
-              titulo_tipo: "receber", titulo_id: item.id, valor: Number(d.valor) || 0,
-              intercompany, descricao,
-            });
+            // "Serviço de apoio em vendas" (comissão, não venda de verdade —
+            // decisão do Rafael, 2026-11-23): costuma vir com categoria
+            // "Serviços prestados", mas também aparece SEM categoria nenhuma
+            // na Tiny (confirmado ao vivo, 2026-11-23 — títulos da Elite/
+            // Tubogran/Meta Caixas/Millato com categoria=null, mesmo RPS de
+            // "apoio em vendas") — por isso checa pelo numeroDocumento
+            // referenciar um RPS conhecido, não pela categoria. O mapa já
+            // está em memória (buscarMapaRpsParaId acima), então o Map.get é
+            // de graça; só busca o detalhe (1 chamada) quando bate um RPS.
+            let excluidoApoioEmVendas = false;
+            const numeroRps = String(parseInt(String(d.numeroDocumento || "").split("/")[0], 10) || "");
+            const idNotaServico = numeroRps ? mapaRpsParaId.get(numeroRps) : null;
+            if (idNotaServico) {
+              const descricaoServico = await buscarDescricaoNotaServicoPorId(tokenV2, idNotaServico, cacheDescricaoServico);
+              excluidoApoioEmVendas = ehServicoApoioEmVendas(descricaoServico);
+            }
+
+            if (excluidoApoioEmVendas) {
+              // Título pode já ter sido gravado por uma execução anterior
+              // (antes dessa exclusão existir, ou com categoria diferente) —
+              // upsert não apaga, então apaga explicitamente aqui.
+              await excluirMensal(empresa, "receber", item.id);
+            } else {
+              // Receita conta pela emissão da NF, nunca pela emissão/registro
+              // do título — decisão do Rafael (2026-11-23): venda parcelada
+              // no cartão gera um título novo por parcela, cada um com sua
+              // própria "data" (quando aquela parcela foi registrada na
+              // Tiny, não a emissão real da venda). Resolve a NF referenciada
+              // no histórico ("Ref. a NF nº X") e usa a emissão dela quando
+              // achar; sem referência ou sem achar a NF, mantém o mês da
+              // busca (fallback).
+              let anoReceita = item.ano, mesReceita = item.mes;
+              const matchNf = PADRAO_HISTORICO_REF_NF.exec(d.historico || "");
+              if (matchNf) {
+                const emissaoNf = await buscarDataEmissaoNotaPorNumero(tokenV2, matchNf[1], cacheDataEmissaoNf);
+                if (emissaoNf) { anoReceita = emissaoNf.ano; mesReceita = emissaoNf.mes; }
+              }
+
+              const intercompany = empresa === "rampa" && String(d.cliente?.id) === ID_CLIENTE_TF_NA_RAMPA;
+              const descricao = d.cliente?.nome || d.historico || null;
+              lote.push({
+                ano: anoReceita, mes: mesReceita, codigo_grupo: codigoGrupo, categoria_id: catId ?? null,
+                origem: "tiny_competencia", regime: "competencia",
+                titulo_tipo: "receber", titulo_id: item.id, valor: Number(d.valor) || 0,
+                intercompany, descricao, historico: d.historico || null,
+              });
+            }
           }
         }
       } catch (erroRede) {
@@ -704,7 +899,7 @@ async function executarSyncDiario(req, res) {
                 ano: item.ano, mes: item.mes, codigo_grupo: codigoGrupo, categoria_id: viaHistorico ? null : catId,
                 origem: viaHistorico ? "tiny_historico" : "tiny_competencia", regime: "competencia",
                 titulo_tipo: "pagar", titulo_id: item.id, valor: Number(d.valor) || 0,
-                descricao,
+                descricao, historico: d.historico || null,
               });
             }
           } else if ((!linha || linha.regime === "caixa") && (d.situacao === "pago" || d.situacao === "parcial")) {
@@ -718,7 +913,7 @@ async function executarSyncDiario(req, res) {
                 ano: item.ano, mes: item.mes, codigo_grupo: codigoGrupo, categoria_id: catId ?? null,
                 origem: "tiny_caixa", regime: "caixa",
                 titulo_tipo: "pagar", titulo_id: item.id, valor,
-                descricao,
+                descricao, historico: d.historico || null,
               });
             }
           }
@@ -823,12 +1018,13 @@ module.exports = async (req, res) => {
         const consolidado = req.query.consolidado === "true";
         const empresas = consolidado ? ["rampa", "tf"] : [String(req.query.empresa || "rampa").toLowerCase()];
 
-        const [planoContas, linhasMensal, linhasManuais] = await Promise.all([
+        const [planoContas, linhasMensal, linhasManuais, categoriasPorEmpresa] = await Promise.all([
           buscarPlanoContas(),
           buscarMensal(empresas, ano, mes),
           buscarManuais(empresas, ano, mes),
+          buscarCategoriasPorEmpresa(empresas),
         ]);
-        const dre = montarDRE(planoContas, linhasMensal, linhasManuais);
+        const dre = montarDRE(planoContas, linhasMensal, linhasManuais, categoriasPorEmpresa);
         return res.status(200).json({ ano, mes, empresa: consolidado ? "consolidado" : empresas[0], ...dre });
       }
 
@@ -848,7 +1044,7 @@ module.exports = async (req, res) => {
           : `codigo_grupo=in.(${grupos.map(encodeURIComponent).join(",")})`;
         const r = await httpsRequest("GET", supaHost(),
           `/rest/v1/financeiro_mensal?empresa=eq.${empresaTit}&ano=eq.${anoTit}&mes=eq.${mesTit}&${filtroGrupo}` +
-          `&select=titulo_tipo,titulo_id,codigo_grupo,valor,origem,descricao,intercompany&order=valor.desc`,
+          `&select=titulo_tipo,titulo_id,codigo_grupo,valor,origem,descricao,historico,intercompany&order=valor.desc`,
           null, supaHeaders);
         const data = parseJSON(r.text);
         return res.status(200).json(Array.isArray(data) ? data : []);

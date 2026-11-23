@@ -717,6 +717,36 @@ outra parte do mesmo arquivo que não tinha a checagem — ao adicionar uma cham
 sempre checar o status/corpo de erro explicitamente, nunca confiar que um campo ausente significa
 "zero"/"sem categoria" em vez de "a chamada falhou".
 
+### "Serviço de apoio na área de vendas" nunca entra no DRE (decisão do Rafael, 2026-11-23)
+Nota de serviço mensal que a Rampa emite pra receber comissão de parceiro/distribuidor (Elite,
+Tubogran, Millato, Meta Caixas, Concretize Muros, Brambilla, Castanhel...) — **não é venda**, é só
+o jeito de cobrar a comissão, então nunca deve contar como receita no DRE (mesmo
+`DESCRICOES_SERVICO_EXCLUIDAS` que já excluía isso do Relatório de Vendas — `api/_lib/
+relatorio-coleta.js`). Detecção: o `numeroDocumento` do título de contas a receber ("000130/01")
+referencia o número do RPS da nota de serviço; `buscarMapaRpsParaId` busca todas as notas de
+serviço da janela 1x por execução (mapa `numero_rps → id`), e só busca o detalhe (`servico.
+descricao`) das que o título realmente referencia. **Não dá pra detectar pela categoria**: alguns
+desses títulos vêm com categoria "Serviços prestados" (mesma de serviço de verdade, ex: frete —
+não dá pra diferenciar só por categoria), mas outros (Elite/Tubogran/Meta Caixas/Millato,
+confirmado ao vivo) vêm com `categoria: null` na própria Tiny — por isso a checagem roda sempre,
+nunca condicionada a ter categoria.
+
+#### Bug: título excluído continuava "não classificado" porque upsert nunca apaga (corrigido, 2026-11-23)
+A exclusão acima, na primeira versão, só evitava que o título ENTRASSE de novo em
+`financeiro_mensal` — mas 4 títulos (Elite/Tubogran/Meta Caixas/Millato, R$14.079,45) tinham sido
+gravados com `codigo_grupo=null` por uma execução **anterior** a essa exclusão existir, e como
+`upsertMensal` usa `Prefer: resolution=merge-duplicates` (só escreve, nunca apaga — mesmo padrão do
+"Bug de acumulação" acima), essas 4 linhas antigas continuavam presas em "não classificado" mesmo
+depois de reiniciar o `vercel dev` e rodar o sync de novo com a exclusão já no código (confirmado
+ao vivo: reiniciar o servidor não mudou nada, porque o bug nunca foi de cache de módulo — era dado
+velho que nada apagava). **Corrigido**: nova função `excluirMensal(empresa, tituloTipo, tituloId)`
+que faz `DELETE` explícito em `financeiro_mensal`, chamada sempre que um título bate na exclusão de
+apoio-em-vendas (cobre tanto não gravar de novo quanto limpar uma linha antiga de uma execução
+anterior). As 4 linhas órfãs foram apagadas manualmente pra não esperar os títulos saírem da janela
+de 2 meses. **Lição**: qualquer regra de exclusão que nasce DEPOIS que o dado já foi gravado por
+upsert-only precisa de uma saída explícita de `DELETE` pro caso já gravado — só mudar a lógica de
+inserção daqui pra frente não limpa o passado.
+
 ---
 
 ## Estrutura do banco Supabase
