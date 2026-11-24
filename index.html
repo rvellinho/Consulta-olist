@@ -698,6 +698,82 @@
   </div>
 </div>
 
+<!-- MODAL ALOCAÇÃO INTERCOMPANY (lançamento: quanto de um título é da outra empresa, e em qual categoria lá) -->
+<div id="modal-alocacao-overlay" class="overlay hidden" onclick="fecharModalAlocacao(event)">
+  <div class="modal" style="max-width:640px;">
+    <div class="modal-hdr">
+      <div class="modal-av">🔗</div>
+      <div class="modal-hdr-info">
+        <h2>Lançamento Intercompany</h2>
+        <p class="c-razao">Aponte quanto dessa despesa é da outra empresa. Esse valor sai do Operacional de quem pagou e entra como Intercompany na outra, na categoria que você escolher.</p>
+      </div>
+      <button class="close-btn" onclick="document.getElementById('modal-alocacao-overlay').classList.add('hidden')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div id="mt-aloc-msg" class="modal-msg hidden"></div>
+
+      <div style="font-size:10.5px;font-weight:700;color:var(--mt);text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px;">Despesa de origem</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;background:var(--s2);border-radius:10px;padding:14px 16px;margin-bottom:20px;">
+        <div>
+          <div style="font-size:10px;font-weight:700;color:var(--mt);text-transform:uppercase;letter-spacing:.4px;margin-bottom:3px;">Empresa que pagou</div>
+          <div style="font-size:13px;font-weight:600;" id="aloc-empresa-origem">—</div>
+        </div>
+        <div>
+          <div style="font-size:10px;font-weight:700;color:var(--mt);text-transform:uppercase;letter-spacing:.4px;margin-bottom:3px;">Valor total do título</div>
+          <div style="font-size:15px;font-weight:700;" id="aloc-valor-total">—</div>
+        </div>
+        <div style="grid-column:1 / -1;">
+          <div style="font-size:10px;font-weight:700;color:var(--mt);text-transform:uppercase;letter-spacing:.4px;margin-bottom:3px;">Descrição / histórico</div>
+          <div style="font-size:13px;color:var(--tx2);" id="aloc-descricao">—</div>
+        </div>
+      </div>
+
+      <div style="font-size:10.5px;font-weight:700;color:var(--mt);text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px;">Quanto desse valor é intercompany</div>
+      <div style="margin-bottom:6px;">
+        <label for="aloc-valor" style="display:block;font-size:11px;font-weight:600;color:var(--mt);margin-bottom:5px;">Valor intercompany (R$)</label>
+        <input id="aloc-valor" type="number" min="0.01" step="0.01" oninput="atualizarPreviewAlocacao()"
+          style="width:220px;border:1.5px solid var(--br);border-radius:8px;padding:9px 12px;font-size:15px;font-weight:700;color:var(--ac);background:var(--s2);outline:none;" />
+      </div>
+      <p style="margin:0 0 20px;font-size:11.5px;color:var(--mt);">Pode ser menor que o total — o restante (<strong id="aloc-restante">—</strong>) continua como despesa normal de quem pagou, sem mexer.</p>
+
+      <div style="font-size:10.5px;font-weight:700;color:var(--mt);text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px;">Pra onde esse valor vai na outra empresa</div>
+      <div style="display:grid;grid-template-columns:1fr 1.4fr;gap:14px;margin-bottom:10px;">
+        <div>
+          <label style="display:block;font-size:11px;font-weight:600;color:var(--mt);margin-bottom:5px;">Empresa de destino</label>
+          <div style="border:1.5px solid var(--br);border-radius:8px;padding:9px 12px;font-size:14px;font-weight:600;background:var(--s2);" id="aloc-empresa-destino">—</div>
+        </div>
+        <div>
+          <label for="aloc-cat-destino" style="display:block;font-size:11px;font-weight:600;color:var(--mt);margin-bottom:5px;">Categoria na empresa de destino</label>
+          <select id="aloc-cat-destino" style="width:100%;border:1.5px solid var(--br);border-radius:8px;padding:9px 12px;font-size:13px;font-weight:500;background:var(--s2);outline:none;"></select>
+        </div>
+      </div>
+      <div style="margin-bottom:20px;">
+        <label for="aloc-nota" style="display:block;font-size:11px;font-weight:600;color:var(--mt);margin-bottom:5px;">Nota (opcional)</label>
+        <input id="aloc-nota" type="text" placeholder="ex: rateio folha Rafael — 60% TF / 40% Rampa"
+          style="width:100%;border:1.5px solid var(--br);border-radius:8px;padding:9px 12px;font-size:13px;background:var(--s2);outline:none;" />
+      </div>
+
+      <div style="font-size:10.5px;font-weight:700;color:var(--mt);text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px;">Como vai aparecer no DRE</div>
+      <div style="display:flex;gap:12px;align-items:center;">
+        <div style="flex:1;background:var(--acl);border:1px solid var(--ac);border-radius:10px;padding:14px 16px;">
+          <div style="font-size:10px;font-weight:700;color:var(--ac);text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px;" id="aloc-label-sai">Sai do Operacional</div>
+          <div style="font-size:17px;font-weight:800;color:var(--ac);" id="aloc-preview-sai">—</div>
+        </div>
+        <div style="color:var(--mt);font-size:20px;">→</div>
+        <div style="flex:1;background:var(--gl);border:1px solid var(--g);border-radius:10px;padding:14px 16px;">
+          <div style="font-size:10px;font-weight:700;color:var(--g);text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px;" id="aloc-label-entra">Entra no Intercompany</div>
+          <div style="font-size:17px;font-weight:800;color:var(--g);" id="aloc-preview-entra">—</div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-ftr">
+      <button id="btn-aloc-remover" class="btn-sec hidden" style="color:var(--red);margin-right:auto;" onclick="removerAlocacao()">Remover alocação</button>
+      <button class="btn-sec" onclick="document.getElementById('modal-alocacao-overlay').classList.add('hidden')">Cancelar</button>
+      <button class="btn-primary" onclick="salvarAlocacao()">Salvar lançamento</button>
+    </div>
+  </div>
+</div>
+
 <script>
 let usuarioAtual=null, paginaAtual=1, buscaAtual="", temProxima=false, clienteSel=null, modoDemo=false;
 let empresaAtual="rampa";
@@ -2260,6 +2336,7 @@ function renderDRE(dre){
 function abrirModalNaoClassificado(){
   el("mt-titulo").textContent = "Lançamentos sem categoria";
   el("modal-titulos-overlay").classList.remove("hidden");
+  mtRecarregar = abrirModalNaoClassificado;
   renderTabelaTitulos(dreNaoClassificadoItens.map(l=>({ ...l, empresa: l.empresa || dreContexto.empresa })));
 }
 
@@ -2271,11 +2348,15 @@ function toggleDreLeafs(gid, arrowEl){
   arrowEl.textContent = aberto ? "▸" : "▾";
 }
 
-// --- modal de títulos / apontamento intercompany ---
+// --- modal de títulos / alocação intercompany ---
+
+let mtRecarregar = null; // refaz a última abertura do modal-titulos (pra atualizar depois de salvar/remover uma alocação)
+let mtLinhasAtual = [];  // linhas da última renderTabelaTitulos, indexadas — abrirModalAlocacao(i) lê daqui
 
 async function abrirModalTitulos(codigoGrupo, descricaoGrupo, leaf){
   el("mt-titulo").textContent = `${codigoGrupo} ${descricaoGrupo}`;
   el("modal-titulos-overlay").classList.remove("hidden");
+  mtRecarregar = () => abrirModalTitulos(codigoGrupo, descricaoGrupo, leaf);
   el("mt-tbody").innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--mt);padding:16px;">Carregando...</td></tr>`;
   try{
     const { empresa, ano, mes } = dreContexto;
@@ -2285,7 +2366,7 @@ async function abrirModalTitulos(codigoGrupo, descricaoGrupo, leaf){
       const r = await fetch(`/api/financeiro?acao=titulos&empresa=${emp}&ano=${ano}&mes=${mes}&codigo_grupo=${encodeURIComponent(codigoGrupo)}${leafQS}`);
       if(!r.ok) throw new Error((await r.json()).erro || `Erro ${r.status}`);
       const linhas = await r.json();
-      return linhas.map(l=>({ ...l, empresa: emp }));
+      return linhas.map(l=>({ ...l, empresa: l.sintetico ? l.empresa_destino : emp }));
     }));
     renderTabelaTitulos(listas.flat());
   }catch(e){
@@ -2296,19 +2377,26 @@ async function abrirModalTitulos(codigoGrupo, descricaoGrupo, leaf){
 function fecharModalTitulos(e){ if(e.target===el("modal-titulos-overlay"))el("modal-titulos-overlay").classList.add("hidden"); }
 
 function renderTabelaTitulos(linhas){
+  mtLinhasAtual = linhas;
   if(!linhas.length){
     el("mt-tbody").innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--mt);padding:16px;">Nenhum lançamento nesse grupo/mês.</td></tr>`;
     return;
   }
-  el("mt-tbody").innerHTML = linhas.map(l=>{
-    // O toggle só vale pra despesas (titulo_tipo=pagar) — receita/CMV da Rampa
-    // já é marcada automaticamente pelo sync (nota de venda pro cliente TF) e
-    // seria sobrescrita no dia seguinte se mexessem na mão aqui.
-    const editavel = l.titulo_tipo === "pagar";
-    const checked = l.intercompany ? "checked" : "";
-    const toggle = editavel
-      ? `<input type="checkbox" ${checked} onchange="marcarIntercompany('${l.empresa}','${l.titulo_tipo}',${l.titulo_id},this.checked,this)" />`
-      : `<span title="Automático — nota de venda pro cliente TF" style="color:var(--mt);">${l.intercompany ? "✓ automático" : "—"}</span>`;
+  el("mt-tbody").innerHTML = linhas.map((l,i)=>{
+    // A alocação intercompany só vale pra despesas (titulo_tipo=pagar) — a
+    // receita/CMV da Rampa já é marcada automaticamente pelo sync (nota de
+    // venda pro cliente TF) e seria sobrescrita no dia seguinte se mexessem
+    // na mão aqui (ver CLAUDE.md "Intercompany Rampa↔TF").
+    let acao;
+    if(l.sintetico){
+      acao = `<button class="btn-sec" style="padding:2px 9px;font-size:10.5px;color:var(--g);" onclick="abrirModalAlocacao(${i})">🔗 de ${EMPRESAS[l.empresa_origem]?.label || l.empresa_origem}</button>`;
+    }else if(l.titulo_tipo === "pagar"){
+      acao = l.alocacao
+        ? `<button class="btn-sec" style="padding:2px 9px;font-size:10.5px;color:var(--ac);" onclick="abrirModalAlocacao(${i})">🔗 ${formatarMoeda(Number(l.alocacao.valor_alocado))} → ${EMPRESAS[l.alocacao.empresa_destino]?.label || l.alocacao.empresa_destino}</button>`
+        : `<button class="btn-sec" style="padding:2px 9px;font-size:10.5px;" onclick="abrirModalAlocacao(${i})">+ Intercompany</button>`;
+    }else{
+      acao = `<span title="Automático — nota de venda pro cliente TF" style="color:var(--mt);">${l.intercompany ? "✓ automático" : "—"}</span>`;
+    }
     const descricao = l.categoriaRaw ? `<span style="color:var(--red);font-weight:600;">${l.categoriaRaw}</span> — ${l.descricao || "—"}` : (l.descricao || "—");
     return `<tr>
       <td>${EMPRESAS[l.empresa]?.label || l.empresa}</td>
@@ -2318,29 +2406,112 @@ function renderTabelaTitulos(linhas){
       <td>${formatarDataSimples(l.data_emissao)}</td>
       <td>${formatarDataSimples(l.data_pagamento)}</td>
       <td style="text-align:right;">${formatarMoeda(Number(l.valor))}</td>
-      <td style="text-align:center;">${toggle}</td>
+      <td style="text-align:center;">${acao}</td>
     </tr>`;
   }).join("");
 }
 
-async function marcarIntercompany(empresa, titulo_tipo, titulo_id, intercompany, checkboxEl){
-  checkboxEl.disabled = true;
+// --- modal de alocação intercompany (lançamento parcial + categoria de destino) ---
+
+function empresaContrariaFE(empresa){ return empresa === "rampa" ? "tf" : "rampa"; }
+
+let alocacaoAtual = null;
+
+function abrirModalAlocacao(i){
+  const l = mtLinhasAtual[i];
+  if(l.sintetico){
+    alocacaoAtual = {
+      empresaOrigem: l.empresa_origem, tituloTipo: l.titulo_tipo, tituloId: l.titulo_id,
+      valorTotal: Number(l.valor_total_titulo), descricao: l.descricao, historico: l.historico,
+      empresaDestino: l.empresa_destino,
+      existente: { valor_alocado: Number(l.valor), codigo_grupo_destino: l.codigo_grupo_destino, nota: l.nota },
+    };
+  }else{
+    alocacaoAtual = {
+      empresaOrigem: l.empresa, tituloTipo: l.titulo_tipo, tituloId: l.titulo_id,
+      valorTotal: Number(l.valor), descricao: l.descricao, historico: l.historico,
+      empresaDestino: empresaContrariaFE(l.empresa),
+      existente: l.alocacao ? { valor_alocado: Number(l.alocacao.valor_alocado), codigo_grupo_destino: l.alocacao.codigo_grupo_destino, nota: l.alocacao.nota } : null,
+    };
+  }
+  preencherModalAlocacao();
+}
+
+async function preencherModalAlocacao(){
+  await carregarPlanoContasFin();
+  const c = alocacaoAtual;
+  el("aloc-empresa-origem").textContent = EMPRESAS[c.empresaOrigem]?.label || c.empresaOrigem;
+  el("aloc-valor-total").textContent = formatarMoeda(c.valorTotal);
+  el("aloc-descricao").textContent = c.descricao || c.historico || "—";
+  el("aloc-empresa-destino").textContent = `${EMPRESAS[c.empresaDestino]?.label || c.empresaDestino} (a outra empresa)`;
+  el("aloc-label-sai").textContent = `Sai do Operacional — ${EMPRESAS[c.empresaOrigem]?.label || c.empresaOrigem}`;
+  el("aloc-label-entra").textContent = `Entra no Intercompany — ${EMPRESAS[c.empresaDestino]?.label || c.empresaDestino}`;
+  el("aloc-cat-destino").innerHTML = planoContasFin.filter(g=>g.entra_dre).map(g=>`<option value="${g.codigo_grupo}">${g.codigo_grupo} ${g.descricao_grupo}</option>`).join("");
+  el("aloc-valor").max = c.valorTotal;
+  el("aloc-valor").value = (c.existente ? c.existente.valor_alocado : c.valorTotal).toFixed(2);
+  if(c.existente) el("aloc-cat-destino").value = c.existente.codigo_grupo_destino;
+  el("aloc-nota").value = c.existente?.nota || "";
+  el("btn-aloc-remover").classList.toggle("hidden", !c.existente);
+  el("mt-aloc-msg").classList.add("hidden");
+  atualizarPreviewAlocacao();
+  el("modal-alocacao-overlay").classList.remove("hidden");
+}
+
+function atualizarPreviewAlocacao(){
+  const c = alocacaoAtual;
+  let val = Number(el("aloc-valor").value) || 0;
+  if(val < 0) val = 0;
+  if(val > c.valorTotal) val = c.valorTotal;
+  el("aloc-preview-sai").textContent = formatarMoeda(val);
+  el("aloc-preview-entra").textContent = formatarMoeda(val);
+  el("aloc-restante").textContent = formatarMoeda(c.valorTotal - val);
+}
+
+function fecharModalAlocacao(e){ if(!e || e.target===el("modal-alocacao-overlay")) el("modal-alocacao-overlay").classList.add("hidden"); }
+
+function mostrarMsgAloc(texto, ok){
+  const d = el("mt-aloc-msg");
+  d.textContent = texto;
+  d.className = ok ? "modal-msg msg-ok" : "modal-msg msg-err";
+  d.classList.remove("hidden");
+  setTimeout(()=>d.classList.add("hidden"), 4000);
+}
+
+async function salvarAlocacao(){
+  const c = alocacaoAtual;
+  const valor = Number(el("aloc-valor").value);
+  const codigoDestino = el("aloc-cat-destino").value;
+  if(!(valor > 0) || valor > c.valorTotal){ mostrarMsgAloc("Valor inválido — tem que ser maior que zero e no máximo o total do título.", false); return; }
+  if(!codigoDestino){ mostrarMsgAloc("Escolha a categoria de destino.", false); return; }
   try{
-    const r = await fetch("/api/financeiro?acao=marcar-intercompany", {
-      method: "PATCH", headers: {"Content-Type":"application/json"},
-      body: JSON.stringify({ empresa, titulo_tipo, titulo_id, intercompany }),
+    const r = await fetch("/api/financeiro?acao=intercompany-alocacao", {
+      method: "POST", headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({
+        empresa_origem: c.empresaOrigem, titulo_tipo: c.tituloTipo, titulo_id: c.tituloId,
+        valor_alocado: valor, codigo_grupo_destino: codigoDestino, nota: el("aloc-nota").value || null,
+      }),
     });
     if(!r.ok) throw new Error((await r.json()).erro || `Erro ${r.status}`);
-    await carregarDRE(); // recalcula as colunas Operacional/Intercompany na tela de fundo
+    el("modal-alocacao-overlay").classList.add("hidden");
+    await Promise.all([carregarDRE(), mtRecarregar ? mtRecarregar() : null]);
   }catch(e){
-    checkboxEl.checked = !intercompany; // desfaz visualmente
-    const d = el("mt-msg");
-    d.textContent = "Erro ao marcar: " + e.message;
-    d.className = "modal-msg msg-err";
-    d.classList.remove("hidden");
-    setTimeout(()=>d.classList.add("hidden"), 4000);
-  }finally{
-    checkboxEl.disabled = false;
+    mostrarMsgAloc("Erro ao salvar: " + e.message, false);
+  }
+}
+
+async function removerAlocacao(){
+  const c = alocacaoAtual;
+  if(!c.existente) return;
+  try{
+    const r = await fetch("/api/financeiro?acao=intercompany-alocacao", {
+      method: "DELETE", headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({ empresa_origem: c.empresaOrigem, titulo_tipo: c.tituloTipo, titulo_id: c.tituloId }),
+    });
+    if(!r.ok) throw new Error((await r.json()).erro || `Erro ${r.status}`);
+    el("modal-alocacao-overlay").classList.add("hidden");
+    await Promise.all([carregarDRE(), mtRecarregar ? mtRecarregar() : null]);
+  }catch(e){
+    mostrarMsgAloc("Erro ao remover: " + e.message, false);
   }
 }
 

@@ -590,26 +590,83 @@ o total que já existia (`total = operacional + intercompany` em todo bloco/subt
   confiável pra detectar sozinho (nome de fornecedor varia, não é sempre "TF" no texto) — por
   isso **Rafael pediu que a marcação manual exista simetricamente nas duas empresas** ("vamos
   permitir que na Rampa também possa ser anotado se uma despesa for da TF, então ambas as
-  empresas podemos registrar essa informação"). Endpoint `PATCH /api/financeiro?acao=marcar-intercompany`
-  (`{empresa, titulo_tipo, titulo_id, intercompany}`) grava direto na linha do `financeiro_mensal`
-  já existente — não cria lançamento novo.
-- **Por que o sync nunca apaga uma marcação manual**: o upsert do sync diário monta o payload de
-  cada título sem o campo `intercompany` nos dois ramos de contas-pagar (`executarSyncDiario`) —
-  só `descricao` é sempre recalculado. Como o upsert é `Prefer: resolution=merge-duplicates` (ver
-  "Bug de acumulação" abaixo — substitui coluna a coluna, só as que vierem no payload), uma coluna
-  de fora do payload fica intocada no conflito. Então marcar manual e depois rodar o sync não
-  reseta a marcação — mas **nunca colocar `intercompany` no payload do lote de contas-pagar**, ou
-  esse comportamento quebra.
-- **Tela** (`index.html`): cada linha de grupo no DRE ganhou um botão 🔍 (`abrirModalTitulos`) que
-  abre um modal com o drill-down de títulos daquele grupo/mês/empresa (`acao=titulos`, novo no
-  backend) — uma tabela com empresa/tipo/descrição/valor e, só nas linhas de despesa, um checkbox
-  (`marcarIntercompany`) que chama o PATCH acima e recarrega o DRE inteiro pra recalcular as
-  colunas na hora.
+  empresas podemos registrar essa informação"). Desde 2026-11-24 isso **não** grava mais um
+  boolean na própria linha do `financeiro_mensal` — ver "Alocação intercompany manual" abaixo.
 - **Coluna `descricao`** (nome do contato/histórico do título): sempre recalculada a cada sync,
   existe só pra dar contexto na tela de drill-down (não é usada em nenhum cálculo do DRE).
 - **Testado ao vivo em 2026-11-22**: 3 ciclos completos do sync (Rampa, 1410/1410 títulos, zero
   erro) e a tela (login → seleção de empresa → Financeiro/DRE → drill-down → marcar/desmarcar
-  checkbox, PATCH confirmado e DRE recalculando em tempo real).
+  checkbox, PATCH confirmado e DRE recalculando em tempo real) — isso testava o desenho antigo
+  (checkbox tudo-ou-nada), substituído pelo de baixo.
+
+### Alocação intercompany manual — valor parcial + categoria de destino (redesenho, 2026-11-24)
+O desenho original de despesa manual (acima, 2026-11-22) era um checkbox por título: tudo ou
+nada, sempre na mesma categoria, e só tirava o valor do Operacional de quem pagou — não fazia
+esse valor aparecer de fato no DRE da outra empresa. Pedido explícito do Rafael pra substituir:
+> "acho melhor que não deixemos o intercompany da forma como está, para somente marcar ao lado
+> da parcela. o ideal é termos uma janela de lançamento. onde escolhemos a despesa e dizemos
+> qual parte daquele valor é intercompany, pois pode acontecer de não ser o total. [...] se
+> estamos assumindo que esse valor será removido de uma empresa, ele deve entrar na outra
+> empresa. então devemos poder escolher em qual categoria ele irá entrar na outra empresa. e
+> aparecer na coluna de intercompany da outra empresa também."
+
+Desenhado primeiro como mockup (Design canvas) e aprovado por ele antes de qualquer código.
+
+- **Tabela nova `financeiro_intercompany_alocacoes`** (sem coluna `ano`/`mes` — o mês é sempre
+  herdado do título real, nunca fixo, pra sobreviver a reclassificação): `empresa_origem`,
+  `titulo_tipo` (sempre `'pagar'` na prática — único caso manual, igual antes),  `titulo_id`,
+  `valor_alocado` (pode ser menor que o valor total do título), `empresa_destino`,
+  `codigo_grupo_destino` (categoria escolhida — pode ser diferente da categoria do título na
+  origem), `nota` opcional. Única por `(empresa_origem, titulo_tipo, titulo_id)` — um título tem
+  no máximo uma alocação (não dá pra splitar um título em mais de um destino/categoria). RLS
+  ligado, sem policy (mesmo padrão das outras 16 tabelas — service_role do backend ignora RLS).
+  `empresa_destino` nunca é escolhida pelo usuário: é sempre `empresaContraria(empresa_origem)`
+  (só existem duas empresas hoje).
+- **O boolean `financeiro_mensal.intercompany` não é mais lido em lugar nenhum pra
+  `titulo_tipo=pagar`** — só continua valendo pro caso automático de receita/CMV (acima), que
+  não foi tocado por este redesenho. As 7 marcações manuais que existiam (checkbox do desenho
+  antigo) foram migradas pra `financeiro_intercompany_alocacoes` com valor cheio e
+  `codigo_grupo_destino` = mesma categoria da origem (é o que o checkbox fazia), e o boolean
+  dessas 7 linhas foi resetado pra `false` (não é mais usado, ficaria confuso deixar `true`).
+- **`montarDRE` (ver função em `api/financeiro.js`)**: pra cada título de despesa que tem
+  alocação, em vez do tudo-ou-nada de antes, **divide** o valor — a parte alocada vai pro bucket
+  `intercompany` do **mesmo** `codigo_grupo` do título na origem (igual antes, só que parcial
+  agora), o resto continua `operacional` normal. Separadamente, pra cada alocação cuja
+  `empresa_destino` é a empresa sendo visualizada, **injeta uma entrada sintética** — sem
+  nenhuma linha real em `financeiro_mensal` por trás — no `codigo_grupo_destino` escolhido,
+  bucket `intercompany`. É essa injeção que aumenta o total do grupo na empresa de destino (ao
+  contrário da origem, onde o total do grupo não muda, só a divisão operacional/intercompany).
+  **Só roda em modo não-consolidado** — ver próximo bullet.
+- **Por que não roda no `acao=dre&consolidado=true`**: o título real já conta o valor cheio uma
+  vez, do lado de quem pagou. Se a injeção sintética também rodasse ali, o valor apareceria
+  2x no total consolidado. Visualizar uma empresa de cada vez é exatamente o caso de uso do
+  Rafael ("quando olho o DRE **somente da rampa**") — o consolidado continua mostrando o dado
+  real sem nenhuma reclassificação manual, que é uma pergunta diferente (correta à sua própria
+  maneira: soma o que de fato saiu do caixa de cada empresa).
+- **`acao=titulos` (drill-down)**: cada título de despesa vem anotado com `alocacao` quando já
+  tem uma (pra mostrar o botão com o valor/categoria atual); as entradas sintéticas de destino
+  entram como linhas extras (`sintetico:true`) quando o grupo pedido bate com o
+  `codigo_grupo_destino` de alguma alocação apontando pra essa empresa — clicável do mesmo jeito
+  (abre o mesmo modal, pré-preenchido a partir da alocação).
+- **Endpoints**: `POST /api/financeiro?acao=intercompany-alocacao` (cria/edita — upsert por
+  `Prefer: resolution=merge-duplicates` na chave única) e `DELETE` do mesmo `acao` (remove —
+  título volta a ser 100% operacional na origem e some do destino). Substituem o antigo
+  `PATCH ?acao=marcar-intercompany`, removido.
+- **Tela** (`index.html`): o checkbox da tabela de drill-down virou um botão — "+ Intercompany"
+  quando não tem alocação, `🔗 R$ X → <empresa>` quando tem (origem) ou `🔗 de <empresa>`
+  (destino, linha sintética) — que abre um modal novo (`modal-alocacao-overlay`,
+  `abrirModalAlocacao`) com o valor total do título, um campo de valor parcial com preview ao
+  vivo (quanto sai/entra em cada empresa), um `<select>` de categoria de destino (lista o plano
+  de contas inteiro, igual o modal de lançamento manual) e nota opcional. Salvar/Remover
+  recarrega o DRE inteiro e o próprio drill-down (`mtRecarregar`, guarda a última
+  abertura do modal de títulos pra poder recarregar sem fechar o fluxo).
+- **Testado ao vivo em 2026-11-24**: TF outubro/2026, grupo `2.06` — criada uma alocação parcial
+  (R$1.200 de um título de R$3.000, categoria de destino `2.05`), confirmado que (a) o total do
+  grupo `2.06` na TF não mudou (só a divisão operacional/intercompany), (b) o grupo `2.05` da
+  **Rampa** passou a mostrar os R$1.200 a mais na coluna Intercompany, aumentando o total do
+  grupo, e (c) a linha sintética apareceu no drill-down da Rampa como "🔗 de TF", clicável,
+  reabrindo o modal pré-preenchido com os dados certos. Removida a alocação de teste depois —
+  banco voltou a ter só as 7 migradas do desenho antigo.
 
 ### Bug de acumulação em `financeiro_mensal` (corrigido, 2026-11-20)
 O desenho original de `financeiro_mensal` era pré-somado (uma linha por categoria/mês, `valor`
@@ -958,7 +1015,8 @@ era exposição teórica.
 | `estoque_sync_status` | `empresa` (uma linha por empresa) | Progresso/estado da rotina diária de estoque (lista de pendentes, saltos, última conclusão, última tentativa e último erro — ver "Falha silenciosa do cron diário") |
 | `financeiro_plano_contas` | `codigo_grupo` | Mapeamento grupo→linha do DRE + regime (competência/caixa/manual) + fonte Tiny — seed manual, sem coluna `empresa` (compartilhado) |
 | `financeiro_categorias` | `categoria_id` + `empresa` | Cache de `GET /categorias-receita-despesa`, com `codigo_grupo` extraído e flag `forca_manual` |
-| `financeiro_mensal` | `empresa` + `titulo_tipo` + `titulo_id` | Uma linha por título/NF já classificado (não pré-somado — ver "Módulo Financeiro (DRE)"). `titulo_tipo`: `receber`/`pagar` (título), `cmv`/`nf_produto`/`nf_servico`/`devolucao` (direto da NF, `titulo_id=id_olist` — grupo 1.01 da Rampa é só isso, nunca `receber`), `ajuste_conciliacao` (legado, não mais gravado). Colunas `intercompany` (bool, default `false`) e `descricao` (texto) — ver "Intercompany Rampa↔TF" |
+| `financeiro_mensal` | `empresa` + `titulo_tipo` + `titulo_id` | Uma linha por título/NF já classificado (não pré-somado — ver "Módulo Financeiro (DRE)"). `titulo_tipo`: `receber`/`pagar` (título), `cmv`/`nf_produto`/`nf_servico`/`devolucao` (direto da NF, `titulo_id=id_olist` — grupo 1.01 da Rampa é só isso, nunca `receber`), `ajuste_conciliacao` (legado, não mais gravado). Colunas `intercompany` (bool, default `false` — só vale pro caso automático de receita/CMV; pra `titulo_tipo=pagar` não é mais lido, ver `financeiro_intercompany_alocacoes`) e `descricao` (texto) — ver "Intercompany Rampa↔TF" |
+| `financeiro_intercompany_alocacoes` | `empresa_origem` + `titulo_tipo` + `titulo_id` | Alocação manual de despesa intercompany (valor parcial + categoria de destino) — ver "Alocação intercompany manual" |
 | `financeiro_lancamentos_manuais` | `id` | Lançamentos que nunca vêm da Olist (provisões, ajustes) — `codigo_grupo` + `subitem` livre opcional |
 | `financeiro_sync_status` | `empresa` (uma linha por empresa) | Progresso/estado da rotina diária financeira, mesmo padrão de `estoque_sync_status` |
 

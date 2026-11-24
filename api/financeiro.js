@@ -142,7 +142,9 @@ async function buscarManuais(empresas, ano, mes) {
 // só — ver CLAUDE.md "Intercompany Rampa↔TF". `valor`/`total`/`resultadoFinal`
 // continuam somando os dois (operacional + intercompany), sem mudar o que já
 // existia; os campos novos (*Operacional/*Intercompany) são só a abertura.
-function montarDRE(planoContas, linhasMensal, linhasManuais, categoriasPorEmpresa) {
+function montarDRE(planoContas, linhasMensal, linhasManuais, categoriasPorEmpresa, alocacoesOrigem, alocacoesDestino) {
+  alocacoesOrigem = alocacoesOrigem || {};
+  alocacoesDestino = alocacoesDestino || [];
   const porGrupo = {}; // { [codigo_grupo]: {operacional, intercompany} }
   const porGrupoLeaf = {}; // { [codigo_grupo]: { [descricaoLeaf]: {operacional, intercompany} } }
   const naoClassificado = { total: 0, qtd: 0, itens: [] };
@@ -185,7 +187,31 @@ function montarDRE(planoContas, linhasMensal, linhasManuais, categoriasPorEmpres
       });
       continue;
     }
-    somar(l.codigo_grupo, valor, !!l.intercompany, resolverLeaf(l, categoriasPorEmpresa));
+    const aloc = l.titulo_tipo === "pagar" ? alocacoesOrigem[`${l.titulo_tipo}:${l.titulo_id}`] : null;
+    if (aloc) {
+      // Alocação parcial: só a parte apontada como intercompany sai do
+      // Operacional, o resto do título continua normal — ver
+      // "intercompany MANUAL (despesas)" acima.
+      const leaf = resolverLeaf(l, categoriasPorEmpresa);
+      const alocado = Math.min(Number(aloc.valor_alocado) || 0, valor);
+      const resto = valor - alocado;
+      if (resto > 0) somar(l.codigo_grupo, resto, false, leaf);
+      if (alocado > 0) somar(l.codigo_grupo, alocado, true, leaf);
+    } else {
+      somar(l.codigo_grupo, valor, !!l.intercompany, resolverLeaf(l, categoriasPorEmpresa));
+    }
+  }
+  // Entradas sintéticas da alocação intercompany: dinheiro que, pela
+  // alocação manual, é desta empresa mesmo tendo sido pago pela outra — não
+  // existe nenhuma linha real em financeiro_mensal pra isso, por isso entra
+  // direto aqui, na categoria de destino escolhida (ver
+  // buscarAlocacoesParaDestino). Nunca passado em modo consolidado (ver
+  // acao=dre) — lá o título real da origem já conta o valor cheio uma vez só,
+  // e somar de novo aqui duplicaria.
+  for (const a of alocacoesDestino) {
+    if (!a.codigo_grupo_destino || !(a.valor > 0)) continue;
+    const leaf = a.nota || `Intercompany de ${String(a.empresa_origem || "").toUpperCase()} — ${a.descricaoOrigem || a.historicoOrigem || "despesa"}`;
+    somar(a.codigo_grupo_destino, a.valor, true, leaf);
   }
   for (const l of linhasManuais) {
     if (!l.codigo_grupo) continue;
@@ -300,15 +326,74 @@ function dataBRparaISO(dataBR) {
 //     (cadastro na Tiny da Rampa: "TF COMERCIO E SERVICOS LTDA", id 893415936,
 //     CNPJ 51.251.441/0001-05) marca intercompany=true sozinho, todo sync.
 //   - Despesas de QUALQUER empresa (titulo_tipo=pagar): nunca automático —
-//     não tem padrão (nome de fornecedor varia) — só manual, via
-//     acao=marcar-intercompany no handler principal. Por isso o campo
-//     `intercompany` nunca entra no payload do lote nos dois ramos de
-//     contas-pagar: fica de fora do upsert, que preserva o que já tiver no
-//     banco (ver "Bug de acumulação" — upsert com merge-duplicates só
-//     sobrescreve coluna que estiver no payload).
+//     não tem padrão (nome de fornecedor varia) — só manual. Desde 2026-11-24
+//     isso não é mais um boolean tudo-ou-nada em financeiro_mensal.intercompany
+//     (esse campo, pra titulo_tipo=pagar, não é mais lido em lugar nenhum — só
+//     continua valendo pro caso automático de receita/CMV acima): vive na
+//     tabela financeiro_intercompany_alocacoes (ver "intercompany MANUAL
+//     (despesas)", mais abaixo), que permite valor PARCIAL do título e deixa
+//     escolher em qual categoria esse valor entra na outra empresa — e
+//     injeta esse valor de fato no DRE da outra empresa (ver montarDRE).
+//     Por isso o campo `intercompany` nunca entra no payload do lote nos
+//     dois ramos de contas-pagar do sync: fica de fora do upsert, que
+//     preserva o que já tiver no banco (ver "Bug de acumulação" — upsert com
+//     merge-duplicates só sobrescreve coluna que estiver no payload) — hoje
+//     isso só importa porque o campo nunca é tocado ali de propósito, não
+//     porque algo ainda dependa do valor que ele guarda pra titulo_tipo=pagar.
 const ID_CLIENTE_TF_NA_RAMPA = "893415936";
 const CNPJ_TF = "51251441000105";
 function limparCnpj(v) { return String(v || "").replace(/\D/g, ""); }
+
+// --- intercompany MANUAL (despesas) — redesenho 2026-11-24, decisão do Rafael ---
+// O boolean `intercompany` em financeiro_mensal (acima) resolvia só o caso
+// automático (receita/CMV da Rampa) e, pro caso manual, só permitia tudo ou
+// nada (o título inteiro virava intercompany, sempre na mesma categoria).
+// Rafael pediu algo mais rico: marcar só uma PARTE do valor como intercompany,
+// escolher em qual categoria esse valor entra na OUTRA empresa, e ver esse
+// valor aparecer de fato no DRE da outra empresa (não só desaparecer da
+// origem). Isso vive numa tabela própria (financeiro_intercompany_alocacoes,
+// uma linha por título — titulo_tipo sempre 'pagar' na prática, é só despesa
+// que não tem como detectar sozinho de qual empresa é de verdade) em vez do
+// boolean, que ficou só pro caso automático (nunca usado pra pagar desde essa
+// migração — ver CLAUDE.md "Intercompany Rampa↔TF").
+function empresaContraria(empresa) { return empresa === "rampa" ? "tf" : "rampa"; }
+
+async function buscarAlocacoesPorOrigem(empresa) {
+  const r = await httpsRequest("GET", supaHost(),
+    `/rest/v1/financeiro_intercompany_alocacoes?empresa_origem=eq.${empresa}&select=*`, null, supaHeaders);
+  const linhas = parseJSON(r.text);
+  const mapa = {};
+  (Array.isArray(linhas) ? linhas : []).forEach(a => { mapa[`${a.titulo_tipo}:${a.titulo_id}`] = a; });
+  return mapa;
+}
+
+// Alocações que apontam PRA essa empresa (ela é a empresa_destino) — pra cada
+// uma, confirma que o título original ainda cai no mês pedido (lendo o valor
+// real dele em financeiro_mensal, do lado da empresa de origem) antes de
+// devolver, e já traz descrição/histórico pra exibir. Um título cujo mês
+// mudou (reprocessamento) ou que saiu do catálogo simplesmente não aparece
+// mais — sem precisar apagar a alocação, ela some e volta sozinha se o título
+// voltar a cair no mesmo mês de novo.
+async function buscarAlocacoesParaDestino(empresa, ano, mes) {
+  const r = await httpsRequest("GET", supaHost(),
+    `/rest/v1/financeiro_intercompany_alocacoes?empresa_destino=eq.${empresa}&select=*`, null, supaHeaders);
+  const alocacoes = parseJSON(r.text);
+  if (!Array.isArray(alocacoes) || !alocacoes.length) return [];
+  const resultado = [];
+  for (const a of alocacoes) {
+    const r2 = await httpsRequest("GET", supaHost(),
+      `/rest/v1/financeiro_mensal?empresa=eq.${a.empresa_origem}&titulo_tipo=eq.${a.titulo_tipo}&titulo_id=eq.${a.titulo_id}` +
+      `&ano=eq.${ano}&mes=eq.${mes}&select=valor,descricao,historico`, null, supaHeaders);
+    const linha = parseJSON(r2.text);
+    const origemRow = Array.isArray(linha) ? linha[0] : null;
+    if (!origemRow) continue;
+    const valorTitulo = Number(origemRow.valor) || 0;
+    const valor = Math.min(Number(a.valor_alocado) || 0, valorTitulo);
+    if (valor <= 0) continue;
+    resultado.push({ ...a, valor, valorTitulo, descricaoOrigem: origemRow.descricao, historicoOrigem: origemRow.historico });
+  }
+  return resultado;
+}
 
 // --- CMV (custo da mercadoria vendida): itens de nota de venda × custo do produto ---
 // Ver CLAUDE.md "Módulo Financeiro (DRE)" — grupos 4.01/4.02 antes vinham de
@@ -1202,7 +1287,18 @@ module.exports = async (req, res) => {
           buscarManuais(empresas, ano, mes),
           buscarCategoriasPorEmpresa(empresas),
         ]);
-        const dre = montarDRE(planoContas, linhasMensal, linhasManuais, categoriasPorEmpresa);
+        // Alocação intercompany manual só se aplica visualizando UMA empresa
+        // por vez — no consolidado o título real já soma o valor cheio uma
+        // vez (do lado de quem pagou), então nem divide a origem nem injeta
+        // a entrada sintética no destino (duplicaria o valor).
+        let alocacoesOrigem = {}, alocacoesDestino = [];
+        if (!consolidado) {
+          [alocacoesOrigem, alocacoesDestino] = await Promise.all([
+            buscarAlocacoesPorOrigem(empresas[0]),
+            buscarAlocacoesParaDestino(empresas[0], ano, mes),
+          ]);
+        }
+        const dre = montarDRE(planoContas, linhasMensal, linhasManuais, categoriasPorEmpresa, alocacoesOrigem, alocacoesDestino);
         return res.status(200).json({ ano, mes, empresa: consolidado ? "consolidado" : empresas[0], ...dre });
       }
 
@@ -1223,15 +1319,55 @@ module.exports = async (req, res) => {
         const filtroGrupo = grupos.length === 1
           ? `codigo_grupo=eq.${encodeURIComponent(grupos[0])}`
           : `codigo_grupo=in.(${grupos.map(encodeURIComponent).join(",")})`;
-        const r = await httpsRequest("GET", supaHost(),
-          `/rest/v1/financeiro_mensal?empresa=eq.${empresaTit}&ano=eq.${anoTit}&mes=eq.${mesTit}&${filtroGrupo}` +
-          `&select=titulo_tipo,titulo_id,codigo_grupo,categoria_id,valor,origem,descricao,historico,intercompany,data_emissao,data_pagamento&order=valor.desc`,
-          null, supaHeaders);
+        const [r, alocacoesOrigemTit, alocacoesDestinoTit] = await Promise.all([
+          httpsRequest("GET", supaHost(),
+            `/rest/v1/financeiro_mensal?empresa=eq.${empresaTit}&ano=eq.${anoTit}&mes=eq.${mesTit}&${filtroGrupo}` +
+            `&select=titulo_tipo,titulo_id,codigo_grupo,categoria_id,valor,origem,descricao,historico,intercompany,data_emissao,data_pagamento&order=valor.desc`,
+            null, supaHeaders),
+          buscarAlocacoesPorOrigem(empresaTit),
+          buscarAlocacoesParaDestino(empresaTit, anoTit, mesTit),
+        ]);
         let data = parseJSON(r.text);
         data = Array.isArray(data) ? data : [];
+        // Anota cada título de despesa com a alocação que já existe (pra
+        // mostrar o valor alocado e a empresa/categoria de destino no botão,
+        // em vez do checkbox antigo — ver "intercompany MANUAL" acima).
+        data = data.map(l => {
+          if (l.titulo_tipo !== "pagar") return l;
+          const aloc = alocacoesOrigemTit[`${l.titulo_tipo}:${l.titulo_id}`];
+          return aloc ? { ...l, alocacao: aloc } : l;
+        });
+        // Entradas sintéticas: dinheiro que, por alocação de outra empresa,
+        // é desta empresa — só entram se o grupo pedido bater com a
+        // categoria de destino escolhida na alocação.
+        for (const a of alocacoesDestinoTit) {
+          if (!grupos.includes(a.codigo_grupo_destino)) continue;
+          data.push({
+            sintetico: true,
+            titulo_tipo: "pagar",
+            titulo_id: a.titulo_id,
+            codigo_grupo: a.codigo_grupo_destino,
+            categoria_id: null,
+            valor: a.valor,
+            origem: "intercompany_alocacao",
+            descricao: a.descricaoOrigem,
+            historico: a.historicoOrigem,
+            intercompany: true,
+            data_emissao: null,
+            data_pagamento: null,
+            empresa_origem: a.empresa_origem,
+            empresa_destino: a.empresa_destino,
+            codigo_grupo_destino: a.codigo_grupo_destino,
+            nota: a.nota,
+            valor_total_titulo: a.valorTitulo,
+          });
+        }
         if (leafFiltro != null) {
           const categoriasPorEmpresa = await buscarCategoriasPorEmpresa([empresaTit]);
-          data = data.filter(l => resolverLeaf({ ...l, empresa: empresaTit }, categoriasPorEmpresa) === leafFiltro);
+          data = data.filter(l => {
+            if (l.sintetico) return (l.nota || `Intercompany de ${String(l.empresa_origem || "").toUpperCase()} — ${l.descricao || l.historico || "despesa"}`) === leafFiltro;
+            return resolverLeaf({ ...l, empresa: empresaTit }, categoriasPorEmpresa) === leafFiltro;
+          });
         }
         return res.status(200).json(data);
       }
@@ -1258,6 +1394,51 @@ module.exports = async (req, res) => {
       return res.status(200).json(Array.isArray(data) ? data : []);
     }
 
+    if (req.method === "POST" && req.query.acao === "intercompany-alocacao") {
+      // Cria ou edita a alocação intercompany manual de um título de despesa
+      // (titulo_tipo=pagar) — substitui o antigo acao=marcar-intercompany
+      // (checkbox tudo-ou-nada) por valor parcial + categoria de destino
+      // escolhida (decisão do Rafael, 2026-11-24 — ver "intercompany MANUAL"
+      // acima). empresa_destino é sempre a outra empresa, nunca escolhida
+      // pelo usuário (só existem duas hoje).
+      const { empresa_origem, titulo_tipo, titulo_id, valor_alocado, codigo_grupo_destino, nota } = parseBody(req.body);
+      if (!empresa_origem || !titulo_tipo || !titulo_id || !codigo_grupo_destino || !(Number(valor_alocado) > 0)) {
+        return res.status(400).json({ erro: "empresa_origem, titulo_tipo, titulo_id, codigo_grupo_destino e valor_alocado (> 0) são obrigatórios" });
+      }
+      if (titulo_tipo !== "pagar") {
+        return res.status(400).json({ erro: "alocação intercompany manual só vale pra despesas (titulo_tipo=pagar)" });
+      }
+      const empresaOrigemNorm = String(empresa_origem).toLowerCase();
+      const payload = JSON.stringify({
+        empresa_origem: empresaOrigemNorm,
+        titulo_tipo,
+        titulo_id: Number(titulo_id),
+        valor_alocado: Number(valor_alocado),
+        empresa_destino: empresaContraria(empresaOrigemNorm),
+        codigo_grupo_destino,
+        nota: nota || null,
+        atualizado_em: new Date().toISOString(),
+      });
+      const r = await httpsRequest("POST", supaHost(), "/rest/v1/financeiro_intercompany_alocacoes", payload,
+        { ...supaHeaders, "Content-Length": Buffer.byteLength(payload), Prefer: "resolution=merge-duplicates,return=representation" });
+      if (r.status >= 400) return res.status(400).json({ erro: r.text });
+      const data = parseJSON(r.text);
+      return res.status(200).json(Array.isArray(data) ? data[0] : data);
+    }
+
+    if (req.method === "DELETE" && req.query.acao === "intercompany-alocacao") {
+      const { empresa_origem, titulo_tipo, titulo_id } = parseBody(req.body);
+      if (!empresa_origem || !titulo_tipo || !titulo_id) {
+        return res.status(400).json({ erro: "empresa_origem, titulo_tipo e titulo_id são obrigatórios" });
+      }
+      const r = await httpsRequest("DELETE", supaHost(),
+        `/rest/v1/financeiro_intercompany_alocacoes?empresa_origem=eq.${encodeURIComponent(String(empresa_origem).toLowerCase())}` +
+        `&titulo_tipo=eq.${encodeURIComponent(titulo_tipo)}&titulo_id=eq.${encodeURIComponent(titulo_id)}`,
+        null, { ...supaHeaders, Prefer: "return=minimal" });
+      if (r.status >= 400) return res.status(400).json({ erro: r.text });
+      return res.status(200).json({ ok: true });
+    }
+
     if (req.method === "POST") {
       const { empresa, ano, mes, codigo_grupo, categoria_id, subitem, valor, observacao, usuario } = parseBody(req.body);
       if (!empresa || !ano || !mes || !codigo_grupo || valor === undefined) {
@@ -1275,28 +1456,11 @@ module.exports = async (req, res) => {
         usuario: usuario || null,
         atualizado_em: new Date().toISOString(),
       });
-      const r = await httpsRequest("POST", supaHost(), "/rest/v1/financeiro_lancamentos_manuais", payload,
+      const r2 = await httpsRequest("POST", supaHost(), "/rest/v1/financeiro_lancamentos_manuais", payload,
         { ...supaHeaders, "Content-Length": Buffer.byteLength(payload), Prefer: "return=representation" });
-      if (r.status >= 400) return res.status(400).json({ erro: r.text });
-      const data = parseJSON(r.text);
-      return res.status(200).json(Array.isArray(data) ? data[0] : data);
-    }
-
-    if (req.method === "PATCH" && req.query.acao === "marcar-intercompany") {
-      // Apontamento manual (ambas empresas, titulo_tipo=pagar na prática — ver
-      // CLAUDE.md "Intercompany Rampa↔TF"): nunca sobrescrito pelo sync diário,
-      // que não inclui esse campo no payload das despesas (ver executarSyncDiario).
-      const { empresa, titulo_tipo, titulo_id, intercompany } = parseBody(req.body);
-      if (!empresa || !titulo_tipo || !titulo_id || typeof intercompany !== "boolean") {
-        return res.status(400).json({ erro: "empresa, titulo_tipo, titulo_id e intercompany (boolean) são obrigatórios" });
-      }
-      const payload = JSON.stringify({ intercompany });
-      const r = await httpsRequest("PATCH", supaHost(),
-        `/rest/v1/financeiro_mensal?empresa=eq.${encodeURIComponent(String(empresa).toLowerCase())}` +
-        `&titulo_tipo=eq.${encodeURIComponent(titulo_tipo)}&titulo_id=eq.${encodeURIComponent(titulo_id)}`,
-        payload, { ...supaHeaders, "Content-Length": Buffer.byteLength(payload), Prefer: "return=minimal" });
-      if (r.status >= 400) return res.status(400).json({ erro: r.text });
-      return res.status(200).json({ ok: true });
+      if (r2.status >= 400) return res.status(400).json({ erro: r2.text });
+      const data2 = parseJSON(r2.text);
+      return res.status(200).json(Array.isArray(data2) ? data2[0] : data2);
     }
 
     if (req.method === "PUT") {
