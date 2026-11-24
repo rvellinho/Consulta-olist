@@ -189,14 +189,15 @@ function montarDRE(planoContas, linhasMensal, linhasManuais, categoriasPorEmpres
     }
     const aloc = l.titulo_tipo === "pagar" ? alocacoesOrigem[`${l.titulo_tipo}:${l.titulo_id}`] : null;
     if (aloc) {
-      // Alocação parcial: só a parte apontada como intercompany sai do
-      // Operacional, o resto do título continua normal — ver
-      // "intercompany MANUAL (despesas)" acima.
+      // Redesenho 2026-11-24 (decisão do Rafael): Operacional sempre mostra o
+      // valor BRUTO lançado na empresa, sem split — Intercompany vira um
+      // ajuste com SINAL (negativo aqui, na origem que pagou), e o Total
+      // (Operacional + Intercompany) é que reflete o real da empresa depois
+      // da realocação. Ver "intercompany MANUAL (despesas)" acima.
       const leaf = resolverLeaf(l, categoriasPorEmpresa);
       const alocado = Math.min(Number(aloc.valor_alocado) || 0, valor);
-      const resto = valor - alocado;
-      if (resto > 0) somar(l.codigo_grupo, resto, false, leaf);
-      if (alocado > 0) somar(l.codigo_grupo, alocado, true, leaf);
+      somar(l.codigo_grupo, valor, false, leaf);
+      if (alocado > 0) somar(l.codigo_grupo, -alocado, true, leaf);
     } else {
       somar(l.codigo_grupo, valor, !!l.intercompany, resolverLeaf(l, categoriasPorEmpresa));
     }
@@ -351,7 +352,17 @@ function limparCnpj(v) { return String(v || "").replace(/\D/g, ""); }
 // Rafael pediu algo mais rico: marcar só uma PARTE do valor como intercompany,
 // escolher em qual categoria esse valor entra na OUTRA empresa, e ver esse
 // valor aparecer de fato no DRE da outra empresa (não só desaparecer da
-// origem). Isso vive numa tabela própria (financeiro_intercompany_alocacoes,
+// origem).
+// Redesenho 2026-11-24 (decisão do Rafael, depois de usar a v1 acima): o
+// Operacional (coluna 1) sempre mostra o valor BRUTO lançado na empresa —
+// nunca split —, e o Intercompany (coluna 2) passou a ser um ajuste com
+// SINAL: negativo em quem pagou (dinheiro saindo), positivo em quem é de
+// fato a despesa (dinheiro entrando). O Total (coluna 3 = col1+col2) é o
+// "DRE real" por empresa — na origem ele CAI pelo valor alocado (antes
+// ficava igual, só trocava de coluna); no destino, sobe pelo mesmo valor.
+// Deliberadamente só pra despesa manual — a receita/CMV automático abaixo
+// continua sem mudança (total intocado), Rafael ainda não decidiu se
+// aplica esse mesmo modelo lá. Isso vive numa tabela própria (financeiro_intercompany_alocacoes,
 // uma linha por título — titulo_tipo sempre 'pagar' na prática, é só despesa
 // que não tem como detectar sozinho de qual empresa é de verdade) em vez do
 // boolean, que ficou só pro caso automático (nunca usado pra pagar desde essa

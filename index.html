@@ -677,7 +677,7 @@
       <div class="modal-av">↔️</div>
       <div class="modal-hdr-info">
         <h2 id="mt-titulo">Lançamentos</h2>
-        <p class="c-razao">Marque quais despesas são contrapartida entre Rampa e TF — elas saem da coluna Operacional e entram na coluna Intercompany no DRE.</p>
+        <p class="c-razao">Marque quais despesas são contrapartida entre Rampa e TF — o valor bruto continua no Operacional, e a coluna Intercompany mostra o ajuste (negativo em quem pagou, positivo em quem é de fato a despesa).</p>
       </div>
       <button class="close-btn" onclick="document.getElementById('modal-titulos-overlay').classList.add('hidden')">✕</button>
     </div>
@@ -705,7 +705,7 @@
       <div class="modal-av">🔗</div>
       <div class="modal-hdr-info">
         <h2>Lançamento Intercompany</h2>
-        <p class="c-razao">Aponte quanto dessa despesa é da outra empresa. Esse valor sai do Operacional de quem pagou e entra como Intercompany na outra, na categoria que você escolher.</p>
+        <p class="c-razao">Aponte quanto dessa despesa é da outra empresa. O valor bruto continua no Operacional de quem pagou — esse valor entra negativo no Intercompany de quem pagou e positivo no da outra, na categoria que você escolher, ajustando o total real de cada uma.</p>
       </div>
       <button class="close-btn" onclick="document.getElementById('modal-alocacao-overlay').classList.add('hidden')">✕</button>
     </div>
@@ -2297,7 +2297,7 @@ function renderDRE(dre){
           <button class="btn-sec" style="padding:1px 7px;font-size:11px;margin-left:6px;" title="Ver lançamentos / apontar intercompany" onclick="abrirModalTitulos('${g.codigo_grupo}','${g.descricao_grupo.replace(/'/g,"\\'")}')">🔍</button>
         </td>
         <td style="padding:5px 12px;text-align:right;">${formatarMoeda(g.valorOperacional)}</td>
-        <td style="padding:5px 12px;text-align:right;${g.valorIntercompany?"color:var(--am);font-weight:600;":"color:var(--mt);"}">${formatarMoeda(g.valorIntercompany)}</td>
+        <td style="padding:5px 12px;text-align:right;${g.valorIntercompany<0?"color:var(--red);font-weight:600;":g.valorIntercompany>0?"color:var(--g);font-weight:600;":"color:var(--mt);"}">${formatarMoeda(g.valorIntercompany)}</td>
         <td style="padding:5px 12px;text-align:right;">${formatarMoeda(g.valor)}</td>
       </tr>`);
       if(temLeafs){
@@ -2308,7 +2308,7 @@ function renderDRE(dre){
               <button class="btn-sec" style="padding:0px 6px;font-size:10.5px;margin-left:6px;" title="Ver lançamentos dessa subcategoria" onclick="abrirModalTitulos('${g.codigo_grupo}','${g.descricao_grupo.replace(/'/g,"\\'")} — ${lf.descricao.replace(/'/g,"\\'")}','${lf.descricao.replace(/'/g,"\\'")}')">🔍</button>
             </td>
             <td style="padding:3px 12px;text-align:right;font-size:12.5px;color:var(--mt);">${formatarMoeda(lf.valorOperacional)}</td>
-            <td style="padding:3px 12px;text-align:right;font-size:12.5px;${lf.valorIntercompany?"color:var(--am);":"color:var(--mt);"}">${formatarMoeda(lf.valorIntercompany)}</td>
+            <td style="padding:3px 12px;text-align:right;font-size:12.5px;${lf.valorIntercompany<0?"color:var(--red);":lf.valorIntercompany>0?"color:var(--g);":"color:var(--mt);"}">${formatarMoeda(lf.valorIntercompany)}</td>
             <td style="padding:3px 12px;text-align:right;font-size:12.5px;color:var(--mt);">${formatarMoeda(lf.valor)}</td>
           </tr>`);
         });
@@ -2444,8 +2444,8 @@ async function preencherModalAlocacao(){
   el("aloc-valor-total").textContent = formatarMoeda(c.valorTotal);
   el("aloc-descricao").textContent = c.descricao || c.historico || "—";
   el("aloc-empresa-destino").textContent = `${EMPRESAS[c.empresaDestino]?.label || c.empresaDestino} (a outra empresa)`;
-  el("aloc-label-sai").textContent = `Sai do Operacional — ${EMPRESAS[c.empresaOrigem]?.label || c.empresaOrigem}`;
-  el("aloc-label-entra").textContent = `Entra no Intercompany — ${EMPRESAS[c.empresaDestino]?.label || c.empresaDestino}`;
+  el("aloc-label-sai").textContent = `Negativo no Intercompany — ${EMPRESAS[c.empresaOrigem]?.label || c.empresaOrigem}`;
+  el("aloc-label-entra").textContent = `Positivo no Intercompany — ${EMPRESAS[c.empresaDestino]?.label || c.empresaDestino}`;
   el("aloc-cat-destino").innerHTML = planoContasFin.filter(g=>g.entra_dre).map(g=>`<option value="${g.codigo_grupo}">${g.codigo_grupo} ${g.descricao_grupo}</option>`).join("");
   el("aloc-valor").max = c.valorTotal;
   el("aloc-valor").value = (c.existente ? c.existente.valor_alocado : c.valorTotal).toFixed(2);
@@ -2462,7 +2462,7 @@ function atualizarPreviewAlocacao(){
   let val = Number(el("aloc-valor").value) || 0;
   if(val < 0) val = 0;
   if(val > c.valorTotal) val = c.valorTotal;
-  el("aloc-preview-sai").textContent = formatarMoeda(val);
+  el("aloc-preview-sai").textContent = formatarMoeda(-val);
   el("aloc-preview-entra").textContent = formatarMoeda(val);
   el("aloc-restante").textContent = formatarMoeda(c.valorTotal - val);
 }

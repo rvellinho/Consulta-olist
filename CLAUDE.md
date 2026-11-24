@@ -629,14 +629,13 @@ Desenhado primeiro como mockup (Design canvas) e aprovado por ele antes de qualq
   `codigo_grupo_destino` = mesma categoria da origem (é o que o checkbox fazia), e o boolean
   dessas 7 linhas foi resetado pra `false` (não é mais usado, ficaria confuso deixar `true`).
 - **`montarDRE` (ver função em `api/financeiro.js`)**: pra cada título de despesa que tem
-  alocação, em vez do tudo-ou-nada de antes, **divide** o valor — a parte alocada vai pro bucket
-  `intercompany` do **mesmo** `codigo_grupo` do título na origem (igual antes, só que parcial
-  agora), o resto continua `operacional` normal. Separadamente, pra cada alocação cuja
-  `empresa_destino` é a empresa sendo visualizada, **injeta uma entrada sintética** — sem
-  nenhuma linha real em `financeiro_mensal` por trás — no `codigo_grupo_destino` escolhido,
-  bucket `intercompany`. É essa injeção que aumenta o total do grupo na empresa de destino (ao
-  contrário da origem, onde o total do grupo não muda, só a divisão operacional/intercompany).
-  **Só roda em modo não-consolidado** — ver próximo bullet.
+  alocação, injeta o valor **bruto e cheio** do título no bucket `operacional` (nunca mais faz
+  split aqui — ver "Operacional sempre bruto, Intercompany com sinal" abaixo) e, separadamente, o
+  valor alocado **negativo** no bucket `intercompany`, mesmo `codigo_grupo`. Separadamente, pra
+  cada alocação cuja `empresa_destino` é a empresa sendo visualizada, **injeta uma entrada
+  sintética positiva** — sem nenhuma linha real em `financeiro_mensal` por trás — no
+  `codigo_grupo_destino` escolhido, bucket `intercompany`. **Só roda em modo não-consolidado** —
+  ver próximo bullet.
 - **Por que não roda no `acao=dre&consolidado=true`**: o título real já conta o valor cheio uma
   vez, do lado de quem pagou. Se a injeção sintética também rodasse ali, o valor apareceria
   2x no total consolidado. Visualizar uma empresa de cada vez é exatamente o caso de uso do
@@ -667,6 +666,48 @@ Desenhado primeiro como mockup (Design canvas) e aprovado por ele antes de qualq
   grupo, e (c) a linha sintética apareceu no drill-down da Rampa como "🔗 de TF", clicável,
   reabrindo o modal pré-preenchido com os dados certos. Removida a alocação de teste depois —
   banco voltou a ter só as 7 migradas do desenho antigo.
+
+### Intercompany manual: Operacional passa a ser sempre o bruto, Intercompany fica com sinal (redesenho, 2026-11-24)
+No mesmo dia do redesenho acima, depois de usar/revisar a v1 (split positivo: o valor saía do
+Operacional e ia pro Intercompany, mas o **total do grupo na origem não mudava** — só trocava de
+coluna), o Rafael apontou o problema: "a questão do intercompany não está boa ainda" — o total
+real da empresa que pagou não refletia que aquele valor não é dela de verdade. Pedido dele:
+> "a gente considerar aquela primeira coluna do DRE [...] como as despesas que estão na empresa,
+> independente do que é, se ela está no intercompany ou não, vai aparecer tudo que está
+> cadastrado na empresa [...] aquela segunda coluna, que é o intercompany, a gente vai fazer um
+> lançamento que ele pode ser positivo ou pode ser negativo. [...] vamos supor que eu tenho uma
+> despesa na rampa [...] de R$3.000, só que essa despesa é da TF. [...] na primeira coluna, essa
+> despesa apareceria ali. Na segunda coluna, como ela está indo para a TF, [...] ficaria [...]
+> menos R$3.000. E [...] a última coluna [...] ficaria, de fato, o DRE real da empresa. [...] Por
+> outro lado, lá na TF vai ser o oposto. [...] na primeira coluna [zerada] [...] na segunda coluna
+> vai aparecer um número positivo [...] e na última coluna vai estar o valor de R$3.000."
+
+- **Modelo novo**: Operacional (coluna 1) = valor **bruto** lançado na empresa, sempre, sem
+  nenhum split — exatamente o que estaria lá sem o recurso de intercompany existir. Intercompany
+  (coluna 2) passa a ser um ajuste **com sinal**: negativo na empresa que pagou mas não é dela de
+  verdade, positivo na empresa que é a dona real da despesa. Total (coluna 3 = col1+col2) é o
+  "DRE real" por empresa — na origem ele **cai** pelo valor alocado (antes ficava igual), no
+  destino **sobe** pelo mesmo valor. Bônus: a coluna Intercompany das duas empresas, pro mesmo
+  lançamento, sempre soma zero — nada se perde nem duplica.
+- **Só muda o lado da origem** (`montarDRE`, bloco `if (aloc)`): em vez de `resto`/`alocado`
+  positivos somando pro mesmo total de antes, agora soma o valor cheio em `operacional` e o valor
+  alocado **negativo** em `intercompany`. O lado do destino (`alocacoesDestino`, entrada
+  sintética) já era positivo e não mudou — continua certo nesse modelo.
+- **Escopo deliberado: só despesa manual.** O mecanismo automático de receita/CMV (venda
+  Rampa→TF, grupos `1.01`/`4.01` — ver "Intercompany Rampa↔TF" acima) continua exatamente como
+  estava (total intocado, decisão de 2026-11-21) — o próprio Rafael disse não saber ainda como
+  aplicar esse modelo de sinal lá ("em relação à receita e ao custo [...] eu não sei exatamente
+  como é que a gente poderia fazer"). Fica pra uma decisão futura, separada desta.
+- **Tela**: textos do modal de alocação e do drill-down atualizados pra não falar mais em
+  "sai do Operacional" (não sai mais — o bruto fica) — agora "negativo no Intercompany" /
+  "positivo no Intercompany". Coluna Intercompany ganhou cor: vermelho quando negativa, verde
+  quando positiva (antes só tinha uma cor pra "tem valor" vs "zerado").
+- **Testado isolado (sem precisar login/produção)**: a função `montarDRE` real foi carregada via
+  `vm` direto do arquivo (sem tocar Supabase/Olist) e chamada com o exemplo exato do Rafael
+  (R$3.000, alocação total e parcial) — Rampa bateu 3000/-3000/0, TF bateu 0/3000/3000; conferido
+  também o caso parcial (1200 de 3000: Rampa 3000/-1200/1800, TF 0/1200/1200). Criar um usuário de
+  teste pra validar pela UI foi bloqueado pelo classificador de auto mode (criação de conta
+  requer autorização explícita) — a validação ficou só no nível da função, não passou pela tela.
 
 ### Bug de acumulação em `financeiro_mensal` (corrigido, 2026-11-20)
 O desenho original de `financeiro_mensal` era pré-somado (uma linha por categoria/mês, `valor`
