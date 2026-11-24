@@ -35,23 +35,23 @@
     },
     {
       "path": "/api/relatorios?acao=sync-diario",
-      "schedule": "0 7 * * *"
+      "schedule": "0 6 * * *"
     },
     {
       "path": "/api/estoque-sync-diario",
-      "schedule": "0 9 * * *"
+      "schedule": "30 6 * * *"
     },
     {
       "path": "/api/estoque-sync-diario?empresa=tf",
-      "schedule": "15 9 * * *"
+      "schedule": "50 6 * * *"
     },
     {
       "path": "/api/financeiro?acao=sync-diario",
-      "schedule": "0 8 * * *"
+      "schedule": "40 7 * * *"
     },
     {
       "path": "/api/financeiro?acao=sync-diario&empresa=tf",
-      "schedule": "15 8 * * *"
+      "schedule": "0 8 * * *"
     }
   ]
 }

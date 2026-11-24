@@ -863,6 +863,49 @@ do zero pra fonte direta.
   deixa qualquer divergência futura visível e fácil de achar (basta comparar os dois caminhos), em
   vez de escondida atrás de uma única linha de ajuste.
 
+### Grupos 1.02/1.03 (Outras Receitas) ficam zerados por enquanto (decisão do Rafael, 2026-11-24)
+Continuavam vindo de contas a receber (mesma lógica título-based que 1.01 tinha antes da mudança pra
+NF). Decisão do Rafael: por enquanto não tem fonte automática definida pra esses dois — fica
+zerado (sem puxar nada) até decidir como buscar. `GRUPOS_RECEITA_SEM_FONTE_AUTOMATICA` (`api/financeiro.js`)
+lista os `codigo_grupo` desativados; título que cair neles no sync é só `excluirMensal`'d (mesmo
+padrão de "apaga explicitamente, upsert não apaga sozinho" já usado em 1.01 e no apoio-em-vendas).
+Não houve necessidade de limpar dado antigo — nunca existiu nenhum título classificado nesses dois
+grupos em `financeiro_mensal` até aqui.
+
+### Árvore de nível 3 agora semeia toda subcategoria conhecida com R$0 (decisão do Rafael, 2026-11-24)
+Antes, uma subcategoria (leaf) só aparecia na árvore se tivesse pelo menos um lançamento no mês —
+achado porque "1.01.02 Produtos vendidos (PDV)" (categoria real da Tiny, nunca teve título/NF
+classificado nela até hoje) simplesmente não aparecia na lista, quebrando a sequência numérica
+visível (1.01.01 → 1.01.03 → 1.01.04, sem o 02). Corrigido em `buscarCategoriasPorEmpresa` (monta
+também `leavesPorGrupo`, todo `codigo_leaf`/`descricao_raw` de `financeiro_categorias` agrupado por
+`codigo_grupo`) e `montarDRE` (semeia `porGrupoLeaf` com todas elas, R$0,00, antes de somar os
+lançamentos de verdade) — vale pra qualquer grupo do DRE, não só 1.01. Continua ordenado por código
+numérico (ver fix anterior); agora a lista em si também fica completa.
+
+### CMV ainda não está 100% coberto — gap real em "Artefatos de Concreto" (achado, 2026-11-24)
+Rafael pediu confirmação de que já tinha cadastrado custo em todos os produtos. Conferido ao vivo
+(`estoque_catalogo`, Rampa, produtos ativos): 104 de 252 têm `custo_atual > 0` — cobre bem a linha
+de madeira (sarrafo, prancha, tábua, OSB — custo não-zero confirmado) — mas **125 produtos da
+categoria "20 Artefatos de Concreto"** (tubo de concreto, piso intertravado) ainda estão com custo
+zero. Confirmado direto na Tiny (`produto.obter.php`, ao vivo): `preco_custo` e `preco_custo_medio`
+realmente zerados pra um desses produtos. **Não é gap, é esperado**: segundo o Rafael, todo o
+catálogo de Artefatos de Concreto é vendido por representação — a Rampa não é dona do custo dessa
+mercadoria (ganha por comissão, não por margem de revenda), então não faz sentido cadastrar custo
+pra esses produtos, e o CMV zerado pra eles está correto. Com isso, o custo cadastrado cobre
+exatamente a parte do catálogo que precisa dele (venda própria de madeira).
+
+### Horário dos crons reorganizado (2026-11-24)
+Pedido do Rafael pra evitar concorrência de rate-limit entre Estoque e Financeiro. Na prática, Rampa
+e TF usam tokens/contas Olist **separadas** (ver "Multi-empresa"), então estoque-rampa nunca disputa
+limite com financeiro-tf (e vice-versa) — e os dois jobs da mesma empresa já tinham ~1h de intervalo
+entre si (bem mais que o `maxDuration` de 300s de cada um). O 429 sustentado visto nessa sessão de
+debug veio de testes manuais repetidos (local, batendo na mesma conta Rampa várias vezes seguidas em
+poucos minutos), não de dois crons de produção se cruzando — confirmado comparando `ultima_tentativa_em`
+dos dois status na hora do problema. Mesmo assim, reorganizado por segurança e pra rodar Estoque
+**antes** de Financeiro (custo do produto usado no CMV fica mais fresco no mesmo dia): Relatórios
+06:00 → Estoque Rampa 06:30 → Estoque TF 06:50 → Financeiro Rampa 07:40 → Financeiro TF 08:00 (todos
+UTC, `vercel.json`).
+
 ---
 
 ## Estrutura do banco Supabase

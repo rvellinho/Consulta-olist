@@ -97,14 +97,22 @@ async function buscarMensal(empresas, ano, mes) {
 // então não dá pra misturar entre rampa/tf no consolidado).
 async function buscarCategoriasPorEmpresa(empresas) {
   const porEmpresa = {};
+  const leavesPorGrupo = {}; // { [codigo_grupo]: Set<descricao_raw> } — todas as subcategorias conhecidas, pra sempre aparecerem na árvore (mesmo com R$0) em ordem numérica.
   for (const empresa of empresas) {
     const r = await httpsRequest("GET", supaHost(),
-      `/rest/v1/financeiro_categorias?empresa=eq.${empresa}&select=categoria_id,descricao_raw`, null, supaHeaders);
+      `/rest/v1/financeiro_categorias?empresa=eq.${empresa}&select=categoria_id,descricao_raw,codigo_grupo`, null, supaHeaders);
     const linhas = parseJSON(r.text);
     const mapa = {};
-    (Array.isArray(linhas) ? linhas : []).forEach(l => { mapa[l.categoria_id] = l.descricao_raw; });
+    (Array.isArray(linhas) ? linhas : []).forEach(l => {
+      mapa[l.categoria_id] = l.descricao_raw;
+      if (l.codigo_grupo && l.descricao_raw) {
+        if (!leavesPorGrupo[l.codigo_grupo]) leavesPorGrupo[l.codigo_grupo] = new Set();
+        leavesPorGrupo[l.codigo_grupo].add(l.descricao_raw);
+      }
+    });
     porEmpresa[empresa] = mapa;
   }
+  porEmpresa.__leavesPorGrupo = leavesPorGrupo;
   return porEmpresa;
 }
 // Rótulo da subcategoria (nível 3) de uma linha de financeiro_mensal/manuais.
@@ -138,6 +146,19 @@ function montarDRE(planoContas, linhasMensal, linhasManuais, categoriasPorEmpres
   const porGrupo = {}; // { [codigo_grupo]: {operacional, intercompany} }
   const porGrupoLeaf = {}; // { [codigo_grupo]: { [descricaoLeaf]: {operacional, intercompany} } }
   const naoClassificado = { total: 0, qtd: 0, itens: [] };
+
+  // Semeia toda subcategoria conhecida (financeiro_categorias) com R$0 — assim
+  // ela sempre aparece na árvore de nível 3, na posição numérica certa, mesmo
+  // sem nenhum lançamento no mês (decisão do Rafael, 2026-11-24: evita que uma
+  // conta como "1.01.02 Produtos vendidos (PDV)" simplesmente suma da lista
+  // quando não teve movimento, em vez de aparecer como R$0,00).
+  const leavesPorGrupo = categoriasPorEmpresa.__leavesPorGrupo || {};
+  for (const [grupo, descricoes] of Object.entries(leavesPorGrupo)) {
+    porGrupoLeaf[grupo] = {};
+    for (const descricao of descricoes) {
+      porGrupoLeaf[grupo][descricao] = { operacional: 0, intercompany: 0 };
+    }
+  }
 
   function somar(grupo, valor, intercompany, leaf) {
     if (!porGrupo[grupo]) porGrupo[grupo] = { operacional: 0, intercompany: 0 };
@@ -702,6 +723,12 @@ const CATEGORIA_SERVICO_PRESTADO_RAMPA = 361455286; // "1.01.03 Serviços presta
 const CATEGORIA_DEVOLUCAO_RAMPA = 361455287; // "1.01.04 (-) Devoluções e estornos"
 const CODIGO_GRUPO_VENDA_INTERNA = "1.01";
 
+// Grupos 1.02 (Outros Serviços) e 1.03 (Outras Receitas) — decisão do Rafael
+// (2026-11-24): não vêm mais de contas a receber (ainda sem fonte definida
+// pra esses dois, fica zerado por enquanto até decidir como buscar). Título
+// que já tivesse caído aqui antes é apagado, pelo mesmo motivo do grupo 1.01.
+const GRUPOS_RECEITA_SEM_FONTE_AUTOMATICA = ["1.02", "1.03"];
+
 async function listarRelatorioCache(tipo, dataIniIso, dataFimIso) {
   const r = await httpsRequest("GET", supaHost(),
     `/rest/v1/relatorio_cache?tipo=eq.${tipo}&data=gte.${dataIniIso}&data=lte.${dataFimIso}&select=id_olist,valor,cliente_razao_social,cliente_cnpj,data`,
@@ -931,6 +958,8 @@ async function executarSyncDiario(req, res) {
             // entrar no DRE é valor total da NF, não o título". Título que já
             // tivesse caído aqui numa execução anterior precisa ser apagado,
             // senão duplica a receita (título + NF).
+            await excluirMensal(empresa, "receber", item.id);
+          } else if (GRUPOS_RECEITA_SEM_FONTE_AUTOMATICA.includes(codigoGrupo)) {
             await excluirMensal(empresa, "receber", item.id);
           } else if (!linha || linha.fonte_tiny === "contas_receber") {
             // "Serviço de apoio em vendas" (comissão, não venda de verdade —
