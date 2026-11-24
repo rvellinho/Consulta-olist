@@ -2226,6 +2226,7 @@ async function excluirLancamentoCP(id){
 // FINANCEIRO (DRE)
 let planoContasFin = [];     // cache de /api/financeiro?acao=plano-contas (planoContas)
 let categoriasForcaManualFin = new Set(); // categoria_id com forca_manual=true, pra marcar ⚠ no form manual
+let categoriasPorEmpresaFin = {}; // cache de /api/financeiro?acao=plano-contas&empresa=X (categorias, nível 3) — por empresa, pro select do modal de intercompany (a categoria é da empresa de destino, que pode ser qualquer uma das duas, independente da empresa escolhida no cabeçalho)
 let lancamentosFin = [];
 let finEditandoId = null;
 
@@ -2424,32 +2425,59 @@ function abrirModalAlocacao(i){
       empresaOrigem: l.empresa_origem, tituloTipo: l.titulo_tipo, tituloId: l.titulo_id,
       valorTotal: Number(l.valor_total_titulo), descricao: l.descricao, historico: l.historico,
       empresaDestino: l.empresa_destino,
-      existente: { valor_alocado: Number(l.valor), codigo_grupo_destino: l.codigo_grupo_destino, nota: l.nota },
+      existente: { valor_alocado: Number(l.valor), leafDestino: l.leaf_destino, nota: l.nota },
     };
   }else{
     alocacaoAtual = {
       empresaOrigem: l.empresa, tituloTipo: l.titulo_tipo, tituloId: l.titulo_id,
       valorTotal: Number(l.valor), descricao: l.descricao, historico: l.historico,
       empresaDestino: empresaContrariaFE(l.empresa),
-      existente: l.alocacao ? { valor_alocado: Number(l.alocacao.valor_alocado), codigo_grupo_destino: l.alocacao.codigo_grupo_destino, nota: l.alocacao.nota } : null,
+      existente: l.alocacao ? { valor_alocado: Number(l.alocacao.valor_alocado), leafDestino: l.alocacao.leaf_destino, nota: l.alocacao.nota } : null,
     };
   }
   preencherModalAlocacao();
 }
 
+// Categorias (nível 3) da empresa de destino — cacheado por empresa (são
+// contas da conta Olist daquela empresa, nunca as do cabeçalho). Busca junto
+// com planoContasFin (nível 2, compartilhado) pra montar o select agrupado
+// por grupo > subcategoria, igual a árvore do DRE.
+async function carregarCategoriasDestino(empresa){
+  if(categoriasPorEmpresaFin[empresa]) return categoriasPorEmpresaFin[empresa];
+  const r = await fetch(`/api/financeiro?acao=plano-contas&empresa=${empresa}`);
+  if(!r.ok) throw new Error(`Erro ${r.status}`);
+  const d = await r.json();
+  if(!planoContasFin.length) planoContasFin = d.planoContas || [];
+  categoriasPorEmpresaFin[empresa] = d.categorias || [];
+  return categoriasPorEmpresaFin[empresa];
+}
+
 async function preencherModalAlocacao(){
-  await carregarPlanoContasFin();
   const c = alocacaoAtual;
+  const categorias = await carregarCategoriasDestino(c.empresaDestino);
   el("aloc-empresa-origem").textContent = EMPRESAS[c.empresaOrigem]?.label || c.empresaOrigem;
   el("aloc-valor-total").textContent = formatarMoeda(c.valorTotal);
   el("aloc-descricao").textContent = c.descricao || c.historico || "—";
   el("aloc-empresa-destino").textContent = `${EMPRESAS[c.empresaDestino]?.label || c.empresaDestino} (a outra empresa)`;
   el("aloc-label-sai").textContent = `Negativo no Intercompany — ${EMPRESAS[c.empresaOrigem]?.label || c.empresaOrigem}`;
   el("aloc-label-entra").textContent = `Positivo no Intercompany — ${EMPRESAS[c.empresaDestino]?.label || c.empresaDestino}`;
-  el("aloc-cat-destino").innerHTML = planoContasFin.filter(g=>g.entra_dre).map(g=>`<option value="${g.codigo_grupo}">${g.codigo_grupo} ${g.descricao_grupo}</option>`).join("");
+  // Categoria escolhida é sempre do nível 3 (subcategoria real da própria
+  // Tiny da empresa de destino), agrupada por nível 2 — nunca um grupo sozinho
+  // (decisão do Rafael, 2026-11-24: evita cair sem querer numa conta errada,
+  // como já aconteceu quando o select não tinha opção em branco e o primeiro
+  // grupo da lista, "1.01 Venda Interna", ficava selecionado por padrão).
+  const porGrupo = {};
+  categorias.forEach(cat=>{ if(cat.codigo_grupo && cat.descricao_raw) (porGrupo[cat.codigo_grupo] = porGrupo[cat.codigo_grupo]||[]).push(cat.descricao_raw); });
+  const optGroups = planoContasFin.filter(g=>g.entra_dre).map(g=>{
+    const leaves = (porGrupo[g.codigo_grupo]||[]).slice().sort((a,b)=>a.localeCompare(b,undefined,{numeric:true}));
+    if(!leaves.length) return "";
+    const opts = leaves.map(l=>`<option value="${l.replace(/"/g,"&quot;")}">${l}</option>`).join("");
+    return `<optgroup label="${g.codigo_grupo} ${g.descricao_grupo}">${opts}</optgroup>`;
+  }).join("");
+  el("aloc-cat-destino").innerHTML = `<option value="" disabled selected>Selecione uma categoria...</option>${optGroups}`;
   el("aloc-valor").max = c.valorTotal;
   el("aloc-valor").value = (c.existente ? c.existente.valor_alocado : c.valorTotal).toFixed(2);
-  if(c.existente) el("aloc-cat-destino").value = c.existente.codigo_grupo_destino;
+  if(c.existente?.leafDestino) el("aloc-cat-destino").value = c.existente.leafDestino;
   el("aloc-nota").value = c.existente?.nota || "";
   el("btn-aloc-remover").classList.toggle("hidden", !c.existente);
   el("mt-aloc-msg").classList.add("hidden");
@@ -2480,15 +2508,15 @@ function mostrarMsgAloc(texto, ok){
 async function salvarAlocacao(){
   const c = alocacaoAtual;
   const valor = Number(el("aloc-valor").value);
-  const codigoDestino = el("aloc-cat-destino").value;
+  const leafDestino = el("aloc-cat-destino").value;
   if(!(valor > 0) || valor > c.valorTotal){ mostrarMsgAloc("Valor inválido — tem que ser maior que zero e no máximo o total do título.", false); return; }
-  if(!codigoDestino){ mostrarMsgAloc("Escolha a categoria de destino.", false); return; }
+  if(!leafDestino){ mostrarMsgAloc("Escolha a categoria de destino.", false); return; }
   try{
     const r = await fetch("/api/financeiro?acao=intercompany-alocacao", {
       method: "POST", headers: {"Content-Type":"application/json"},
       body: JSON.stringify({
         empresa_origem: c.empresaOrigem, titulo_tipo: c.tituloTipo, titulo_id: c.tituloId,
-        valor_alocado: valor, codigo_grupo_destino: codigoDestino, nota: el("aloc-nota").value || null,
+        valor_alocado: valor, leaf_destino: leafDestino, nota: el("aloc-nota").value || null,
       }),
     });
     if(!r.ok) throw new Error((await r.json()).erro || `Erro ${r.status}`);

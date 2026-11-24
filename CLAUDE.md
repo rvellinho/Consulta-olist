@@ -1112,6 +1112,76 @@ Tiny, contas diferentes, hábitos de lançamento diferentes. Qualquer condição
 específico da Tiny merece um fallback pra quando ele vier vazio, em vez de assumir que vai estar lá
 só porque sempre esteve numa conta.
 
+### Bug: editar alocação intercompany existente dava erro de duplicidade (corrigido, 2026-11-24)
+`POST ?acao=intercompany-alocacao` já fazia upsert com `Prefer: resolution=merge-duplicates`, mas
+esquecia o `?on_conflict=empresa_origem,titulo_tipo,titulo_id` na URL — sem isso, o PostgREST não
+sabe contra qual constraint fazer o merge e tenta sempre um INSERT puro, que falha com
+`23505 duplicate key` sempre que o usuário tentava editar (valor ou categoria) uma alocação que já
+existia. Único jeito de "editar" até aqui era apagar e recriar — e mesmo assim, como vários títulos
+de "Limpeza Rampa e Fabrique" (ver abaixo) são praticamente indistinguíveis na lista, apagar/recriar
+podia acertar um título diferente do pretendido. **Corrigido**: adicionado o `on_conflict` na URL,
+igual todo outro upsert do arquivo já fazia (`financeiro_mensal`, `financeiro_categorias`, etc. —
+ver `api/financeiro.js`). Testado ao vivo: reenviar o mesmo título duas vezes agora atualiza a
+mesma linha (`id` e `criado_em` preservados), não cria uma segunda.
+
+### Bug: select de categoria de destino sem opção em branco → caía sem querer em "Venda Interna" (achado e corrigido, 2026-11-24)
+Achado investigando a reclamação do Rafael ("lancei de novo, mas na outra empresa segue o
+excluído"): não era alocação "fantasma" sobrevivendo — eram 5 títulos reais e genuinamente
+diferentes (5 parcelas semanais da faxina da Daiana em outubro, mesma descrição/histórico/valor
+R$690,00 cada, impossíveis de diferenciar na lista de títulos). Das 5, 3 foram alocadas certo pra
+`2.05` (despesa) e 2 foram parar em `1.01 Venda Interna` — uma categoria de **receita**, o que não
+faz sentido pra uma despesa. Causa: o `<select>` de categoria no modal de intercompany nunca tinha
+uma opção em branco — ele monta a lista e o navegador deixa a PRIMEIRA opção pré-selecionada por
+padrão, que por coincidência é sempre "1.01 Venda Interna" (primeiro grupo em ordem numérica do
+plano de contas). Se o usuário não clicasse explicitamente pra trocar, salvava com "1.01" sem
+avisar nada — bateu exatamente com as 2 parcelas erradas. **Corrigido**: o select agora sempre
+abre com `<option value="" disabled selected>Selecione uma categoria...</option>` como primeira
+opção, e `salvarAlocacao()` recusa salvar sem uma escolha real. As 2 parcelas já erradas foram
+corrigidas na mesma leva que resolveu o pedido abaixo (categoria de nível 3), usando o próprio
+endpoint da aplicação (não SQL direto — alteração de dado de produção passa pela validação normal
+do app). **Risco relacionado, não corrigido**: o select de grupo do modal de **lançamento manual**
+(`mf-grupo`, aba Financeiro → "+ Lançamento Manual") tem o mesmo padrão (sem opção em branco,
+primeira opção = "1.01 Venda Interna") — mesmo risco em tese, não mexido porque não foi o que o
+Rafael pediu nem reportou; vale olhar se aparecer o mesmo sintoma lá.
+
+### Categoria de destino do intercompany agora é do nível 3, não do nível 2 (pedido do Rafael, 2026-11-24)
+Até aqui, a alocação intercompany manual guardava só `codigo_grupo_destino` (nível 2, ex: "2.05")
+— o valor entrava na árvore do DRE como uma sub-linha sintética própria ("Intercompany de RAMPA —
+<descrição do título de origem>"), separada das subcategorias reais da empresa de destino, em vez
+de cair numa conta de verdade. Pedido do Rafael: que a categoria escolhida seja do terceiro nível,
+igual as subcategorias reais que já aparecem na árvore.
+
+- **Tabela `financeiro_intercompany_alocacoes` ganhou a coluna `leaf_destino`** (text, nullable —
+  migration aplicada em produção): guarda o texto exato da subcategoria escolhida (`descricao_raw`,
+  ex: `"2.05.02 Limpeza e conservação"`), o mesmo texto usado como chave em `porGrupoLeaf` na árvore
+  do DRE — escolher uma subcategoria real faz o valor da alocação somar na MESMA linha que um
+  lançamento normal naquela conta usaria, em vez de ficar numa linha sintética à parte.
+- **`codigo_grupo_destino` (nível 2) continua existindo** — ainda usado pros totais por grupo e
+  pelo filtro de grupo no drill-down (`acao=titulos`) — mas agora é **derivado no backend** a
+  partir do `leaf_destino` escolhido (busca em `financeiro_categorias` da empresa de destino qual
+  `codigo_grupo` aquele `descricao_raw` pertence), nunca mais confiado direto do corpo da
+  requisição — evita mandar um leaf de um grupo com um `codigo_grupo_destino` de outro por engano.
+  `POST ?acao=intercompany-alocacao` agora exige `leaf_destino` (não mais `codigo_grupo_destino`
+  no corpo) e devolve erro 400 se o texto não bater com nenhuma categoria conhecida da empresa de
+  destino.
+- **`montarDRE`**: a entrada sintética da alocação agora usa `a.leaf_destino` como leaf (fallback
+  pro texto antigo só pras poucas alocações legadas que nunca tiveram leaf — ids 1-7, 20, 24,
+  migradas antes dessa mudança, ainda mostram o texto antigo até serem reeditadas).
+- **Tela**: o select de categoria no modal (`aloc-cat-destino`) passou a listar as subcategorias
+  reais da empresa de destino, agrupadas por grupo (`<optgroup>`) — mesma fonte que já alimenta a
+  árvore de nível 3 do DRE (`acao=plano-contas&empresa=X` → `categorias`), cacheada por empresa
+  (`categoriasPorEmpresaFin`), já que a categoria é sempre da empresa de destino, não da que está
+  selecionada no cabeçalho. Sem opção pré-selecionada (ver bug acima).
+- **As 5 parcelas da Daiana corrigidas nessa mesma leva**: todas as 5 reclassificadas pra
+  `2.05.02 Limpeza e conservação` (as 2 que estavam em `1.01` corrigidas, as 3 que já estavam em
+  `2.05` ganharam o leaf também, pra ficarem consistentes) — testado ao vivo: a árvore da TF em
+  outubro passou a mostrar R$1.725,00 (5×345) numa linha só em `2.05.02`, e `1.01` zerou no
+  Intercompany.
+- **Testado ao vivo** (sessão local, usuário demo via `sessionStorage` simulado — nunca criada
+  conta nova): abrir alocação existente preenche o select com a subcategoria certa; abrir uma nova
+  (título ainda não alocado) abre sem nada selecionado; salvar grava `codigo_grupo_destino` e
+  `leaf_destino` corretos; editar a mesma alocação duas vezes não duplica (upsert funcionando).
+
 ---
 
 ## RLS (Row Level Security) nas 16 tabelas do projeto — ligado (2026-11-24)
@@ -1165,7 +1235,7 @@ era exposição teórica.
 | `financeiro_plano_contas` | `codigo_grupo` | Mapeamento grupo→linha do DRE + regime (competência/caixa/manual) + fonte Tiny — seed manual, sem coluna `empresa` (compartilhado) |
 | `financeiro_categorias` | `categoria_id` + `empresa` | Cache de `GET /categorias-receita-despesa`, com `codigo_grupo` extraído e flag `forca_manual` |
 | `financeiro_mensal` | `empresa` + `titulo_tipo` + `titulo_id` | Uma linha por título/NF já classificado (não pré-somado — ver "Módulo Financeiro (DRE)"). `titulo_tipo`: `pagar` (título — receita nunca mais usa esse caminho, nenhuma empresa, desde 2026-11-24), `cmv`/`nf_produto`/`nf_servico`/`devolucao` (direto da NF, `titulo_id=id_olist`), `ajuste_conciliacao` (legado, não mais gravado). Colunas `intercompany` (bool, default `false` — só vale pro caso automático de receita/CMV; pra `titulo_tipo=pagar` não é mais lido, ver `financeiro_intercompany_alocacoes`) e `descricao` (texto) — ver "Intercompany Rampa↔TF" |
-| `financeiro_intercompany_alocacoes` | `empresa_origem` + `titulo_tipo` + `titulo_id` | Alocação manual de despesa intercompany (valor parcial + categoria de destino) — ver "Alocação intercompany manual" |
+| `financeiro_intercompany_alocacoes` | `empresa_origem` + `titulo_tipo` + `titulo_id` | Alocação manual de despesa intercompany (valor parcial + categoria de destino, nível 3 via `leaf_destino` — `codigo_grupo_destino` é derivado dele) — ver "Alocação intercompany manual" e "Categoria de destino do intercompany agora é do nível 3" |
 | `financeiro_lancamentos_manuais` | `id` | Lançamentos que nunca vêm da Olist (provisões, ajustes) — `codigo_grupo` + `subitem` livre opcional |
 | `financeiro_sync_status` | `empresa` (uma linha por empresa) | Progresso/estado da rotina diária financeira, mesmo padrão de `estoque_sync_status` |
 

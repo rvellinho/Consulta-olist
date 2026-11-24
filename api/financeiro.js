@@ -210,7 +210,10 @@ function montarDRE(planoContas, linhasMensal, linhasManuais, categoriasPorEmpres
   // e somar de novo aqui duplicaria.
   for (const a of alocacoesDestino) {
     if (!a.codigo_grupo_destino || !(a.valor > 0)) continue;
-    const leaf = a.nota || `Intercompany de ${String(a.empresa_origem || "").toUpperCase()} — ${a.descricaoOrigem || a.historicoOrigem || "despesa"}`;
+    // leaf_destino (nível 3, escolhido no modal — ver "intercompany: categoria de
+    // destino no nível 3") é o normal desde 2026-11-24; o fallback cobre só as
+    // poucas alocações migradas do desenho antigo, que nunca tiveram leaf.
+    const leaf = a.leaf_destino || a.nota || `Intercompany de ${String(a.empresa_origem || "").toUpperCase()} — ${a.descricaoOrigem || a.historicoOrigem || "despesa"}`;
     somar(a.codigo_grupo_destino, a.valor, true, leaf);
   }
   for (const l of linhasManuais) {
@@ -1237,6 +1240,7 @@ module.exports = async (req, res) => {
             empresa_origem: a.empresa_origem,
             empresa_destino: a.empresa_destino,
             codigo_grupo_destino: a.codigo_grupo_destino,
+            leaf_destino: a.leaf_destino,
             nota: a.nota,
             valor_total_titulo: a.valorTitulo,
           });
@@ -1244,7 +1248,7 @@ module.exports = async (req, res) => {
         if (leafFiltro != null) {
           const categoriasPorEmpresa = await buscarCategoriasPorEmpresa([empresaTit]);
           data = data.filter(l => {
-            if (l.sintetico) return (l.nota || `Intercompany de ${String(l.empresa_origem || "").toUpperCase()} — ${l.descricao || l.historico || "despesa"}`) === leafFiltro;
+            if (l.sintetico) return (l.leaf_destino || l.nota || `Intercompany de ${String(l.empresa_origem || "").toUpperCase()} — ${l.descricao || l.historico || "despesa"}`) === leafFiltro;
             return resolverLeaf({ ...l, empresa: empresaTit }, categoriasPorEmpresa) === leafFiltro;
           });
         }
@@ -1280,25 +1284,39 @@ module.exports = async (req, res) => {
       // escolhida (decisão do Rafael, 2026-11-24 — ver "intercompany MANUAL"
       // acima). empresa_destino é sempre a outra empresa, nunca escolhida
       // pelo usuário (só existem duas hoje).
-      const { empresa_origem, titulo_tipo, titulo_id, valor_alocado, codigo_grupo_destino, nota } = parseBody(req.body);
-      if (!empresa_origem || !titulo_tipo || !titulo_id || !codigo_grupo_destino || !(Number(valor_alocado) > 0)) {
-        return res.status(400).json({ erro: "empresa_origem, titulo_tipo, titulo_id, codigo_grupo_destino e valor_alocado (> 0) são obrigatórios" });
+      const { empresa_origem, titulo_tipo, titulo_id, valor_alocado, leaf_destino, nota } = parseBody(req.body);
+      if (!empresa_origem || !titulo_tipo || !titulo_id || !leaf_destino || !(Number(valor_alocado) > 0)) {
+        return res.status(400).json({ erro: "empresa_origem, titulo_tipo, titulo_id, leaf_destino e valor_alocado (> 0) são obrigatórios" });
       }
       if (titulo_tipo !== "pagar") {
         return res.status(400).json({ erro: "alocação intercompany manual só vale pra despesas (titulo_tipo=pagar)" });
       }
       const empresaOrigemNorm = String(empresa_origem).toLowerCase();
+      const empresaDestinoNorm = empresaContraria(empresaOrigemNorm);
+      // categoria de destino agora é sempre do nível 3 (leaf) — o grupo (nível 2)
+      // é derivado aqui a partir do leaf escolhido, nunca confiado direto do
+      // corpo da requisição, pra não dar pra mandar um leaf de um grupo e um
+      // codigo_grupo_destino de outro sem querer (decisão do Rafael, 2026-11-24
+      // — ver "intercompany: categoria de destino no nível 3").
+      const rCat = await httpsRequest("GET", supaHost(),
+        `/rest/v1/financeiro_categorias?empresa=eq.${empresaDestinoNorm}&descricao_raw=eq.${encodeURIComponent(leaf_destino)}&select=codigo_grupo&limit=1`,
+        null, supaHeaders);
+      const catEncontrada = parseJSON(rCat.text)?.[0];
+      if (!catEncontrada?.codigo_grupo) {
+        return res.status(400).json({ erro: `categoria de destino "${leaf_destino}" não encontrada pra ${empresaDestinoNorm}` });
+      }
       const payload = JSON.stringify({
         empresa_origem: empresaOrigemNorm,
         titulo_tipo,
         titulo_id: Number(titulo_id),
         valor_alocado: Number(valor_alocado),
-        empresa_destino: empresaContraria(empresaOrigemNorm),
-        codigo_grupo_destino,
+        empresa_destino: empresaDestinoNorm,
+        codigo_grupo_destino: catEncontrada.codigo_grupo,
+        leaf_destino,
         nota: nota || null,
         atualizado_em: new Date().toISOString(),
       });
-      const r = await httpsRequest("POST", supaHost(), "/rest/v1/financeiro_intercompany_alocacoes", payload,
+      const r = await httpsRequest("POST", supaHost(), "/rest/v1/financeiro_intercompany_alocacoes?on_conflict=empresa_origem,titulo_tipo,titulo_id", payload,
         { ...supaHeaders, "Content-Length": Buffer.byteLength(payload), Prefer: "resolution=merge-duplicates,return=representation" });
       if (r.status >= 400) return res.status(400).json({ erro: r.text });
       const data = parseJSON(r.text);
