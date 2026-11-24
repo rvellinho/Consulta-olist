@@ -5,6 +5,7 @@
 // limite de 12 Serverless Functions do plano Hobby da Vercel — ver CLAUDE.md
 // "Vercel serverless — limitações").
 const lib = require("./_lib/relatorio-coleta");
+const { getConfigEmpresa } = require("./_lib/empresas");
 const {
   SUPABASE_URL, supaHeaders,
   DESCRICOES_SERVICO_EXCLUIDAS, FINALIDADES_DEVOLUCAO,
@@ -37,27 +38,27 @@ const DIAS_JANELA_DIARIA = 7;
 // olhar uma janela bem mais larga sem pesar no tempo de execução.
 const DIAS_JANELA_REVALIDACAO = 45;
 
-async function revalidarCacheSync(dataInicial, dataFinal) {
+async function revalidarCacheSync(tokenV2, empresa, dataInicial, dataFinal) {
   const removidos = {};
-  removidos.produto = await revalidarNotas("produto", "S", dataInicial, dataFinal);
+  removidos.produto = await revalidarNotas(tokenV2, empresa, "produto", "S", dataInicial, dataFinal);
   await sleep(600);
-  removidos.devolucao = await revalidarNotas("devolucao", "E", dataInicial, dataFinal);
+  removidos.devolucao = await revalidarNotas(tokenV2, empresa, "devolucao", "E", dataInicial, dataFinal);
   await sleep(600);
-  removidos.servico = await revalidarNotasServico(dataInicial, dataFinal);
+  removidos.servico = await revalidarNotasServico(tokenV2, empresa, dataInicial, dataFinal);
   await sleep(600);
-  removidos.representacao = await revalidarPedidos("representacao", MARCADOR_REPRESENTACAO, MARGEM_DIAS_REPRESENTACAO, dataInicial, dataFinal);
+  removidos.representacao = await revalidarPedidos(tokenV2, empresa, "representacao", MARCADOR_REPRESENTACAO, MARGEM_DIAS_REPRESENTACAO, dataInicial, dataFinal);
   await sleep(600);
-  removidos.aguia = await revalidarPedidos("aguia", MARCADOR_AGUIA, MARGEM_DIAS_AGUIA, dataInicial, dataFinal);
+  removidos.aguia = await revalidarPedidos(tokenV2, empresa, "aguia", MARCADOR_AGUIA, MARGEM_DIAS_AGUIA, dataInicial, dataFinal);
   return removidos;
 }
 
-async function coletarProdutosSync(dataInicial, dataFinal) {
-  const notas = await buscarTodasNotas("S", dataInicial, dataFinal);
+async function coletarProdutosSync(tokenV2, dataInicial, dataFinal) {
+  const notas = await buscarTodasNotas(tokenV2, "S", dataInicial, dataFinal);
   const alteracoes = await buscarAlteracoes("produto");
   const resultado = [];
   for (const n of notas) {
     await sleep(600);
-    const detalhe = await buscarDetalheNotaFiscal(n.id);
+    const detalhe = await buscarDetalheNotaFiscal(tokenV2, n.id);
     if (temMarcador(detalhe, MARCADOR_VENDA_FUTURA_EXCLUIR)) continue;
     const alt = alteracoes[normalizarNumero(n.numero)];
     resultado.push({
@@ -72,14 +73,14 @@ async function coletarProdutosSync(dataInicial, dataFinal) {
   return resultado;
 }
 
-async function coletarDevolucoesSync(dataInicial, dataFinal) {
-  const entradas = await buscarTodasNotas("E", dataInicial, dataFinal);
+async function coletarDevolucoesSync(tokenV2, dataInicial, dataFinal) {
+  const entradas = await buscarTodasNotas(tokenV2, "E", dataInicial, dataFinal);
   const alteracoes = await buscarAlteracoes("devolucao");
   const resultado = [];
   for (const entrada of entradas) {
     await sleep(600);
     const resp = await httpsRequest("POST", "api.tiny.com.br", "/api2/nota.fiscal.obter.php",
-      new URLSearchParams({ token: lib.TOKEN_V2, id: String(entrada.id), formato: "JSON" }).toString(),
+      new URLSearchParams({ token: tokenV2, id: String(entrada.id), formato: "JSON" }).toString(),
       { "Content-Type": "application/x-www-form-urlencoded" });
     const nota = parseJSON(resp.text).retorno?.nota_fiscal;
     if (!nota) continue;
@@ -90,7 +91,7 @@ async function coletarDevolucoesSync(dataInicial, dataFinal) {
     const referencia = extrairReferenciaOrigem(nota.obs);
     if (referencia) {
       await sleep(400);
-      vendedor = await buscarVendedorDaNotaOrigem(referencia);
+      vendedor = await buscarVendedorDaNotaOrigem(tokenV2, referencia);
     }
     const alt = alteracoes[normalizarNumero(nota.numero)];
     if (alt?.vendedor) vendedor = alt.vendedor;
@@ -107,13 +108,13 @@ async function coletarDevolucoesSync(dataInicial, dataFinal) {
   return resultado;
 }
 
-async function coletarServicosSync(dataInicial, dataFinal) {
-  const notas = await buscarTodasNotasServico(dataInicial, dataFinal);
+async function coletarServicosSync(tokenV2, dataInicial, dataFinal) {
+  const notas = await buscarTodasNotasServico(tokenV2, dataInicial, dataFinal);
   const alteracoes = await buscarAlteracoes("servico");
   const resultado = [];
   for (const n of notas) {
     await sleep(600);
-    const detalhe = await buscarDetalheNotaServico(n.id);
+    const detalhe = await buscarDetalheNotaServico(tokenV2, n.id);
     const descricao = detalhe?.servico?.descricao || "";
     const excluido = DESCRICOES_SERVICO_EXCLUIDAS.some(d => descricao.toLowerCase().includes(d));
     if (excluido) continue;
@@ -130,10 +131,10 @@ async function coletarServicosSync(dataInicial, dataFinal) {
   return resultado;
 }
 
-async function coletarPedidosMarcadosSync(marcador, margemDias, dataInicial, dataFinal, tipoAlteracao) {
+async function coletarPedidosMarcadosSync(tokenV2, marcador, margemDias, dataInicial, dataFinal, tipoAlteracao) {
   const inicioBuscado = somarDiasBR(dataInicial, -margemDias);
   const fimBuscado = somarDiasBR(dataFinal, margemDias);
-  const pedidos = await buscarTodosPedidos("faturado", marcador, inicioBuscado, fimBuscado);
+  const pedidos = await buscarTodosPedidos(tokenV2, "faturado", marcador, inicioBuscado, fimBuscado);
 
   const inicioPeriodo = parseDataBR(dataInicial);
   const fimPeriodo = parseDataBR(dataFinal);
@@ -146,7 +147,7 @@ async function coletarPedidosMarcadosSync(marcador, margemDias, dataInicial, dat
   const resultado = [];
   for (const p of noPeriodo) {
     await sleep(600);
-    const detalhe = await buscarDetalhePedido(p.id);
+    const detalhe = await buscarDetalhePedido(tokenV2, p.id);
     const temNotaFiscal = !!(detalhe && Number(detalhe.id_nota_fiscal) > 0);
     if (temNotaFiscal) continue;
     const alt = alteracoes[normalizarNumero(p.numero)];
@@ -162,10 +163,10 @@ async function coletarPedidosMarcadosSync(marcador, margemDias, dataInicial, dat
   return resultado;
 }
 
-async function anexarCodigoClienteSync(linhas) {
+async function anexarCodigoClienteSync(tokenV2, linhas) {
   for (const l of linhas) {
     if (!l.clienteCnpj) continue;
-    const info = await buscarClientePorCnpj(l.clienteCnpj);
+    const info = await buscarClientePorCnpj(tokenV2, l.clienteCnpj);
     if (info) l.clienteCodigo = info.codigo;
   }
   return linhas;
@@ -179,24 +180,27 @@ async function executarSyncDiario(req, res) {
   }
 
   try {
+    const empresa = String(req.query.empresa || "rampa").toLowerCase();
+    const { tokenV2 } = getConfigEmpresa(empresa);
+
     const hoje = hojeBR();
     const dataInicial = somarDiasBR(hoje, -DIAS_JANELA_DIARIA);
     const dataFinal = hoje;
 
-    const produtos = await anexarCodigoClienteSync(await coletarProdutosSync(dataInicial, dataFinal));
-    const aguia = await anexarCodigoClienteSync(await coletarPedidosMarcadosSync(MARCADOR_AGUIA, MARGEM_DIAS_AGUIA, dataInicial, dataFinal, "aguia"));
-    const devolucoes = await anexarCodigoClienteSync(await coletarDevolucoesSync(dataInicial, dataFinal));
-    const servicos = await anexarCodigoClienteSync(await coletarServicosSync(dataInicial, dataFinal));
-    const representacao = await anexarCodigoClienteSync(await coletarPedidosMarcadosSync(MARCADOR_REPRESENTACAO, MARGEM_DIAS_REPRESENTACAO, dataInicial, dataFinal, "representacao"));
+    const produtos = await anexarCodigoClienteSync(tokenV2, await coletarProdutosSync(tokenV2, dataInicial, dataFinal));
+    const aguia = await anexarCodigoClienteSync(tokenV2, await coletarPedidosMarcadosSync(tokenV2, MARCADOR_AGUIA, MARGEM_DIAS_AGUIA, dataInicial, dataFinal, "aguia"));
+    const devolucoes = await anexarCodigoClienteSync(tokenV2, await coletarDevolucoesSync(tokenV2, dataInicial, dataFinal));
+    const servicos = await anexarCodigoClienteSync(tokenV2, await coletarServicosSync(tokenV2, dataInicial, dataFinal));
+    const representacao = await anexarCodigoClienteSync(tokenV2, await coletarPedidosMarcadosSync(tokenV2, MARCADOR_REPRESENTACAO, MARGEM_DIAS_REPRESENTACAO, dataInicial, dataFinal, "representacao"));
 
-    await salvarNoCache("produto", dataInicial, dataFinal, produtos);
-    await salvarNoCache("aguia", dataInicial, dataFinal, aguia);
-    await salvarNoCache("devolucao", dataInicial, dataFinal, devolucoes);
-    await salvarNoCache("servico", dataInicial, dataFinal, servicos);
-    await salvarNoCache("representacao", dataInicial, dataFinal, representacao);
+    await salvarNoCache(empresa, "produto", dataInicial, dataFinal, produtos);
+    await salvarNoCache(empresa, "aguia", dataInicial, dataFinal, aguia);
+    await salvarNoCache(empresa, "devolucao", dataInicial, dataFinal, devolucoes);
+    await salvarNoCache(empresa, "servico", dataInicial, dataFinal, servicos);
+    await salvarNoCache(empresa, "representacao", dataInicial, dataFinal, representacao);
 
     const dataInicialRevalidacao = somarDiasBR(hoje, -DIAS_JANELA_REVALIDACAO);
-    const removidos = await revalidarCacheSync(dataInicialRevalidacao, dataFinal);
+    const removidos = await revalidarCacheSync(tokenV2, empresa, dataInicialRevalidacao, dataFinal);
 
     return res.status(200).json({
       ok: true,
@@ -217,6 +221,7 @@ module.exports = async (req, res) => {
 
   const acao = req.query.acao;
   const { dataInicial, dataFinal } = req.query;
+  const empresa = String(req.query.empresa || "rampa").toLowerCase();
 
   // Sync diário (cron) — nunca chamado pelo frontend, ver vercel.json.
   if (acao === "sync-diario") {
@@ -224,10 +229,12 @@ module.exports = async (req, res) => {
   }
 
   try {
+    const tokenV2 = getConfigEmpresa(empresa).tokenV2;
+
     // ── AÇÃO: notas de venda (saída) no período, detalhadas por dia/vendedor ─
     if (acao === "vendas") {
       if (!dataInicial || !dataFinal) return res.status(400).json({ erro: "dataInicial e dataFinal obrigatórios" });
-      const notas = await buscarTodasNotas("S", dataInicial, dataFinal);
+      const notas = await buscarTodasNotas(tokenV2, "S", dataInicial, dataFinal);
       const alteracoes = await buscarAlteracoes("produto");
       return res.status(200).json({
         notas: notas.map(n => {
@@ -251,7 +258,7 @@ module.exports = async (req, res) => {
     if (acao === "venda-detalhe") {
       const id = req.query.id;
       if (!id) return res.status(400).json({ erro: "id obrigatorio" });
-      const nota = await buscarDetalheNotaFiscal(id);
+      const nota = await buscarDetalheNotaFiscal(tokenV2, id);
       const excluir = temMarcador(nota, MARCADOR_VENDA_FUTURA_EXCLUIR);
       return res.status(200).json({ excluir });
     }
@@ -259,7 +266,7 @@ module.exports = async (req, res) => {
     // ── AÇÃO: notas de entrada candidatas a devolução no período ─────
     if (acao === "entradas") {
       if (!dataInicial || !dataFinal) return res.status(400).json({ erro: "dataInicial e dataFinal obrigatórios" });
-      const notas = await buscarTodasNotas("E", dataInicial, dataFinal);
+      const notas = await buscarTodasNotas(tokenV2, "E", dataInicial, dataFinal);
       return res.status(200).json({
         notas: notas.map(n => ({ id: n.id, numero: n.numero, valor: parseFloat(n.valor || 0) })),
       });
@@ -271,7 +278,7 @@ module.exports = async (req, res) => {
     // dentro do serverless (timeout).
     if (acao === "servicos") {
       if (!dataInicial || !dataFinal) return res.status(400).json({ erro: "dataInicial e dataFinal obrigatórios" });
-      const notas = await buscarTodasNotasServico(dataInicial, dataFinal);
+      const notas = await buscarTodasNotasServico(tokenV2, dataInicial, dataFinal);
       const alteracoes = await buscarAlteracoes("servico");
       return res.status(200).json({
         notas: notas.map(n => {
@@ -291,7 +298,7 @@ module.exports = async (req, res) => {
     if (acao === "servico-detalhe") {
       const id = req.query.id;
       if (!id) return res.status(400).json({ erro: "id obrigatorio" });
-      const nota = await buscarDetalheNotaServico(id);
+      const nota = await buscarDetalheNotaServico(tokenV2, id);
       const descricao = nota?.servico?.descricao || "";
       const excluir = DESCRICOES_SERVICO_EXCLUIDAS.some(d => descricao.toLowerCase().includes(d));
       return res.status(200).json({
@@ -308,7 +315,7 @@ module.exports = async (req, res) => {
       if (!dataInicial || !dataFinal) return res.status(400).json({ erro: "dataInicial e dataFinal obrigatórios" });
       const inicioBuscado = somarDiasBR(dataInicial, -MARGEM_DIAS_REPRESENTACAO);
       const fimBuscado = somarDiasBR(dataFinal, MARGEM_DIAS_REPRESENTACAO);
-      const pedidos = await buscarTodosPedidos("faturado", MARCADOR_REPRESENTACAO, inicioBuscado, fimBuscado);
+      const pedidos = await buscarTodosPedidos(tokenV2, "faturado", MARCADOR_REPRESENTACAO, inicioBuscado, fimBuscado);
 
       const inicioPeriodo = parseDataBR(dataInicial);
       const fimPeriodo = parseDataBR(dataFinal);
@@ -336,7 +343,7 @@ module.exports = async (req, res) => {
     if (acao === "representacao-detalhe") {
       const id = req.query.id;
       if (!id) return res.status(400).json({ erro: "id obrigatorio" });
-      const pedido = await buscarDetalhePedido(id);
+      const pedido = await buscarDetalhePedido(tokenV2, id);
       const temNotaFiscal = !!(pedido && Number(pedido.id_nota_fiscal) > 0);
       return res.status(200).json({
         temNotaFiscal,
@@ -352,7 +359,7 @@ module.exports = async (req, res) => {
       if (!dataInicial || !dataFinal) return res.status(400).json({ erro: "dataInicial e dataFinal obrigatórios" });
       const inicioBuscado = somarDiasBR(dataInicial, -MARGEM_DIAS_AGUIA);
       const fimBuscado = somarDiasBR(dataFinal, MARGEM_DIAS_AGUIA);
-      const pedidos = await buscarTodosPedidos("faturado", MARCADOR_AGUIA, inicioBuscado, fimBuscado);
+      const pedidos = await buscarTodosPedidos(tokenV2, "faturado", MARCADOR_AGUIA, inicioBuscado, fimBuscado);
 
       const inicioPeriodo = parseDataBR(dataInicial);
       const fimPeriodo = parseDataBR(dataFinal);
@@ -380,7 +387,7 @@ module.exports = async (req, res) => {
     if (acao === "aguia-detalhe") {
       const id = req.query.id;
       if (!id) return res.status(400).json({ erro: "id obrigatorio" });
-      const pedido = await buscarDetalhePedido(id);
+      const pedido = await buscarDetalhePedido(tokenV2, id);
       const temNotaFiscal = !!(pedido && Number(pedido.id_nota_fiscal) > 0);
       return res.status(200).json({
         temNotaFiscal,
@@ -393,7 +400,7 @@ module.exports = async (req, res) => {
     if (acao === "nota") {
       const id = req.query.id;
       if (!id) return res.status(400).json({ erro: "id obrigatorio" });
-      const nota = await buscarDetalheNotaFiscal(id);
+      const nota = await buscarDetalheNotaFiscal(tokenV2, id);
       if (!nota) return res.status(200).json({ finalidade: null, valor: 0 });
 
       const ehDevolucao = FINALIDADES_DEVOLUCAO.includes(String(nota.finalidade));
@@ -402,7 +409,7 @@ module.exports = async (req, res) => {
         const referencia = extrairReferenciaOrigem(nota.obs);
         if (referencia) {
           await sleep(400);
-          vendedor = await buscarVendedorDaNotaOrigem(referencia);
+          vendedor = await buscarVendedorDaNotaOrigem(tokenV2, referencia);
         }
         const alteracoes = await buscarAlteracoes("devolucao");
         const alt = alteracoes[normalizarNumero(nota.numero)];
@@ -429,10 +436,10 @@ module.exports = async (req, res) => {
 
       const [rLinhas, rStatus] = await Promise.all([
         httpsRequest("GET", supaHost,
-          `/rest/v1/relatorio_cache?data=gte.${isoInicial}&data=lte.${isoFinal}&select=*`,
+          `/rest/v1/relatorio_cache?empresa=eq.${empresa}&data=gte.${isoInicial}&data=lte.${isoFinal}&select=*`,
           null, supaHeaders),
         httpsRequest("GET", supaHost,
-          "/rest/v1/relatorio_cache_status?id=eq.1&select=ultima_atualizacao,sincronizado_desde",
+          `/rest/v1/relatorio_cache_status?empresa=eq.${empresa}&select=ultima_atualizacao,sincronizado_desde`,
           null, supaHeaders),
       ]);
       const linhasBrutas = parseJSON(rLinhas.text);
@@ -470,10 +477,11 @@ module.exports = async (req, res) => {
     if (acao === "cache-salvar" && req.method === "POST") {
       const corpo = typeof req.body === "string" ? parseJSON(req.body) : (req.body || {});
       const { tipo, dataInicial: di, dataFinal: df, linhas } = corpo;
+      const empresaCorpo = String(corpo.empresa || "rampa").toLowerCase();
       if (!tipo || !di || !df || !Array.isArray(linhas)) {
         return res.status(400).json({ erro: "tipo, dataInicial, dataFinal e linhas são obrigatórios" });
       }
-      await salvarNoCache(tipo, di, df, linhas);
+      await salvarNoCache(empresaCorpo, tipo, di, df, linhas);
       return res.status(200).json({ ok: true, salvos: linhas.length });
     }
 

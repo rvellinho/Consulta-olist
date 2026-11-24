@@ -19,7 +19,6 @@
 const https = require("https");
 const { getAccessToken } = require("./_lib/olist-auth");
 const { getConfigEmpresa } = require("./_lib/empresas");
-const { DESCRICOES_SERVICO_EXCLUIDAS } = require("./_lib/relatorio-coleta");
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
@@ -341,7 +340,6 @@ function dataBRparaISO(dataBR) {
 //     merge-duplicates só sobrescreve coluna que estiver no payload) — hoje
 //     isso só importa porque o campo nunca é tocado ali de propósito, não
 //     porque algo ainda dependa do valor que ele guarda pra titulo_tipo=pagar.
-const ID_CLIENTE_TF_NA_RAMPA = "893415936";
 const CNPJ_TF = "51251441000105";
 function limparCnpj(v) { return String(v || "").replace(/\D/g, ""); }
 
@@ -473,82 +471,6 @@ async function buscarDetalheNotaVendaV2(tokenV2, id) {
 // "apoio em vendas" (ver CLAUDE.md "Receita classificada pela parcela..." e
 // "Comissão de apoio em vendas...") ---
 
-// Um título de contas a receber referencia a nota ("Ref. a NF nº 13434...")
-// no histórico — mas o campo "data" do TÍTULO é a emissão do próprio título,
-// não da NF. Pra venda parcelada no cartão, a Tiny cria a 2ª/3ª parcela como
-// um título novo, com "data" de quando essa parcela foi registrada (semanas
-// depois) — não a emissão real da venda. O Rafael pediu que receita sempre
-// conte pela emissão da NF (decisão dele, nunca por quando o valor é
-// recebido). Resolve isso buscando a NF pelo número referenciado no
-// histórico; cacheado por número de NF dentro da mesma execução do sync
-// (vários títulos/parcelas costumam referenciar a mesma NF).
-const PADRAO_HISTORICO_REF_NF = /Ref\.\s*a\s*NF\s*n[ºo]\.?\s*(\d+)/i;
-async function buscarDataEmissaoNotaPorNumero(tokenV2, numero, cache) {
-  if (cache.has(numero)) return cache.get(numero);
-  await sleep(600);
-  const body = new URLSearchParams({ token: tokenV2, formato: "JSON", numero: String(numero) }).toString();
-  const r = await httpsRequest("POST", "api.tiny.com.br", "/api2/notas.fiscais.pesquisa.php", body,
-    { "Content-Type": "application/x-www-form-urlencoded" });
-  const data = parseJSON(r.text);
-  let resultado = null;
-  if (data.retorno?.status !== "Erro") {
-    const nf = (data.retorno?.notas_fiscais || [])[0]?.nota_fiscal;
-    const dataEmissaoBR = nf?.data_emissao; // "dd/mm/yyyy"
-    if (dataEmissaoBR) {
-      const [dia, mes, ano] = dataEmissaoBR.split("/").map(Number);
-      if (ano && mes) resultado = { ano, mes };
-    }
-  }
-  cache.set(numero, resultado);
-  return resultado;
-}
-
-// Notas de serviço de "apoio em vendas" (comissão emitida quando vamos
-// receber o valor, não uma venda de verdade pro cliente — decisão do
-// Rafael, 2026-11-23) já são excluídas do Relatório de Vendas por descrição
-// (ver DESCRICOES_SERVICO_EXCLUIDAS em relatorio-coleta.js) — o DRE não tinha
-// esse filtro porque a categoria financeira ("1.01.03 Serviços prestados") é
-// a mesma usada por serviço de verdade (ex: frete). Só dá pra diferenciar
-// pela descrição da própria nota de serviço, então resolve o RPS referenciado
-// no número do documento do título ("000125/01" → RPS 125) contra uma lista
-// de notas de serviço buscada 1x por execução (mapa numero_rps → id), e só
-// busca o detalhe (descrição) das que o título realmente referencia.
-async function buscarMapaRpsParaId(tokenV2, dataInicialBR, dataFinalBR) {
-  const mapa = new Map();
-  let pagina = 1;
-  while (true) {
-    const body = new URLSearchParams({
-      token: tokenV2, formato: "JSON", dataInicial: dataInicialBR, dataFinal: dataFinalBR, pagina: String(pagina),
-    }).toString();
-    const r = await httpsRequest("POST", "api.tiny.com.br", "/api2/notas.servico.pesquisa.php", body,
-      { "Content-Type": "application/x-www-form-urlencoded" });
-    const data = parseJSON(r.text);
-    if (data.retorno?.status === "Erro") {
-      if (String(data.retorno.erros?.[0]?.erro || "").toLowerCase().includes("não retornou")) break;
-      throw new Error(data.retorno.erros?.[0]?.erro || "erro ao pesquisar notas de serviço");
-    }
-    const lista = (data.retorno?.notas_servico || []).map(n => n.nota_servico).filter(Boolean);
-    lista.forEach(n => { if (n.numero_rps) mapa.set(String(parseInt(n.numero_rps, 10)), n.id); });
-    if (lista.length < 100) break;
-    pagina++;
-    await sleep(600);
-  }
-  return mapa;
-}
-async function buscarDescricaoNotaServicoPorId(tokenV2, id, cache) {
-  if (cache.has(id)) return cache.get(id);
-  await sleep(600);
-  const body = new URLSearchParams({ token: tokenV2, id: String(id), formato: "JSON" }).toString();
-  const r = await httpsRequest("POST", "api.tiny.com.br", "/api2/nota.servico.obter.php", body,
-    { "Content-Type": "application/x-www-form-urlencoded" });
-  const descricao = parseJSON(r.text)?.retorno?.nota_fiscal?.servico?.descricao || null;
-  cache.set(id, descricao);
-  return descricao;
-}
-function ehServicoApoioEmVendas(descricao) {
-  const texto = String(descricao || "").toLowerCase();
-  return DESCRICOES_SERVICO_EXCLUIDAS.some(d => texto.includes(d));
-}
 // Custo atual de cada produto do catálogo (coluna custo_atual, preenchida de
 // graça pelo sync diário de Estoque — ver api/estoque-sync-diario.js) — uma
 // leitura só no Supabase pra empresa inteira, nada de bater na Olist produto
@@ -789,7 +711,9 @@ async function listarIdsContasPagar(accessToken, dataIni, dataFim) {
 }
 
 // --- receita de Venda Interna (grupo 1.01) direto da nota fiscal, não do
-// título de contas a receber (decisão do Rafael, 2026-11-23) ---
+// título de contas a receber (decisão do Rafael, 2026-11-23; generalizada
+// pras duas empresas em 2026-11-24 — "qualquer ajuste que tenhamos feito na
+// Rampa, vale pra TF também. a lógica é igual") ---
 // Caçar título a título os casos que apareciam como "sumidos" (Kalil, Dario
 // Neves, Germano Petersen, Castanhel — ver CLAUDE.md "Totais Rampa não
 // bateram...") nunca ia ter 100% de confiabilidade, e um ajuste de
@@ -799,9 +723,10 @@ async function listarIdsContasPagar(accessToken, dataIni, dataFim) {
 // integral sem título correspondente, nota marcada "futura" mas que já é
 // entrega de verdade). Decisão do Rafael: nesse primeiro momento o DRE olha
 // só nota/faturamento, nunca título — título fica pra quando entrarmos em
-// auditoria/balanço. Fonte: relatorio_cache (Relatório de Vendas), Rampa-only
-// (sem coluna empresa) e já auditado/corrigido (cancelamento, revalidação,
-// buracos de coleta) — não refaz nenhuma consulta na Olist aqui.
+// auditoria/balanço. Fonte: relatorio_cache (Relatório de Vendas), já
+// multi-empresa (coluna empresa — ver migration de 2026-11-24) e já
+// auditado/corrigido (cancelamento, revalidação, buracos de coleta) — não
+// refaz nenhuma consulta na Olist aqui.
 //   - tipo='produto'   -> leaf 1.01.01 Produtos vendidos (Danfe)
 //   - tipo='servico'   -> leaf 1.01.03 Serviços prestados (relatorio_cache já
 //     filtra "apoio em vendas" na própria coleta — ver DESCRICOES_SERVICO_EXCLUIDAS
@@ -814,27 +739,32 @@ async function listarIdsContasPagar(accessToken, dataIni, dataFim) {
 // titulo_id = id_olist da própria nota (estável e único por tipo — checado
 // ao vivo em 2026-11-23: produto/serviço/devolução de outubro, 0 nulos, sem
 // duplicata), então o upsert é idempotente por NF, nunca por mês agregado.
-const CATEGORIA_PRODUTO_DANFE_RAMPA = 361455283; // "1.01.01 Produtos vendidos (Danfe)"
-const CATEGORIA_SERVICO_PRESTADO_RAMPA = 361455286; // "1.01.03 Serviços prestados"
-const CATEGORIA_DEVOLUCAO_RAMPA = 361455287; // "1.01.04 (-) Devoluções e estornos"
+// categoria_id de cada leaf é diferente por empresa na Tiny (confirmado ao
+// vivo, 2026-11-24: Danfe Rampa=361455283/TF=358506367, Serviços
+// Rampa=361455286/TF=358506432, Devoluções Rampa=361455287/TF=360821669) —
+// por isso nunca usar um id fixo, sempre resolver pelo codigo_leaf (mesmo
+// texto nas duas empresas) contra o `categorias` da empresa em questão.
 const CODIGO_GRUPO_VENDA_INTERNA = "1.01";
 
-// Grupos 1.02 (Outros Serviços) e 1.03 (Outras Receitas) — decisão do Rafael
-// (2026-11-24): não vêm mais de contas a receber (ainda sem fonte definida
-// pra esses dois, fica zerado por enquanto até decidir como buscar). Título
-// que já tivesse caído aqui antes é apagado, pelo mesmo motivo do grupo 1.01.
-const GRUPOS_RECEITA_SEM_FONTE_AUTOMATICA = ["1.02", "1.03"];
+function categoriaIdPorLeaf(categorias, leaf) {
+  for (const [id, info] of Object.entries(categorias)) {
+    if (info.codigo_leaf === leaf) return Number(id);
+  }
+  return null;
+}
 
-async function listarRelatorioCache(tipo, dataIniIso, dataFimIso) {
+async function listarRelatorioCache(empresa, tipo, dataIniIso, dataFimIso) {
   const r = await httpsRequest("GET", supaHost(),
-    `/rest/v1/relatorio_cache?tipo=eq.${tipo}&data=gte.${dataIniIso}&data=lte.${dataFimIso}&select=id_olist,valor,cliente_razao_social,cliente_cnpj,data`,
+    `/rest/v1/relatorio_cache?tipo=eq.${tipo}&empresa=eq.${empresa}&data=gte.${dataIniIso}&data=lte.${dataFimIso}&select=id_olist,valor,cliente_razao_social,cliente_cnpj,data`,
     null, supaHeaders);
   const linhas = parseJSON(r.text);
   return Array.isArray(linhas) ? linhas : [];
 }
 
-async function sincronizarReceitaPorNotasFiscais(empresa, periodos) {
-  if (empresa !== "rampa") return; // relatorio_cache (Relatório de Vendas) é Rampa-only
+async function sincronizarReceitaPorNotasFiscais(empresa, periodos, categorias) {
+  const categoriaProduto = categoriaIdPorLeaf(categorias, "1.01.01");
+  const categoriaServico = categoriaIdPorLeaf(categorias, "1.01.03");
+  const categoriaDevolucao = categoriaIdPorLeaf(categorias, "1.01.04");
   for (const p of periodos) {
     // Limpa título de contas a receber que já tenha sido classificado em 1.01
     // numa execução anterior e cujo ID não voltou a aparecer na janela de
@@ -854,9 +784,9 @@ async function sincronizarReceitaPorNotasFiscais(empresa, periodos) {
     const dataIni = formatarData(p.ano, p.mes, 1);
     const dataFim = formatarData(p.ano, p.mes, ultimoDiaDoMes(p.ano, p.mes));
     const [produtos, servicos, devolucoes] = await Promise.all([
-      listarRelatorioCache("produto", dataIni, dataFim),
-      listarRelatorioCache("servico", dataIni, dataFim),
-      listarRelatorioCache("devolucao", dataIni, dataFim),
+      listarRelatorioCache(empresa, "produto", dataIni, dataFim),
+      listarRelatorioCache(empresa, "servico", dataIni, dataFim),
+      listarRelatorioCache(empresa, "devolucao", dataIni, dataFim),
     ]);
     // Venda da Rampa pro cliente TF (mesmo CNPJ_TF usado no CMV — ver CLAUDE.md
     // "Intercompany Rampa↔TF") marca intercompany sozinha, igual já fazia o
@@ -864,19 +794,19 @@ async function sincronizarReceitaPorNotasFiscais(empresa, periodos) {
     // automático (ex: NF 013495, R$0,50, cliente "TF Comercio e Serviços").
     const linhas = [
       ...produtos.map(l => ({
-        ano: p.ano, mes: p.mes, codigo_grupo: CODIGO_GRUPO_VENDA_INTERNA, categoria_id: CATEGORIA_PRODUTO_DANFE_RAMPA,
+        ano: p.ano, mes: p.mes, codigo_grupo: CODIGO_GRUPO_VENDA_INTERNA, categoria_id: categoriaProduto,
         origem: "relatorio_cache", regime: "competencia", titulo_tipo: "nf_produto", titulo_id: Number(l.id_olist),
         valor: Number(l.valor) || 0, descricao: l.cliente_razao_social || null, data_emissao: l.data || null,
         intercompany: limparCnpj(l.cliente_cnpj) === CNPJ_TF,
       })),
       ...servicos.map(l => ({
-        ano: p.ano, mes: p.mes, codigo_grupo: CODIGO_GRUPO_VENDA_INTERNA, categoria_id: CATEGORIA_SERVICO_PRESTADO_RAMPA,
+        ano: p.ano, mes: p.mes, codigo_grupo: CODIGO_GRUPO_VENDA_INTERNA, categoria_id: categoriaServico,
         origem: "relatorio_cache", regime: "competencia", titulo_tipo: "nf_servico", titulo_id: Number(l.id_olist),
         valor: Number(l.valor) || 0, descricao: l.cliente_razao_social || null, data_emissao: l.data || null,
         intercompany: limparCnpj(l.cliente_cnpj) === CNPJ_TF,
       })),
       ...devolucoes.map(l => ({
-        ano: p.ano, mes: p.mes, codigo_grupo: CODIGO_GRUPO_VENDA_INTERNA, categoria_id: CATEGORIA_DEVOLUCAO_RAMPA,
+        ano: p.ano, mes: p.mes, codigo_grupo: CODIGO_GRUPO_VENDA_INTERNA, categoria_id: categoriaDevolucao,
         origem: "relatorio_cache", regime: "competencia", titulo_tipo: "devolucao", titulo_id: Number(l.id_olist),
         valor: -(Number(l.valor) || 0), descricao: l.cliente_razao_social || null, data_emissao: l.data || null,
         intercompany: limparCnpj(l.cliente_cnpj) === CNPJ_TF,
@@ -938,19 +868,6 @@ async function executarSyncDiario(req, res) {
     const mesAtual = { ano: hoje.getFullYear(), mes: hoje.getMonth() + 1 };
     const mesAnterior = mesAlvoAnterior(mesAtual.ano, mesAtual.mes);
     const periodos = [mesAtual, mesAnterior]; // reprocessa os 2 últimos meses, não assume mês fechado como imutável
-
-    // Mapa numero_rps -> id de nota de serviço, pra detectar e excluir
-    // "Serviço de apoio em vendas" (ver buscarMapaRpsParaId acima) — busca 1x
-    // por execução, numa janela um pouco mais larga que os 2 meses
-    // reprocessados (a nota de serviço referenciada pode ter sido emitida
-    // perto da virada do mês).
-    const janelaRpsIni = addMeses(mesAnterior.ano, mesAnterior.mes, -1);
-    const janelaRpsFim = addMeses(mesAtual.ano, mesAtual.mes, 1);
-    const mapaRpsParaId = await buscarMapaRpsParaId(tokenV2,
-      formatarDataBR(janelaRpsIni.ano, janelaRpsIni.mes, 1),
-      formatarDataBR(janelaRpsFim.ano, janelaRpsFim.mes, ultimoDiaDoMes(janelaRpsFim.ano, janelaRpsFim.mes)));
-    const cacheDescricaoServico = new Map(); // id nota serviço -> descrição
-    const cacheDataEmissaoNf = new Map(); // número NF -> {ano, mes} | null
 
     // Custo pro CMV: nunca busca na Olist aqui (ver comentário em cima de
     // calcularCmvNota) — lê o custo atual de todo o catálogo de uma vez e o
@@ -1035,87 +952,30 @@ async function executarSyncDiario(req, res) {
       lote = [];
     }
 
+    // Receita nunca mais é classificada por título de contas a receber —
+    // decisão do Rafael (2026-11-24): "contas a receber... não devem estar
+    // aí... combinamos que apenas contas a pagar estarão nesse primeiro
+    // momento, pois receitas virão das notas". Cobre não só o grupo 1.01
+    // (que já tinha saído daqui em 2026-11-23, só pra Rampa) como QUALQUER
+    // classificação de receber por categoria, nas duas empresas — inclusive
+    // a "Olist Conta Digital" (transferência bancária importada automática,
+    // nunca uma venda) que aparecia como "não classificado" na TF. Por isso
+    // nenhuma chamada à Tiny é feita aqui: só limpa qualquer linha que uma
+    // execução anterior (antes dessa mudança, ou do fix de 2026-11-23 pro
+    // grupo 1.01) tenha gravado em financeiro_mensal pelo caminho
+    // título-based — upsert não apaga sozinho, então sem isso o título
+    // ficaria preso lá pra sempre.
     while (filaReceita.length > 0 && (Date.now() - inicioExecucao) < ORCAMENTO_TOTAL_MS) {
       const item = filaReceita.shift();
-      await sleep(600);
       try {
-        const rd = await httpsRequest("GET", "api.tiny.com.br", `/public-api/v3/contas-receber/${item.id}`, null, { Authorization: "Bearer " + accessToken });
-        if (rd.status !== 200) throw new Error(`contas-receber/${item.id}: HTTP ${rd.status} - ${rd.text.slice(0, 200)}`);
-        const d = parseJSON(rd.text);
-        const catId = d.categoria?.id;
-        const cat = catId != null ? categorias[catId] : null;
-        if (!(cat && cat.forca_manual)) {
-          const codigoGrupo = cat?.codigo_grupo || null;
-          const linha = codigoGrupo ? planoContas[codigoGrupo] : null;
-          if (empresa === "rampa" && codigoGrupo === CODIGO_GRUPO_VENDA_INTERNA) {
-            // Grupo 1.01 (Venda Interna) da Rampa agora vem direto da nota
-            // fiscal (sincronizarReceitaPorNotasFiscais, relatorio_cache), não
-            // mais do título — decisão do Rafael (2026-11-23): "o que deve
-            // entrar no DRE é valor total da NF, não o título". Título que já
-            // tivesse caído aqui numa execução anterior precisa ser apagado,
-            // senão duplica a receita (título + NF).
-            await excluirMensal(empresa, "receber", item.id);
-          } else if (GRUPOS_RECEITA_SEM_FONTE_AUTOMATICA.includes(codigoGrupo)) {
-            await excluirMensal(empresa, "receber", item.id);
-          } else if (!linha || linha.fonte_tiny === "contas_receber") {
-            // "Serviço de apoio em vendas" (comissão, não venda de verdade —
-            // decisão do Rafael, 2026-11-23): costuma vir com categoria
-            // "Serviços prestados", mas também aparece SEM categoria nenhuma
-            // na Tiny (confirmado ao vivo, 2026-11-23 — títulos da Elite/
-            // Tubogran/Meta Caixas/Millato com categoria=null, mesmo RPS de
-            // "apoio em vendas") — por isso checa pelo numeroDocumento
-            // referenciar um RPS conhecido, não pela categoria. O mapa já
-            // está em memória (buscarMapaRpsParaId acima), então o Map.get é
-            // de graça; só busca o detalhe (1 chamada) quando bate um RPS.
-            let excluidoApoioEmVendas = false;
-            const numeroRps = String(parseInt(String(d.numeroDocumento || "").split("/")[0], 10) || "");
-            const idNotaServico = numeroRps ? mapaRpsParaId.get(numeroRps) : null;
-            if (idNotaServico) {
-              const descricaoServico = await buscarDescricaoNotaServicoPorId(tokenV2, idNotaServico, cacheDescricaoServico);
-              excluidoApoioEmVendas = ehServicoApoioEmVendas(descricaoServico);
-            }
-
-            if (excluidoApoioEmVendas) {
-              // Título pode já ter sido gravado por uma execução anterior
-              // (antes dessa exclusão existir, ou com categoria diferente) —
-              // upsert não apaga, então apaga explicitamente aqui.
-              await excluirMensal(empresa, "receber", item.id);
-            } else {
-              // Receita conta pela emissão da NF, nunca pela emissão/registro
-              // do título — decisão do Rafael (2026-11-23): venda parcelada
-              // no cartão gera um título novo por parcela, cada um com sua
-              // própria "data" (quando aquela parcela foi registrada na
-              // Tiny, não a emissão real da venda). Resolve a NF referenciada
-              // no histórico ("Ref. a NF nº X") e usa a emissão dela quando
-              // achar; sem referência ou sem achar a NF, mantém o mês da
-              // busca (fallback).
-              let anoReceita = item.ano, mesReceita = item.mes;
-              const matchNf = PADRAO_HISTORICO_REF_NF.exec(d.historico || "");
-              if (matchNf) {
-                const emissaoNf = await buscarDataEmissaoNotaPorNumero(tokenV2, matchNf[1], cacheDataEmissaoNf);
-                if (emissaoNf) { anoReceita = emissaoNf.ano; mesReceita = emissaoNf.mes; }
-              }
-
-              const intercompany = empresa === "rampa" && String(d.cliente?.id) === ID_CLIENTE_TF_NA_RAMPA;
-              const descricao = d.cliente?.nome || d.historico || null;
-              lote.push({
-                ano: anoReceita, mes: mesReceita, codigo_grupo: codigoGrupo, categoria_id: catId ?? null,
-                origem: "tiny_competencia", regime: "competencia",
-                titulo_tipo: "receber", titulo_id: item.id, valor: Number(d.valor) || 0,
-                data_emissao: d.data || null, data_pagamento: d.dataLiquidacao || null,
-                intercompany, descricao, historico: d.historico || null,
-              });
-            }
-          }
-        }
+        await excluirMensal(empresa, "receber", item.id);
       } catch (erroRede) {
-        console.error(`[financeiro-sync] erro no título contas-receber ${item.id}: ${erroRede.message}`);
+        console.error(`[financeiro-sync] erro ao excluir título contas-receber ${item.id}: ${erroRede.message}`);
         item.tentativas = (item.tentativas || 0) + 1;
         if (item.tentativas <= MAX_TENTATIVAS_POR_TITULO) filaReceita.push(item);
       }
       processadosDesdeCheckpoint++;
       if (processadosDesdeCheckpoint >= SALVAR_PROGRESSO_A_CADA) {
-        await salvarLote();
         status.pendentes.receita = filaReceita;
         status.processados = status.total - filaReceita.length - filaPagar.length;
         await salvarStatusSync(empresa, status);
@@ -1154,7 +1014,15 @@ async function executarSyncDiario(req, res) {
           const descricao = d.contato?.nome || d.historico || null;
           if (linha && linha.regime === "competencia" && linha.fonte_tiny === "contas_pagar") {
             // Imposto sobre venda (5.01): conta no mês da dataCompetencia real, não do vencimento usado pra listar.
-            if (d.dataCompetencia === formatarYYYYMM(item.ano, item.mes)) {
+            // Quando a classificação veio do histórico (categoria não existe na Tiny — ver acima), a Tiny
+            // também nunca preencheu dataCompetencia pra esse título (achado ao vivo, TF, 2026-11-24: títulos
+            // "DAS - SIMPLES NACIONAL" pagos sem categoria E sem dataCompetencia) — exigir o match exato fazia
+            // o título nunca bater em nenhum período testado e desaparecer sem erro nenhum, nem como "não
+            // classificado" (nunca chegava a entrar em `lote`). Nesse caso usamos dataVencimento (campo real,
+            // já usado pra decidir em qual janela/período esse título foi buscado) como aproximação de
+            // competência, só pra esse caminho de stopgap.
+            const competenciaReal = d.dataCompetencia || String(d.dataVencimento || "").slice(0, 7);
+            if (competenciaReal === formatarYYYYMM(item.ano, item.mes)) {
               lote.push({
                 ano: item.ano, mes: item.mes, codigo_grupo: codigoGrupo, categoria_id: viaHistorico ? null : catId,
                 origem: viaHistorico ? "tiny_historico" : "tiny_competencia", regime: "competencia",
@@ -1247,7 +1115,7 @@ async function executarSyncDiario(req, res) {
       // "o que o Relatório de Vendas já sabe pra essa NF" — nunca fica errado,
       // só fica incompleto até o sync de Relatórios (relatorio_cache) trazer
       // os dias que faltam do mês em andamento.
-      await sincronizarReceitaPorNotasFiscais(empresa, periodos);
+      await sincronizarReceitaPorNotasFiscais(empresa, periodos, categorias);
       status.em_andamento = false;
       status.concluido_em = new Date().toISOString();
       await salvarStatusSync(empresa, status);

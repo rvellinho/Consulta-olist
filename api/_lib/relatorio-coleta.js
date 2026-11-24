@@ -4,7 +4,16 @@
 // cron automático, período curto, roda sozinho no servidor).
 const https = require("https");
 
-const TOKEN_V2 = process.env.OLIST_TOKEN;
+// Multi-empresa (2026-11-24): cada função que fala com a Olist V2 recebe
+// `tokenV2` por parâmetro (vem de getConfigEmpresa(empresa).tokenV2 em quem
+// chama) em vez de ler um token fixo daqui — antes só existia a Rampa. Cada
+// função que fala com relatorio_cache/relatorio_cache_status recebe `empresa`
+// pelo mesmo motivo (ver migration que adicionou a coluna `empresa` nas duas
+// tabelas). buscarMapeamentoResponsavel/buscarAlteracoes continuam sem
+// `empresa` de propósito — são config da aba Relatórios, que continua
+// Rampa-only na tela; pra TF (usado só internamente pelo DRE) o campo
+// `responsavel` gravado no cache fica sem sentido real, mas não é lido por
+// nada hoje.
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
 const supaHeaders = {
@@ -147,11 +156,11 @@ async function buscarAlteracoes(tipoNota) {
 
 // ── Cliente: código + razão social (pra cache), com memoização por CNPJ ──
 const cacheClientePorCnpj = {};
-async function buscarClientePorCnpj(cnpj) {
+async function buscarClientePorCnpj(tokenV2, cnpj) {
   const limpo = String(cnpj || "").replace(/\D/g, "");
   if (!limpo) return null;
   if (cacheClientePorCnpj[limpo]) return cacheClientePorCnpj[limpo];
-  const body = new URLSearchParams({ token: TOKEN_V2, formato: "JSON", cpf_cnpj: limpo }).toString();
+  const body = new URLSearchParams({ token: tokenV2, formato: "JSON", cpf_cnpj: limpo }).toString();
   const r = await httpsRequest("POST", "api.tiny.com.br", "/api2/contatos.pesquisa.php", body,
     { "Content-Type": "application/x-www-form-urlencoded" });
   const data = parseJSON(r.text);
@@ -162,9 +171,9 @@ async function buscarClientePorCnpj(cnpj) {
 }
 
 // ── Notas fiscais (produto/devolução) ────────────────────────────────────
-async function buscarPaginaNotas(tipoNota, dataInicial, dataFinal, pagina) {
+async function buscarPaginaNotas(tokenV2, tipoNota, dataInicial, dataFinal, pagina) {
   const body = new URLSearchParams({
-    token: TOKEN_V2, formato: "JSON",
+    token: tokenV2, formato: "JSON",
     tipoNota, dataInicial, dataFinal, pagina: String(pagina),
   }).toString();
   const r = await httpsRequest("POST", "api.tiny.com.br",
@@ -178,11 +187,11 @@ async function buscarPaginaNotas(tipoNota, dataInicial, dataFinal, pagina) {
   return data.retorno?.notas_fiscais || [];
 }
 
-async function buscarTodasNotas(tipoNota, dataInicial, dataFinal) {
+async function buscarTodasNotas(tokenV2, tipoNota, dataInicial, dataFinal) {
   const todas = [];
   let pagina = 1;
   while (true) {
-    const lista = await buscarPaginaNotas(tipoNota, dataInicial, dataFinal, pagina);
+    const lista = await buscarPaginaNotas(tokenV2, tipoNota, dataInicial, dataFinal, pagina);
     lista.forEach(n => { if (n.nota_fiscal) todas.push(n.nota_fiscal); });
     if (lista.length < 100) break;
     pagina++;
@@ -191,8 +200,8 @@ async function buscarTodasNotas(tipoNota, dataInicial, dataFinal) {
   return todas.filter(n => !SITUACOES_INVALIDAS.includes(String(n.situacao)));
 }
 
-async function buscarDetalheNotaFiscal(id) {
-  const body = new URLSearchParams({ token: TOKEN_V2, id: String(id), formato: "JSON" }).toString();
+async function buscarDetalheNotaFiscal(tokenV2, id) {
+  const body = new URLSearchParams({ token: tokenV2, id: String(id), formato: "JSON" }).toString();
   const r = await httpsRequest("POST", "api.tiny.com.br", "/api2/nota.fiscal.obter.php",
     body, { "Content-Type": "application/x-www-form-urlencoded" });
   return parseJSON(r.text).retorno?.nota_fiscal || null;
@@ -204,9 +213,9 @@ function temMarcador(notaOuPedido, marcador) {
 }
 
 // ── Notas de serviço ──────────────────────────────────────────────────────
-async function buscarPaginaNotasServico(dataInicial, dataFinal, pagina) {
+async function buscarPaginaNotasServico(tokenV2, dataInicial, dataFinal, pagina) {
   const body = new URLSearchParams({
-    token: TOKEN_V2, formato: "JSON",
+    token: tokenV2, formato: "JSON",
     dataInicial, dataFinal, pagina: String(pagina),
   }).toString();
   const r = await httpsRequest("POST", "api.tiny.com.br",
@@ -220,11 +229,11 @@ async function buscarPaginaNotasServico(dataInicial, dataFinal, pagina) {
   return data.retorno?.notas_servico || [];
 }
 
-async function buscarTodasNotasServico(dataInicial, dataFinal) {
+async function buscarTodasNotasServico(tokenV2, dataInicial, dataFinal) {
   const todas = [];
   let pagina = 1;
   while (true) {
-    const lista = await buscarPaginaNotasServico(dataInicial, dataFinal, pagina);
+    const lista = await buscarPaginaNotasServico(tokenV2, dataInicial, dataFinal, pagina);
     lista.forEach(n => { if (n.nota_servico) todas.push(n.nota_servico); });
     if (lista.length < 100) break;
     pagina++;
@@ -233,17 +242,17 @@ async function buscarTodasNotasServico(dataInicial, dataFinal) {
   return todas.filter(n => !SITUACOES_INVALIDAS_SERVICO.includes(String(n.situacao)));
 }
 
-async function buscarDetalheNotaServico(id) {
-  const body = new URLSearchParams({ token: TOKEN_V2, id: String(id), formato: "JSON" }).toString();
+async function buscarDetalheNotaServico(tokenV2, id) {
+  const body = new URLSearchParams({ token: tokenV2, id: String(id), formato: "JSON" }).toString();
   const r = await httpsRequest("POST", "api.tiny.com.br", "/api2/nota.servico.obter.php",
     body, { "Content-Type": "application/x-www-form-urlencoded" });
   return parseJSON(r.text).retorno?.nota_fiscal || null;
 }
 
 // ── Pedidos (representação / aguia) ──────────────────────────────────────
-async function buscarPaginaPedidos(situacao, marcador, dataInicial, dataFinal, pagina) {
+async function buscarPaginaPedidos(tokenV2, situacao, marcador, dataInicial, dataFinal, pagina) {
   const body = new URLSearchParams({
-    token: TOKEN_V2, formato: "JSON",
+    token: tokenV2, formato: "JSON",
     situacao, marcador, dataInicial, dataFinal, pagina: String(pagina),
   }).toString();
   const r = await httpsRequest("POST", "api.tiny.com.br",
@@ -257,11 +266,11 @@ async function buscarPaginaPedidos(situacao, marcador, dataInicial, dataFinal, p
   return data.retorno?.pedidos || [];
 }
 
-async function buscarTodosPedidos(situacao, marcador, dataInicial, dataFinal) {
+async function buscarTodosPedidos(tokenV2, situacao, marcador, dataInicial, dataFinal) {
   const todos = [];
   let pagina = 1;
   while (true) {
-    const lista = await buscarPaginaPedidos(situacao, marcador, dataInicial, dataFinal, pagina);
+    const lista = await buscarPaginaPedidos(tokenV2, situacao, marcador, dataInicial, dataFinal, pagina);
     lista.forEach(p => { if (p.pedido) todos.push(p.pedido); });
     if (lista.length < 100) break;
     pagina++;
@@ -270,8 +279,8 @@ async function buscarTodosPedidos(situacao, marcador, dataInicial, dataFinal) {
   return todos;
 }
 
-async function buscarDetalhePedido(id) {
-  const body = new URLSearchParams({ token: TOKEN_V2, id: String(id), formato: "JSON" }).toString();
+async function buscarDetalhePedido(tokenV2, id) {
+  const body = new URLSearchParams({ token: tokenV2, id: String(id), formato: "JSON" }).toString();
   const r = await httpsRequest("POST", "api.tiny.com.br", "/api2/pedido.obter.php",
     body, { "Content-Type": "application/x-www-form-urlencoded" });
   return parseJSON(r.text).retorno?.pedido || null;
@@ -286,9 +295,9 @@ function extrairReferenciaOrigem(obs) {
   return { numero: mNumero[1], data: mData[1], chave: mChave ? mChave[1] : null };
 }
 
-async function buscarVendedorDaNotaOrigem(referencia) {
+async function buscarVendedorDaNotaOrigem(tokenV2, referencia) {
   const body = new URLSearchParams({
-    token: TOKEN_V2, formato: "JSON",
+    token: tokenV2, formato: "JSON",
     tipoNota: "S", numero: referencia.numero,
     dataInicial: referencia.data, dataFinal: referencia.data,
   }).toString();
@@ -308,19 +317,19 @@ async function buscarVendedorDaNotaOrigem(referencia) {
 // Substitui (apaga e recria) as linhas de um tipo dentro do período informado
 // — garante que notas que deixaram de existir/valer (ex: devolução cancelada,
 // pedido "aguia" que ganhou NF própria) somem do relatório na próxima sync.
-async function salvarNoCache(tipo, dataInicial, dataFinal, linhas) {
+async function salvarNoCache(empresa, tipo, dataInicial, dataFinal, linhas) {
   const supaHost = SUPABASE_URL.replace("https://", "");
   const isoInicial = paraIso(dataInicial);
   const isoFinal = paraIso(dataFinal);
 
   await httpsRequest("DELETE", supaHost,
-    `/rest/v1/relatorio_cache?tipo=eq.${tipo}&data=gte.${isoInicial}&data=lte.${isoFinal}`,
+    `/rest/v1/relatorio_cache?tipo=eq.${tipo}&empresa=eq.${empresa}&data=gte.${isoInicial}&data=lte.${isoFinal}`,
     null, { ...supaHeaders, Prefer: "return=minimal" });
 
   if (linhas.length > 0) {
     const mapeamento = await buscarMapeamentoResponsavel();
     const payload = JSON.stringify(linhas.map(l => ({
-      tipo,
+      tipo, empresa,
       numero_nota: String(l.numero),
       id_olist: l.id ? String(l.id) : null,
       data: paraIso(l.data),
@@ -335,15 +344,15 @@ async function salvarNoCache(tipo, dataInicial, dataFinal, linhas) {
       { ...supaHeaders, "Content-Length": Buffer.byteLength(payload), Prefer: "resolution=merge-duplicates,return=minimal" });
   }
 
-  await atualizarStatusCache(isoInicial);
+  await atualizarStatusCache(empresa, isoInicial);
 }
 
 // Guarda a data mais antiga já sincronizada (nunca "recua" o valor pra uma
 // data mais recente, mesmo que um sync posterior cubra um período menor).
-async function atualizarStatusCache(isoInicialDesteSync) {
+async function atualizarStatusCache(empresa, isoInicialDesteSync) {
   const supaHost = SUPABASE_URL.replace("https://", "");
   const r = await httpsRequest("GET", supaHost,
-    "/rest/v1/relatorio_cache_status?id=eq.1&select=sincronizado_desde",
+    `/rest/v1/relatorio_cache_status?empresa=eq.${empresa}&select=sincronizado_desde`,
     null, supaHeaders);
   const atual = parseJSON(r.text)?.[0]?.sincronizado_desde || null;
   const novoSincronizadoDesde = (!atual || isoInicialDesteSync < atual) ? isoInicialDesteSync : atual;
@@ -352,7 +361,7 @@ async function atualizarStatusCache(isoInicialDesteSync) {
     ultima_atualizacao: new Date().toISOString(),
     sincronizado_desde: novoSincronizadoDesde,
   });
-  await httpsRequest("PATCH", supaHost, "/rest/v1/relatorio_cache_status?id=eq.1",
+  await httpsRequest("PATCH", supaHost, `/rest/v1/relatorio_cache_status?empresa=eq.${empresa}`,
     payload, { ...supaHeaders, "Content-Length": Buffer.byteLength(payload), Prefer: "return=minimal" });
 }
 
@@ -364,61 +373,61 @@ async function atualizarStatusCache(isoInicialDesteSync) {
 // nota a nota — por isso dá pra rodar numa janela bem mais larga (semanas)
 // sem pesar no tempo de execução. Ver CLAUDE.md "Relatório de Vendas" pro
 // caso real que motivou isso (nota 013461, R$97, cancelada depois do sync).
-async function buscarIdsCache(tipo, dataInicial, dataFinal) {
+async function buscarIdsCache(empresa, tipo, dataInicial, dataFinal) {
   const supaHost = SUPABASE_URL.replace("https://", "");
   const isoInicial = paraIso(dataInicial);
   const isoFinal = paraIso(dataFinal);
   const r = await httpsRequest("GET", supaHost,
-    `/rest/v1/relatorio_cache?tipo=eq.${tipo}&data=gte.${isoInicial}&data=lte.${isoFinal}&select=id_olist`,
+    `/rest/v1/relatorio_cache?tipo=eq.${tipo}&empresa=eq.${empresa}&data=gte.${isoInicial}&data=lte.${isoFinal}&select=id_olist`,
     null, supaHeaders);
   const data = parseJSON(r.text);
   return (Array.isArray(data) ? data : []).map(l => l.id_olist).filter(Boolean);
 }
 
-async function removerDoCachePorId(tipo, ids) {
+async function removerDoCachePorId(empresa, tipo, ids) {
   if (!ids.length) return;
   const supaHost = SUPABASE_URL.replace("https://", "");
   const lista = ids.map(id => `"${id}"`).join(",");
   await httpsRequest("DELETE", supaHost,
-    `/rest/v1/relatorio_cache?tipo=eq.${tipo}&id_olist=in.(${lista})`,
+    `/rest/v1/relatorio_cache?tipo=eq.${tipo}&empresa=eq.${empresa}&id_olist=in.(${lista})`,
     null, { ...supaHeaders, Prefer: "return=minimal" });
 }
 
 // tipoCache: "produto" | "devolucao"; tipoNotaOlist: "S" | "E" — reaproveita
 // buscarTodasNotas, que já filtra por situação válida na própria listagem.
-async function revalidarNotas(tipoCache, tipoNotaOlist, dataInicial, dataFinal) {
-  const validas = await buscarTodasNotas(tipoNotaOlist, dataInicial, dataFinal);
+async function revalidarNotas(tokenV2, empresa, tipoCache, tipoNotaOlist, dataInicial, dataFinal) {
+  const validas = await buscarTodasNotas(tokenV2, tipoNotaOlist, dataInicial, dataFinal);
   const idsValidos = new Set(validas.map(n => String(n.id)));
-  const idsCache = await buscarIdsCache(tipoCache, dataInicial, dataFinal);
+  const idsCache = await buscarIdsCache(empresa, tipoCache, dataInicial, dataFinal);
   const idsFicticios = idsCache.filter(id => !idsValidos.has(String(id)));
-  await removerDoCachePorId(tipoCache, idsFicticios);
+  await removerDoCachePorId(empresa, tipoCache, idsFicticios);
   return idsFicticios.length;
 }
 
-async function revalidarNotasServico(dataInicial, dataFinal) {
-  const validas = await buscarTodasNotasServico(dataInicial, dataFinal);
+async function revalidarNotasServico(tokenV2, empresa, dataInicial, dataFinal) {
+  const validas = await buscarTodasNotasServico(tokenV2, dataInicial, dataFinal);
   const idsValidos = new Set(validas.map(n => String(n.id)));
-  const idsCache = await buscarIdsCache("servico", dataInicial, dataFinal);
+  const idsCache = await buscarIdsCache(empresa, "servico", dataInicial, dataFinal);
   const idsFicticios = idsCache.filter(id => !idsValidos.has(String(id)));
-  await removerDoCachePorId("servico", idsFicticios);
+  await removerDoCachePorId(empresa, "servico", idsFicticios);
   return idsFicticios.length;
 }
 
 // tipoCache: "representacao" | "aguia" — reaproveita buscarTodosPedidos
 // (situação "faturado" + marcador), sem buscar detalhe pedido a pedido.
-async function revalidarPedidos(tipoCache, marcador, margemDias, dataInicial, dataFinal) {
+async function revalidarPedidos(tokenV2, empresa, tipoCache, marcador, margemDias, dataInicial, dataFinal) {
   const inicioBuscado = somarDiasBR(dataInicial, -margemDias);
   const fimBuscado = somarDiasBR(dataFinal, margemDias);
-  const validos = await buscarTodosPedidos("faturado", marcador, inicioBuscado, fimBuscado);
+  const validos = await buscarTodosPedidos(tokenV2, "faturado", marcador, inicioBuscado, fimBuscado);
   const idsValidos = new Set(validos.map(p => String(p.id)));
-  const idsCache = await buscarIdsCache(tipoCache, dataInicial, dataFinal);
+  const idsCache = await buscarIdsCache(empresa, tipoCache, dataInicial, dataFinal);
   const idsFicticios = idsCache.filter(id => !idsValidos.has(String(id)));
-  await removerDoCachePorId(tipoCache, idsFicticios);
+  await removerDoCachePorId(empresa, tipoCache, idsFicticios);
   return idsFicticios.length;
 }
 
 module.exports = {
-  TOKEN_V2, SUPABASE_URL, SUPABASE_KEY, supaHeaders,
+  SUPABASE_URL, SUPABASE_KEY, supaHeaders,
   DESCRICOES_SERVICO_EXCLUIDAS, FINALIDADES_DEVOLUCAO,
   MARCADOR_REPRESENTACAO, MARGEM_DIAS_REPRESENTACAO,
   MARCADOR_AGUIA, MARGEM_DIAS_AGUIA, MARCADOR_VENDA_FUTURA_EXCLUIR,

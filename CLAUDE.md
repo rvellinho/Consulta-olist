@@ -927,11 +927,9 @@ do zero pra fonte direta.
     (`relatorio_cache.cliente_cnpj`) contra `CNPJ_TF` — mesmo padrão já usado no CMV (ver
     "Intercompany Rampa↔TF"). Sem isso a receita por NF perderia esse apontamento (achado testando a
     NF 013495, R$0,50, cliente TF).
-- **Título de contas a receber não gera mais linha em 1.01 pra Rampa**: no loop de contas a receber,
-  um título cuja categoria resolve pra `codigo_grupo='1.01'` agora é só `excluirMensal`'d (nunca
-  `lote.push`), pra não duplicar a NF já contada pela função acima. Grupos 1.02/1.03 (outras receitas
-  operacionais/financeiras — comissão, frete CTe, juros — que não são "venda interna" e não têm NF
-  equivalente) continuam normalmente por título, sem mudança.
+- **Título de contas a receber nunca mais gera linha nenhuma de receita** (ver "Receita por título
+  eliminada por completo" logo abaixo, decisão de 2026-11-24 que generalizou isto além do grupo 1.01):
+  todo título do loop de contas a receber é só `excluirMensal`'d, incondicionalmente.
 - **Resolve os três casos da investigação sem nenhum código especial**: Germano Petersen (NF do dia
   1/10, nunca teve problema — só o título que ficava fora da janela por causa da emissão num dia
   diferente), Dario Neves (NF do dia 9/10 marcada "nota futura", mas é a nota de entrega/remessa de
@@ -961,14 +959,63 @@ do zero pra fonte direta.
   deixa qualquer divergência futura visível e fácil de achar (basta comparar os dois caminhos), em
   vez de escondida atrás de uma única linha de ajuste.
 
-### Grupos 1.02/1.03 (Outras Receitas) ficam zerados por enquanto (decisão do Rafael, 2026-11-24)
-Continuavam vindo de contas a receber (mesma lógica título-based que 1.01 tinha antes da mudança pra
-NF). Decisão do Rafael: por enquanto não tem fonte automática definida pra esses dois — fica
-zerado (sem puxar nada) até decidir como buscar. `GRUPOS_RECEITA_SEM_FONTE_AUTOMATICA` (`api/financeiro.js`)
-lista os `codigo_grupo` desativados; título que cair neles no sync é só `excluirMensal`'d (mesmo
-padrão de "apaga explicitamente, upsert não apaga sozinho" já usado em 1.01 e no apoio-em-vendas).
-Não houve necessidade de limpar dado antigo — nunca existiu nenhum título classificado nesses dois
-grupos em `financeiro_mensal` até aqui.
+### Receita por título eliminada por completo + generalização pra TF (decisão do Rafael, 2026-11-24)
+Até aqui, só o grupo 1.01 (Venda Interna) da **Rampa** tinha saído do caminho título-based (ver
+seção acima, 2026-11-23) — grupos 1.02/1.03 continuavam vindo de contas a receber, e a TF inteira
+(1.01 incluído) ainda classificava receita por categoria do título, exatamente como a Rampa fazia
+antes da correção. Investigando lançamentos da TF (produtos R$65.062,34/serviços R$20.432,00 do
+controle gerencial do Rafael batendo só parcialmente, uma nota de serviço "Fernando Ferrari"
+aparecendo errado em PDV mesmo após corrigida a categoria na Tiny), apareceram 7-11 lançamentos
+"Olist Conta Digital" (transferência bancária importada automaticamente, nunca uma venda) somando
+R$94.000/R$40.000 (out/nov) classificados como "não classificado" em contas a receber da TF.
+Decisão final do Rafael: **"é exatamente o problema que você já resolveu pra Rampa... temos que ter
+a mesma regra para as duas. qualquer ajuste que tenhamos feito na Rampa, vale pra TF também. a
+lógica é igual"** — ou seja, não só generalizar 1.01 pra TF, mas eliminar QUALQUER classificação de
+receita por título de contas a receber, nas duas empresas (bate com a decisão original de
+2026-11-23: "receitas virão das notas", nunca de título).
+
+- **`relatorio_cache`/`relatorio_cache_status` (Rampa-only até aqui) ganharam coluna `empresa`**
+  (migration 2026-11-24, default `'rampa'` — compatibilidade com dado antigo): `relatorio_cache`
+  trocou a unique constraint de `(tipo, numero_nota)` pra `(tipo, numero_nota, empresa)`;
+  `relatorio_cache_status` trocou o `CHECK(id=1)` por unique em `empresa` (ganhou uma 2ª linha,
+  `id=2, empresa='tf'`). Toda função de `api/_lib/relatorio-coleta.js` que falava com a Olist V2
+  agora recebe `tokenV2` por parâmetro (era um `const TOKEN_V2 = process.env.OLIST_TOKEN` fixo —
+  só Rampa) e toda função que fala com as duas tabelas acima recebe `empresa`. `api/relatorios.js`
+  resolve os dois (`empresa` da query/corpo, `tokenV2` via `getConfigEmpresa(empresa)`) e propaga
+  pra cada `acao` — inclusive o cron (`?acao=sync-diario&empresa=`, novo em `vercel.json`,
+  `10 6 * * *`, logo depois do de Rampa). `buscarMapeamentoResponsavel`/`buscarAlteracoes`
+  continuam sem `empresa` de propósito — config da aba Relatórios, que segue Rampa-only na tela.
+- **Receita por NF (`sincronizarReceitaPorNotasFiscais`) generalizada**: o guard `if (empresa !==
+  "rampa") return` saiu. Os `categoria_id` de cada leaf (1.01.01/1.01.03/1.01.04) eram constantes
+  fixas da Rampa (`CATEGORIA_*_RAMPA`) — **não davam pra reaproveitar na TF**, confirmado ao vivo
+  que o `categoria_id` é diferente por empresa na Tiny (Danfe: Rampa 361455283/TF 358506367;
+  Serviços: Rampa 361455286/TF 358506432; Devoluções: Rampa 361455287/TF 360821669, mesmo
+  `codigo_leaf` texto nas duas). Troca pra `categoriaIdPorLeaf(categorias, leaf)`, que resolve o id
+  certo a cada chamada a partir do `financeiro_categorias` da própria empresa — a função ganhou um
+  3º parâmetro (`categorias`, já em escopo no `executarSyncDiario`, de `lerCategoriasMapeadas`).
+- **Grupo 1.01 (e, com a eliminação abaixo, qualquer grupo de receita) nunca mais passa por
+  categoria de título, em nenhuma empresa.** O loop de contas a receber (`filaReceita`) não bate
+  mais na Tiny: pra cada título revisitado, só chama `excluirMensal(empresa, "receber", id)`,
+  incondicional. Isso tornou **dead code** todo o mecanismo de detecção de "apoio em vendas" por
+  RPS (`buscarMapaRpsParaId`, `buscarDescricaoNotaServicoPorId`, `ehServicoApoioEmVendas`,
+  `PADRAO_HISTORICO_REF_NF`, `buscarDataEmissaoNotaPorNumero`) — a exclusão de "apoio em vendas" já
+  acontecia na origem (`DESCRICOES_SERVICO_EXCLUIDAS` em `relatorio-coleta.js`, usada por
+  `coletarServicosSync`), então o título nunca precisava dessa segunda checagem — e também
+  `GRUPOS_RECEITA_SEM_FONTE_AUTOMATICA` (1.02/1.03 zerados por decisão de 2026-11-24, agora
+  irrelevante porque NENHUM grupo de receita vem mais de título). Todo esse código foi removido.
+  Grupos 1.02/1.03 continuam sem fonte automática — zerados, igual antes, só que agora pelo mesmo
+  motivo universal (receita só vem de NF) em vez de uma exceção própria.
+- **Backfill TF**: como `relatorio_cache` da TF nunca tinha sido populado (a tela de Relatórios
+  sempre foi Rampa-only), rodado um script pontual (fora do repo) replicando a mesma coleta do sync
+  diário (produto/serviço/devolução/representação/aguia) numa janela maior (01/10 a 24/11/2026, a
+  mesma janela de 2 meses que o financeiro reprocessa) — só assim `sincronizarReceitaPorNotasFiscais`
+  teria alguma NF de TF pra ler na primeira execução depois da generalização.
+- **Mesma lição de "upsert não apaga" de novo**: título já classificado em qualquer grupo de
+  receita por uma execução anterior (qualquer empresa) fica preso lá até ser revisitado — a limpeza
+  é automática (roda a cada sync, pros títulos dentro da janela de 2 meses), mas **não** retroage
+  pra fora da janela: um mês já fora do reprocessamento (ex: setembro/2026 Rampa, 17 títulos,
+  R$44.364,49, documentado acima) fica congelado com a classificação antiga, de propósito — nunca
+  apagar isso sem repor pela via NF primeiro.
 
 ### Árvore de nível 3 agora semeia toda subcategoria conhecida com R$0 (decisão do Rafael, 2026-11-24)
 Antes, uma subcategoria (leaf) só aparecia na árvore se tivesse pelo menos um lançamento no mês —
@@ -1003,6 +1050,67 @@ dos dois status na hora do problema. Mesmo assim, reorganizado por segurança e 
 **antes** de Financeiro (custo do produto usado no CMV fica mais fresco no mesmo dia): Relatórios
 06:00 → Estoque Rampa 06:30 → Estoque TF 06:50 → Financeiro Rampa 07:40 → Financeiro TF 08:00 (todos
 UTC, `vercel.json`).
+
+### `.env` local da TF tinha um token placeholder, nunca um token real (achado e corrigido, 2026-11-24)
+`OLIST_TOKEN_TF` no `.env` local era literalmente a string `"nao-usado-localmente-so-oauth-v3"` — nunca
+um token de verdade. Só não dava problema até aqui porque localmente só o fluxo OAuth V3 (escrita) era
+exercitado pra TF; qualquer chamada V2 (leitura, usada pelos scripts de diagnóstico/backfill deste dia)
+falhava com "token inválido". A suspeita inicial (token desatualizado/divergente entre local e produção,
+pelo mesmo padrão do incidente de `SUPABASE_KEY` — ver seção de RLS abaixo) foi descartada confirmando
+via `financeiro_sync_status` que a produção já tinha token V2 funcionando. **Corrigido**: Rafael forneceu
+o token V2 real da conta Olist da TF, gravado em `.env` local.
+
+### Receita por título eliminada + generalização pra TF: rodado de ponta a ponta (2026-11-24)
+Depois do código (ver seção acima, "Receita por título eliminada por completo + generalização pra
+TF"), faltava rodar de fato e validar com dado real:
+- **Backfill do `relatorio_cache` da TF** (script isolado, fora do repo, mesma lógica de
+  `api/relatorios.js`, janela 01/10–24/11/2026): 270 notas de produto, 31 de serviço, 0
+  devolução/representação/águia. Validado contra o controle gerencial do próprio Rafael: outubro da
+  TF bateu **exatamente** — produtos R$65.062,34, serviços R$20.432,00.
+- **Sync do financeiro rodado até concluir pras duas empresas** (via `vercel dev` local, batendo no
+  mesmo Supabase de produção — rota de produção direta ficou de fora por ser ação disparada
+  manualmente contra ambiente real; local não tem essa trava e escreve na mesma base): TF
+  1145/1145, Rampa 1474/1474. Confirmado ao vivo: outubro e novembro da TF com
+  `naoClassificado: {total: 0, qtd: 0}`.
+- **4 linhas órfãs em `financeiro_mensal`** (TF, `titulo_tipo='receber'`, `codigo_grupo=null`,
+  descricao "TF COMERCIO E SERVICOS LTDA"/"Olist Conta Digital", R$40.000,00 no total,
+  `titulo_id` 400757115/402558592/403985300/404257732): sobraram de uma execução anterior (antes do
+  código novo existir) e a nova lógica não as revisitou nessa rodada — mesmo padrão de "upsert não
+  apaga" já documentado várias vezes neste arquivo. **Apagadas manualmente via SQL** (mesmo precedente
+  já estabelecido no projeto pra esse tipo de sobra).
+
+### Bug: título classificado por histórico (sem categoria na Tiny) também não tem `dataCompetencia` → desaparecia sem erro nenhum (corrigido, 2026-11-24)
+Pedido do Rafael: **"os impostos da TF estão zerados? não tem categoria, como na Rampa, mas teriam
+que estar pelo menos classificados pelo histórico, como fizemos na Rampa"** — 4 títulos "DAS - SIMPLES
+NACIONAL" da TF (ver screenshot dele da tela de Contas a Pagar da própria Tiny: vencimentos 20/08,
+21/09, 20/10, 23/11/2026, todos sem Categoria). `classificarPorHistorico` já é genérico (não é
+Rampa-only) e já tem o padrão `/SIMPLES\s*NACIONAL/i` → grupo `5.01` — mas os 4 títulos não apareciam
+em `financeiro_mensal` de jeito nenhum, nem como "não classificado" (`codigo_grupo=null`), mesmo com o
+sync da TF concluído sem erro.
+
+Causa raiz, achada consultando a Tiny direto (`GET /public-api/v3/contas-pagar/{id}` dos 4 títulos):
+grupo `5.01` (Imposto sobre venda) é `regime='competencia'` + `fonte_tiny='contas_pagar'`, e o código
+só grava a linha quando `d.dataCompetencia === <mês do período sendo reprocessado>` — pensado pra usar
+a competência real do título, não o vencimento usado só pra buscar. Isso funciona pra Rampa (confirmado
+ao vivo: os títulos de PIS/COFINS/ICMS/ISSQN da Rampa TÊM `dataCompetencia` preenchida, ex: `"2026-10"`)
+— mas os 4 títulos da TF têm `dataCompetencia: ""` (vazio) na própria Tiny. Como a condição exige
+igualdade exata com uma string vazia, nunca batia com nenhum período testado — o título simplesmente
+nunca entrava em `lote`, nem pra ser gravado como classificado nem como "não classificado". **Não é o
+mesmo bug já visto antes** (resposta de erro HTTP tratada como vazio) — aqui a chamada funcionava
+normal (HTTP 200), só que o campo em si vem vazio na Tiny pra esses títulos específicos (TF não
+preenche "Data de Competência" ao lançar o DAS; Rampa preenche).
+
+**Corrigido**: quando `d.dataCompetencia` vem vazio, usa `dataVencimento` (campo real, já usado pra
+decidir em qual janela/período esse título foi buscado) como aproximação de competência, só nesse caso
+— quando a Tiny já preenche `dataCompetencia` (caso normal da Rampa), nada muda, porque o fallback só
+entra em jogo se o campo real estiver vazio. Testado ao vivo rodando o sync da TF de novo depois do
+fix: os 2 títulos de DAS dentro da janela de 2 meses reprocessada (vencimento 20/10 e 23/11) entraram
+certinho em `5.01`, origem `tiny_historico`, com o valor certo (R$6.279,01 e R$6.494,62). Os de
+agosto/setembro ficam de fora por estarem fora da janela — esperado, mesmo escopo de sempre.
+**Lição**: um campo que "sempre vem preenchido" numa empresa pode estar vazio pra outra — a mesma
+Tiny, contas diferentes, hábitos de lançamento diferentes. Qualquer condição que dependa de um campo
+específico da Tiny merece um fallback pra quando ele vier vazio, em vez de assumir que vai estar lá
+só porque sempre esteve numa conta.
 
 ---
 
@@ -1056,7 +1164,7 @@ era exposição teórica.
 | `estoque_sync_status` | `empresa` (uma linha por empresa) | Progresso/estado da rotina diária de estoque (lista de pendentes, saltos, última conclusão, última tentativa e último erro — ver "Falha silenciosa do cron diário") |
 | `financeiro_plano_contas` | `codigo_grupo` | Mapeamento grupo→linha do DRE + regime (competência/caixa/manual) + fonte Tiny — seed manual, sem coluna `empresa` (compartilhado) |
 | `financeiro_categorias` | `categoria_id` + `empresa` | Cache de `GET /categorias-receita-despesa`, com `codigo_grupo` extraído e flag `forca_manual` |
-| `financeiro_mensal` | `empresa` + `titulo_tipo` + `titulo_id` | Uma linha por título/NF já classificado (não pré-somado — ver "Módulo Financeiro (DRE)"). `titulo_tipo`: `receber`/`pagar` (título), `cmv`/`nf_produto`/`nf_servico`/`devolucao` (direto da NF, `titulo_id=id_olist` — grupo 1.01 da Rampa é só isso, nunca `receber`), `ajuste_conciliacao` (legado, não mais gravado). Colunas `intercompany` (bool, default `false` — só vale pro caso automático de receita/CMV; pra `titulo_tipo=pagar` não é mais lido, ver `financeiro_intercompany_alocacoes`) e `descricao` (texto) — ver "Intercompany Rampa↔TF" |
+| `financeiro_mensal` | `empresa` + `titulo_tipo` + `titulo_id` | Uma linha por título/NF já classificado (não pré-somado — ver "Módulo Financeiro (DRE)"). `titulo_tipo`: `pagar` (título — receita nunca mais usa esse caminho, nenhuma empresa, desde 2026-11-24), `cmv`/`nf_produto`/`nf_servico`/`devolucao` (direto da NF, `titulo_id=id_olist`), `ajuste_conciliacao` (legado, não mais gravado). Colunas `intercompany` (bool, default `false` — só vale pro caso automático de receita/CMV; pra `titulo_tipo=pagar` não é mais lido, ver `financeiro_intercompany_alocacoes`) e `descricao` (texto) — ver "Intercompany Rampa↔TF" |
 | `financeiro_intercompany_alocacoes` | `empresa_origem` + `titulo_tipo` + `titulo_id` | Alocação manual de despesa intercompany (valor parcial + categoria de destino) — ver "Alocação intercompany manual" |
 | `financeiro_lancamentos_manuais` | `id` | Lançamentos que nunca vêm da Olist (provisões, ajustes) — `codigo_grupo` + `subitem` livre opcional |
 | `financeiro_sync_status` | `empresa` (uma linha por empresa) | Progresso/estado da rotina diária financeira, mesmo padrão de `estoque_sync_status` |

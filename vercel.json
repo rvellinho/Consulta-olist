@@ -38,6 +38,10 @@
       "schedule": "0 6 * * *"
     },
     {
+      "path": "/api/relatorios?acao=sync-diario&empresa=tf",
+      "schedule": "10 6 * * *"
+    },
+    {
       "path": "/api/estoque-sync-diario",
       "schedule": "30 6 * * *"
     },
