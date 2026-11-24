@@ -140,8 +140,8 @@
     .tag-inativo { background: var(--s2); color: var(--mt); border-radius: 6px; padding: 2px 8px; font-size: 11px; border: 1px solid var(--br); }
 
     @media (max-width: 640px) {
-      .td-rz, thead th:nth-child(3), tbody td:nth-child(3),
-      .td-cnpj, thead th:nth-child(4), tbody td:nth-child(4) { display: none; }
+      .td-rz, #tabela thead th:nth-child(3), #tabela tbody td:nth-child(3),
+      .td-cnpj, #tabela thead th:nth-child(4), #tabela tbody td:nth-child(4) { display: none; }
       .modal-row { grid-template-columns: 1fr; }
     }
   </style>
@@ -679,7 +679,7 @@
       <div class="table-wrap">
         <table style="width:100%;border-collapse:collapse;">
           <thead><tr>
-            <th>Empresa</th><th>Tipo</th><th>Descrição</th><th>Histórico</th><th style="text-align:right;">Valor</th><th style="text-align:center;">Intercompany Rampa↔TF</th>
+            <th>Empresa</th><th>Tipo</th><th>Descrição</th><th>Histórico</th><th>Emissão</th><th>Pagamento</th><th style="text-align:right;">Valor</th><th style="text-align:center;">Intercompany Rampa↔TF</th>
           </tr></thead>
           <tbody id="mt-tbody"></tbody>
         </table>
@@ -1489,6 +1489,15 @@ function formatarDataHoraBR(iso) {
   return new Date(iso).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" });
 }
 
+// Data pura (sem hora), ex: "2026-10-07" -> "07/10/2026". Nunca passa por
+// Date() aqui — "YYYY-MM-DD" seria lido como UTC meia-noite e, no fuso do
+// Brasil, voltaria um dia na exibição.
+function formatarDataSimples(iso) {
+  if (!iso) return "—";
+  const [ano, mes, dia] = String(iso).split("-");
+  return ano && mes && dia ? `${dia}/${mes}/${ano}` : "—";
+}
+
 async function carregarInfoCatalogoEstoque() {
   const info = el("estoque-catalogo-info");
   try {
@@ -2260,7 +2269,7 @@ function toggleDreLeafs(gid, arrowEl){
 async function abrirModalTitulos(codigoGrupo, descricaoGrupo, leaf){
   el("mt-titulo").textContent = `${codigoGrupo} ${descricaoGrupo}`;
   el("modal-titulos-overlay").classList.remove("hidden");
-  el("mt-tbody").innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--mt);padding:16px;">Carregando...</td></tr>`;
+  el("mt-tbody").innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--mt);padding:16px;">Carregando...</td></tr>`;
   try{
     const { empresa, ano, mes } = dreContexto;
     const empresasBusca = empresa === "consolidado" ? ["rampa","tf"] : [empresa];
@@ -2273,7 +2282,7 @@ async function abrirModalTitulos(codigoGrupo, descricaoGrupo, leaf){
     }));
     renderTabelaTitulos(listas.flat());
   }catch(e){
-    el("mt-tbody").innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--red);padding:16px;">Erro: ${e.message}</td></tr>`;
+    el("mt-tbody").innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--red);padding:16px;">Erro: ${e.message}</td></tr>`;
   }
 }
 
@@ -2281,7 +2290,7 @@ function fecharModalTitulos(e){ if(e.target===el("modal-titulos-overlay"))el("mo
 
 function renderTabelaTitulos(linhas){
   if(!linhas.length){
-    el("mt-tbody").innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--mt);padding:16px;">Nenhum lançamento nesse grupo/mês.</td></tr>`;
+    el("mt-tbody").innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--mt);padding:16px;">Nenhum lançamento nesse grupo/mês.</td></tr>`;
     return;
   }
   el("mt-tbody").innerHTML = linhas.map(l=>{
@@ -2299,6 +2308,8 @@ function renderTabelaTitulos(linhas){
       <td>${l.titulo_tipo}</td>
       <td>${descricao}</td>
       <td style="font-size:12.5px;color:var(--mt);max-width:260px;">${l.historico ? l.historico.replace(/\n/g,"<br>") : "—"}</td>
+      <td>${formatarDataSimples(l.data_emissao)}</td>
+      <td>${formatarDataSimples(l.data_pagamento)}</td>
       <td style="text-align:right;">${formatarMoeda(Number(l.valor))}</td>
       <td style="text-align:center;">${toggle}</td>
     </tr>`;

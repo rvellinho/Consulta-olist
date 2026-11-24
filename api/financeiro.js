@@ -85,7 +85,7 @@ async function buscarPlanoContas() {
 async function buscarMensal(empresas, ano, mes) {
   const filtroEmpresa = empresas.length === 1 ? `empresa=eq.${empresas[0]}` : `empresa=in.(${empresas.join(",")})`;
   const r = await httpsRequest("GET", supaHost(),
-    `/rest/v1/financeiro_mensal?${filtroEmpresa}&ano=eq.${ano}&mes=eq.${mes}&select=empresa,codigo_grupo,categoria_id,origem,regime,valor,titulo_tipo,titulo_id,intercompany,descricao,historico`,
+    `/rest/v1/financeiro_mensal?${filtroEmpresa}&ano=eq.${ano}&mes=eq.${mes}&select=empresa,codigo_grupo,categoria_id,origem,regime,valor,titulo_tipo,titulo_id,intercompany,descricao,historico,data_emissao,data_pagamento`,
     null, supaHeaders);
   return parseJSON(r.text);
 }
@@ -160,6 +160,7 @@ function montarDRE(planoContas, linhasMensal, linhasManuais, categoriasPorEmpres
         categoriaRaw: categoriasPorEmpresa[l.empresa]?.[l.categoria_id] || null,
         origem: l.origem, titulo_tipo: l.titulo_tipo, titulo_id: l.titulo_id, valor,
         intercompany: !!l.intercompany, descricao: l.descricao, historico: l.historico,
+        data_emissao: l.data_emissao, data_pagamento: l.data_pagamento,
       });
       continue;
     }
@@ -186,7 +187,23 @@ function montarDRE(planoContas, linhasMensal, linhasManuais, categoriasPorEmpres
         descricao, valor: v.operacional + v.intercompany,
         valorOperacional: v.operacional, valorIntercompany: v.intercompany,
       }))
-      .sort((a, b) => Math.abs(b.valor) - Math.abs(a.valor));
+      .sort((a, b) => {
+        // Ordem numérica da conta (1.01.01, 1.01.02, 1.01.03, 1.01.04...) —
+        // antes ordenava por valor absoluto, o que colocava "1.01.04 (-)
+        // Devoluções" antes de "1.01.03 Serviços prestados" sempre que a
+        // devolução fosse maior em módulo do que o serviço. Leaf sem código
+        // numérico na descrição (CMV, histórico, lançamento manual, "sem
+        // subcategoria") não tem como ordenar por conta — fica depois das
+        // que têm, por valor absoluto entre si (comportamento antigo).
+        const codigoA = /^(\d+(?:\.\d+)*)/.exec(a.descricao)?.[1];
+        const codigoB = /^(\d+(?:\.\d+)*)/.exec(b.descricao)?.[1];
+        if (codigoA && codigoB) {
+          return codigoA.localeCompare(codigoB, undefined, { numeric: true });
+        }
+        if (codigoA) return -1;
+        if (codigoB) return 1;
+        return Math.abs(b.valor) - Math.abs(a.valor);
+      });
     (gruposPorLinhaDre[grupo.linha_dre] = gruposPorLinhaDre[grupo.linha_dre] || []).push({
       codigo_grupo: grupo.codigo_grupo, descricao_grupo: grupo.descricao_grupo,
       valor: valores.operacional + valores.intercompany,
@@ -246,6 +263,11 @@ function addMeses(ano, mes, delta) {
 // dia 0 desse mês seguinte é o último dia do mês humano "mes".
 function ultimoDiaDoMes(ano, mes) { return new Date(ano, mes, 0).getDate(); }
 function formatarDataBR(ano, mes, dia) { return `${String(dia).padStart(2, "0")}/${String(mes).padStart(2, "0")}/${ano}`; }
+function dataBRparaISO(dataBR) {
+  if (!dataBR) return null;
+  const [dia, mes, ano] = String(dataBR).split("/");
+  return dia && mes && ano ? `${ano}-${mes}-${dia}` : null;
+}
 
 // --- intercompany Rampa↔TF ---
 // Rampa vende pra TF abaixo do custo; em contrapartida a TF paga algumas
@@ -682,7 +704,7 @@ const CODIGO_GRUPO_VENDA_INTERNA = "1.01";
 
 async function listarRelatorioCache(tipo, dataIniIso, dataFimIso) {
   const r = await httpsRequest("GET", supaHost(),
-    `/rest/v1/relatorio_cache?tipo=eq.${tipo}&data=gte.${dataIniIso}&data=lte.${dataFimIso}&select=id_olist,valor,cliente_razao_social,cliente_cnpj`,
+    `/rest/v1/relatorio_cache?tipo=eq.${tipo}&data=gte.${dataIniIso}&data=lte.${dataFimIso}&select=id_olist,valor,cliente_razao_social,cliente_cnpj,data`,
     null, supaHeaders);
   const linhas = parseJSON(r.text);
   return Array.isArray(linhas) ? linhas : [];
@@ -721,19 +743,19 @@ async function sincronizarReceitaPorNotasFiscais(empresa, periodos) {
       ...produtos.map(l => ({
         ano: p.ano, mes: p.mes, codigo_grupo: CODIGO_GRUPO_VENDA_INTERNA, categoria_id: CATEGORIA_PRODUTO_DANFE_RAMPA,
         origem: "relatorio_cache", regime: "competencia", titulo_tipo: "nf_produto", titulo_id: Number(l.id_olist),
-        valor: Number(l.valor) || 0, descricao: l.cliente_razao_social || null,
+        valor: Number(l.valor) || 0, descricao: l.cliente_razao_social || null, data_emissao: l.data || null,
         intercompany: limparCnpj(l.cliente_cnpj) === CNPJ_TF,
       })),
       ...servicos.map(l => ({
         ano: p.ano, mes: p.mes, codigo_grupo: CODIGO_GRUPO_VENDA_INTERNA, categoria_id: CATEGORIA_SERVICO_PRESTADO_RAMPA,
         origem: "relatorio_cache", regime: "competencia", titulo_tipo: "nf_servico", titulo_id: Number(l.id_olist),
-        valor: Number(l.valor) || 0, descricao: l.cliente_razao_social || null,
+        valor: Number(l.valor) || 0, descricao: l.cliente_razao_social || null, data_emissao: l.data || null,
         intercompany: limparCnpj(l.cliente_cnpj) === CNPJ_TF,
       })),
       ...devolucoes.map(l => ({
         ano: p.ano, mes: p.mes, codigo_grupo: CODIGO_GRUPO_VENDA_INTERNA, categoria_id: CATEGORIA_DEVOLUCAO_RAMPA,
         origem: "relatorio_cache", regime: "competencia", titulo_tipo: "devolucao", titulo_id: Number(l.id_olist),
-        valor: -(Number(l.valor) || 0), descricao: l.cliente_razao_social || null,
+        valor: -(Number(l.valor) || 0), descricao: l.cliente_razao_social || null, data_emissao: l.data || null,
         intercompany: limparCnpj(l.cliente_cnpj) === CNPJ_TF,
       })),
     ];
@@ -848,7 +870,7 @@ async function executarSyncDiario(req, res) {
           const iniBR = formatarDataBR(p.ano, p.mes, 1);
           const fimBR = formatarDataBR(p.ano, p.mes, ultimoDiaDoMes(p.ano, p.mes));
           const notasVenda = await listarNotasVendaV2(tokenV2, iniBR, fimBR);
-          notasVenda.forEach(n => filaCmv.push({ id: n.id, ano: p.ano, mes: p.mes }));
+          notasVenda.forEach(n => filaCmv.push({ id: n.id, ano: p.ano, mes: p.mes, dataEmissaoBR: n.data_emissao }));
           await sleep(600);
         }
       }
@@ -955,6 +977,7 @@ async function executarSyncDiario(req, res) {
                 ano: anoReceita, mes: mesReceita, codigo_grupo: codigoGrupo, categoria_id: catId ?? null,
                 origem: "tiny_competencia", regime: "competencia",
                 titulo_tipo: "receber", titulo_id: item.id, valor: Number(d.valor) || 0,
+                data_emissao: d.data || null, data_pagamento: d.dataLiquidacao || null,
                 intercompany, descricao, historico: d.historico || null,
               });
             }
@@ -1011,6 +1034,7 @@ async function executarSyncDiario(req, res) {
                 ano: item.ano, mes: item.mes, codigo_grupo: codigoGrupo, categoria_id: viaHistorico ? null : catId,
                 origem: viaHistorico ? "tiny_historico" : "tiny_competencia", regime: "competencia",
                 titulo_tipo: "pagar", titulo_id: item.id, valor: Number(d.valor) || 0,
+                data_emissao: d.data || null, data_pagamento: d.dataLiquidacao || null,
                 descricao, historico: d.historico || null,
               });
             }
@@ -1025,6 +1049,7 @@ async function executarSyncDiario(req, res) {
                 ano: item.ano, mes: item.mes, codigo_grupo: codigoGrupo, categoria_id: catId ?? null,
                 origem: "tiny_caixa", regime: "caixa",
                 titulo_tipo: "pagar", titulo_id: item.id, valor,
+                data_emissao: d.data || null, data_pagamento: d.dataLiquidacao || null,
                 descricao, historico: d.historico || null,
               });
             }
@@ -1059,6 +1084,7 @@ async function executarSyncDiario(req, res) {
           ano: item.ano, mes: item.mes, codigo_grupo: grupoCmv, categoria_id: null,
           origem: "tiny_notas_itens", regime: "competencia",
           titulo_tipo: "cmv", titulo_id: item.id, valor,
+          data_emissao: dataBRparaISO(item.dataEmissaoBR),
           intercompany: empresa === "rampa" && intercompanyTF, descricao: clienteNome,
         });
       } catch (erroRede) {
@@ -1170,7 +1196,7 @@ module.exports = async (req, res) => {
           : `codigo_grupo=in.(${grupos.map(encodeURIComponent).join(",")})`;
         const r = await httpsRequest("GET", supaHost(),
           `/rest/v1/financeiro_mensal?empresa=eq.${empresaTit}&ano=eq.${anoTit}&mes=eq.${mesTit}&${filtroGrupo}` +
-          `&select=titulo_tipo,titulo_id,codigo_grupo,categoria_id,valor,origem,descricao,historico,intercompany&order=valor.desc`,
+          `&select=titulo_tipo,titulo_id,codigo_grupo,categoria_id,valor,origem,descricao,historico,intercompany,data_emissao,data_pagamento&order=valor.desc`,
           null, supaHeaders);
         let data = parseJSON(r.text);
         data = Array.isArray(data) ? data : [];
