@@ -677,7 +677,7 @@
       <div class="modal-av">↔️</div>
       <div class="modal-hdr-info">
         <h2 id="mt-titulo">Lançamentos</h2>
-        <p class="c-razao">Marque quais despesas são contrapartida entre Rampa e TF — o valor bruto continua no Operacional, e a coluna Intercompany mostra o ajuste (negativo em quem pagou, positivo em quem é de fato a despesa).</p>
+        <p class="c-razao">Marque quais despesas são contrapartida entre Rampa e TF — o valor bruto continua no Real, e a coluna Intercompany mostra o ajuste (negativo em quem pagou, positivo em quem é de fato a despesa).</p>
       </div>
       <button class="close-btn" onclick="document.getElementById('modal-titulos-overlay').classList.add('hidden')">✕</button>
     </div>
@@ -705,7 +705,7 @@
       <div class="modal-av">🔗</div>
       <div class="modal-hdr-info">
         <h2>Lançamento Intercompany</h2>
-        <p class="c-razao">Aponte quanto dessa despesa é da outra empresa. O valor bruto continua no Operacional de quem pagou — esse valor entra negativo no Intercompany de quem pagou e positivo no da outra, na categoria que você escolher, ajustando o total real de cada uma.</p>
+        <p class="c-razao">Aponte quanto dessa despesa é da outra empresa. O valor bruto continua no Real de quem pagou — esse valor entra negativo no Intercompany de quem pagou e positivo no da outra, na categoria que você escolher, ajustando o Ajustado de cada uma.</p>
       </div>
       <button class="close-btn" onclick="document.getElementById('modal-alocacao-overlay').classList.add('hidden')">✕</button>
     </div>
@@ -2282,9 +2282,9 @@ function renderDRE(dre){
   const linhasHtml = [];
   linhasHtml.push(`<tr>
     <th style="padding:5px 12px;text-align:left;"></th>
-    <th style="padding:5px 12px;text-align:right;color:var(--mt);font-size:12px;">Operacional</th>
+    <th style="padding:5px 12px;text-align:right;color:var(--mt);font-size:12px;">Real</th>
     <th style="padding:5px 12px;text-align:right;color:var(--mt);font-size:12px;">Intercompany Rampa↔TF</th>
-    <th style="padding:5px 12px;text-align:right;">Total</th>
+    <th style="padding:5px 12px;text-align:right;">Ajustado</th>
   </tr>`);
   dre.blocos.forEach((bloco,bi)=>{
     linhasHtml.push(`<tr><td colspan="4" style="padding:8px 12px;font-weight:700;background:var(--s2);">${bloco.bloco}</td></tr>`);

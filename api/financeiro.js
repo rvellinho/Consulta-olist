@@ -197,8 +197,21 @@ function montarDRE(planoContas, linhasMensal, linhasManuais, categoriasPorEmpres
       const alocado = Math.min(Number(aloc.valor_alocado) || 0, valor);
       somar(l.codigo_grupo, valor, false, leaf);
       if (alocado > 0) somar(l.codigo_grupo, -alocado, true, leaf);
+    } else if (l.intercompany) {
+      // Venda/CMV automático Rampa→TF (grupos 1.01/4.01): Real sempre mostra o
+      // valor cheio, igual uma venda normal (pedido do Rafael, 2026-11-24) — e
+      // o ajuste intercompany entra com o valor NEGADO (não só "não invertido"
+      // como antes) pras duas linhas, receita e CMV. Como a Rampa vende pra TF
+      // abaixo do custo, isso faz a coluna Intercompany do bloco Lucro Bruto
+      // (receita negada − CMV negado, com o sinal -1 do bloco de CMV) virar
+      // POSITIVA — o espelho do resultado real negativo que fica na coluna
+      // Real — e a coluna Ajustado (Real+Intercompany) zera pra essas linhas,
+      // já que o efeito é todo absorvido pela relação entre as empresas.
+      const leaf = resolverLeaf(l, categoriasPorEmpresa);
+      somar(l.codigo_grupo, valor, false, leaf);
+      somar(l.codigo_grupo, -valor, true, leaf);
     } else {
-      somar(l.codigo_grupo, valor, !!l.intercompany, resolverLeaf(l, categoriasPorEmpresa));
+      somar(l.codigo_grupo, valor, false, resolverLeaf(l, categoriasPorEmpresa));
     }
   }
   // Entradas sintéticas da alocação intercompany: dinheiro que, pela

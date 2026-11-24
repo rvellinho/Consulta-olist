@@ -599,6 +599,44 @@ o total que já existia (`total = operacional + intercompany` em todo bloco/subt
   checkbox, PATCH confirmado e DRE recalculando em tempo real) — isso testava o desenho antigo
   (checkbox tudo-ou-nada), substituído pelo de baixo.
 
+### Colunas renomeadas: Operacional→Real, Total→Ajustado (2026-11-24)
+Pedido do Rafael, pra ficar mais claro o que cada coluna significa agora que o DRE tem lógica de
+sinal em cima do valor bruto (ver redesenhos desta mesma data). Troca só de rótulo na tela
+(`index.html`) — os nomes internos dos campos (`valorOperacional`, `totalOperacional`,
+`subtotalOperacional` etc. em `api/financeiro.js`) continuam iguais, não é uma migration. Vale
+pra toda a tela do DRE (é a mesma coluna renderizada em toda linha, inclusive a alocação manual de
+despesa já existente), não só pra receita/CMV automático abaixo.
+
+### Receita/CMV automático Rampa→TF: Real sempre cheio, Intercompany com sinal invertido (redesenho, 2026-11-24)
+Pedido do Rafael, na mesma linha do redesenho de intercompany manual (ver "Operacional sempre
+bruto, Intercompany com sinal" acima, que só valia pra despesa manual): agora o automático
+(receita `1.01` e CMV `4.01`, marcado por `intercompany=true` no sync — ver "Intercompany
+Rampa↔TF" acima) segue o mesmo padrão de "Real sempre mostra o valor cheio, sem zerar". Antes
+(desde 2026-11-22), uma linha marcada `intercompany=true` ia inteira pra coluna Intercompany
+(Real ficava R$0,00 pra ela). Agora: Real sempre recebe o valor cheio (igual uma venda normal), e
+o mesmo valor entra **negado** no Intercompany — pras duas linhas, receita e CMV.
+
+- **Pedido específico do Rafael** (corrigindo um pedido anterior, no mesmo dia, que tinha o sinal
+  oposto): "a receita deve ficar negativa, e o CMV deve ficar negativo também, de forma que o
+  resultado deles no Lucro Bruto seja positivo" — com um número de conferência (outubro/2026 da
+  Rampa): R$10.895,64 positivo.
+- **Efeito**: como a Rampa vende pra TF abaixo do custo (CMV > receita nessas notas), negar os dois
+  inverte o sinal da conta receita−CMV dentro da coluna Intercompany — o que seria um prejuízo de
+  R$10.895,64 (receita menor que custo) vira um ganho de R$10.895,64 **nessa coluna**. A coluna
+  Ajustado (Real+Intercompany) zera pra essas linhas especificamente (valor cheio + o mesmo valor
+  negado = R$0,00) — o efeito da venda abaixo do custo fica todo absorvido/reclassificado na
+  coluna Intercompany, sem sobrar nem faltar nada no total.
+- **Implementado em `montarDRE` (`api/financeiro.js`)**: dentro do loop principal, quando a linha
+  não é `titulo_tipo=pagar` (ou seja, não passa pela alocação manual) e tem `intercompany=true`,
+  chama `somar(grupo, valor, false, leaf)` (Real, valor cheio) e depois `somar(grupo, -valor, true, leaf)`
+  (Intercompany, valor negado) — mesmo padrão estrutural do `aloc` (gross + ajuste), só que aqui o
+  ajuste é o espelho negativo do valor cheio, não um valor parcial escolhido à mão.
+- **Testado ao vivo**: outubro/2026 da Rampa via `vercel dev` local — bloco "Lucro Bruto":
+  Real R$87.854,42, Intercompany **R$10.895,64** (bateu exatamente com o número do Rafael),
+  Ajustado R$98.750,06. Linha `1.01 Venda Interna`: Real R$492.364,21, Intercompany -R$5.739,28,
+  Ajustado R$486.624,93. Linha `4.01 Estoques`: Real R$358.163,21, Intercompany -R$16.634,92,
+  Ajustado R$341.528,29.
+
 ### Alocação intercompany manual — valor parcial + categoria de destino (redesenho, 2026-11-24)
 O desenho original de despesa manual (acima, 2026-11-22) era um checkbox por título: tudo ou
 nada, sempre na mesma categoria, e só tirava o valor do Operacional de quem pagou — não fazia
