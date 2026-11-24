@@ -908,6 +908,44 @@ UTC, `vercel.json`).
 
 ---
 
+## RLS (Row Level Security) nas 16 tabelas do projeto — ligado (2026-11-24)
+
+O Supabase deste projeto (`oxkogbiydwjufdimtfnw`) é **compartilhado com outro app** (tabelas/funções
+`reuniao_*`, de um projeto diferente do Rafael) — o que significa que a `anon key` desse projeto já
+está embutida publicamente no frontend desse outro app. Até 2026-11-24, as 16 tabelas deste projeto
+(Consulta-Olist) estavam com RLS **desligado**, então qualquer requisição com essa `anon key` (que
+também é pública, por padrão do Supabase) conseguia ler/escrever direto em `usuarios`, `tokens_oauth`,
+`financeiro_mensal`, etc. — achado via `get_advisors` (lint `rls_disabled_in_public`, nível ERROR), não
+era exposição teórica.
+
+- **Corrigido**: RLS ligado nas 16 tabelas, sem nenhuma policy (deny-all pra `anon`/`authenticated`).
+  O backend (`api/*.js`) usa `SUPABASE_KEY` = chave `service_role`, que **sempre ignora RLS** — não
+  precisou de nenhuma policy pra o app continuar funcionando.
+- **Incidente na primeira tentativa (mesmo dia, revertido e corrigido)**: ligar RLS quebrou o login em
+  produção ("senha incorreta") na hora, mesmo já tendo sido testado localmente sem problema. Causa:
+  a variável `SUPABASE_KEY` configurada na Vercel (produção) **não era a mesma chave `service_role`**
+  do `.env` local — provavelmente uma chave antiga/errada, que só nunca deu problema porque RLS estava
+  desligado (qualquer chave lia/escrevia igual). Com RLS ligado, essa chave errada passou a ser tratada
+  como anônima e foi bloqueada. **Rollback imediato** (RLS desligado de novo) restaurou o login
+  enquanto a causa era investigada.
+- **Correção real**: Rafael corrigiu o valor de `SUPABASE_KEY` na Vercel (produção) pra bater com o
+  `service_role` genuíno do `.env` local, e fez redeploy — confirmado ao vivo em produção (login +
+  busca de clientes funcionando) antes de religar o RLS de vez.
+- **Por que não dá pra confirmar que uma chave da Vercel está certa sem testar de verdade**: o
+  Claude Code bloqueia automaticamente qualquer tentativa de ler/decodificar o valor de uma env var de
+  produção (mesmo só pra comparar, nunca pra expor) — por desenho, é tratado como manuseio de API
+  key/credencial. Então a única forma seguro de confirmar é o próprio Rafael colar o valor certo na
+  Vercel e testar o efeito (login funcionando ou não), nunca o Claude lendo o segredo diretamente.
+- **Lição**: uma env var de produção que "sempre funcionou" não prova que está certa — só prova que
+  nada até agora dependia dela estar certa. RLS desligado mascarava isso há quem sabe quanto tempo.
+  Antes de ligar RLS (ou qualquer controle de acesso novo) em produção, vale testar a chave certa
+  primeiro, não só localmente — local e produção podem ter valores diferentes pra mesma variável.
+- **Não resolvido, fora de escopo deste projeto**: os 5 achados WARN sobre funções `reuniao_*`
+  (`SECURITY DEFINER` executável por `anon`/`authenticated`) são do outro app que compartilha esse
+  Supabase — não tocados, não são deste projeto.
+
+---
+
 ## Estrutura do banco Supabase
 
 | Tabela | Chave | Descrição |
