@@ -118,7 +118,6 @@ function resolverLeaf(l, categoriasPorEmpresa) {
   }
   if (l.titulo_tipo === "cmv") return "Custo calculado pela nota (sem categoria)";
   if (l.origem === "tiny_historico") return "Classificado por histórico (sem categoria na Tiny)";
-  if (l.origem === "ajuste_conciliacao") return "1.01.05 Ajuste de conciliação (Relatório de Vendas)";
   if (l.subitem) return l.subitem; // lançamento manual
   return "Sem subcategoria";
 }
@@ -650,74 +649,96 @@ async function listarIdsContasPagar(accessToken, dataIni, dataFim) {
   return ids;
 }
 
-// --- reconciliação com o Relatório de Vendas (ver CLAUDE.md "Totais Rampa
-// não bateram..." / devolução 1.01.04) ---
-// Só Rampa: relatorio_cache (fonte do Relatório de Vendas) não tem coluna
-// empresa — é Rampa-only por desenho (ver CLAUDE.md "Multi-empresa").
-// Fecha dois problemas de uma vez, de forma idempotente e autocorretiva:
-//   1. Devolução nunca existia no DRE — grava como leaf "1.01.04 (-)
-//      Devoluções e estornos" (categoria REAL da Tiny — Rafael apontou esse
-//      código de propósito, já existe no plano de contas, só nunca era usada
-//      porque devolução não passa por título de contas a receber), negativa.
-//   2. NF que existe no Relatório de Vendas mas não tem título em contas a
-//      receber (ou cujo título cai fora da janela de busca — casos reais:
-//      Kalil, Dario Neves, Germano Petersen) nunca vão ser achados título a
-//      título com 100% de confiabilidade (tentativa de alargar a janela de
-//      busca já foi revertida por trazer título de mês errado — ver
-//      CLAUDE.md "Totais Rampa não bateram..."). Em vez de caçar caso a
-//      caso, fecha a diferença com um ajuste explícito: total do Relatório
-//      de Vendas (fonte já validada pelo Rafael, com cancelamento/
-//      revalidação/backfill de buraco já corrigidos) menos o que já está
-//      classificado em 1.01 vindo de contas a receber. Recalculado do zero
-//      a cada chamada do sync (idempotente) — se um título "sumido"
-//      aparecer depois, o ajuste encolhe sozinho no próximo sync, nunca
-//      duplica nem acumula.
-const CATEGORIA_DEVOLUCAO_RAMPA = 361455287; // "1.01.04 (-) Devoluções e estornos" — categoria real da Tiny
+// --- receita de Venda Interna (grupo 1.01) direto da nota fiscal, não do
+// título de contas a receber (decisão do Rafael, 2026-11-23) ---
+// Caçar título a título os casos que apareciam como "sumidos" (Kalil, Dario
+// Neves, Germano Petersen, Castanhel — ver CLAUDE.md "Totais Rampa não
+// bateram...") nunca ia ter 100% de confiabilidade, e um ajuste de
+// conciliação que só fechava a diferença em dinheiro (tentado antes disso)
+// escondia casos novos atrás de um número só. Nenhum desses casos era
+// problema na NF — só no título (fora da janela de busca, devolução
+// integral sem título correspondente, nota marcada "futura" mas que já é
+// entrega de verdade). Decisão do Rafael: nesse primeiro momento o DRE olha
+// só nota/faturamento, nunca título — título fica pra quando entrarmos em
+// auditoria/balanço. Fonte: relatorio_cache (Relatório de Vendas), Rampa-only
+// (sem coluna empresa) e já auditado/corrigido (cancelamento, revalidação,
+// buracos de coleta) — não refaz nenhuma consulta na Olist aqui.
+//   - tipo='produto'   -> leaf 1.01.01 Produtos vendidos (Danfe)
+//   - tipo='servico'   -> leaf 1.01.03 Serviços prestados (relatorio_cache já
+//     filtra "apoio em vendas" na própria coleta — ver DESCRICOES_SERVICO_EXCLUIDAS
+//     em relatorio-coleta.js — então tudo que chega aqui é serviço de verdade,
+//     inclusive a nota de R$2.200 que o Rafael confirmou ser 1.01.03)
+//   - tipo='devolucao' -> leaf 1.01.04 (-) Devoluções e estornos, negativo —
+//     entra como linha própria por NF, nunca abatendo a venda original
+//     (decisão do Rafael: "tem que constar 2x, venda e estorno" — ex: Kalil
+//     NF 013421 +1620,05 e devolução NF 013429 -1620,05, as duas visíveis)
+// titulo_id = id_olist da própria nota (estável e único por tipo — checado
+// ao vivo em 2026-11-23: produto/serviço/devolução de outubro, 0 nulos, sem
+// duplicata), então o upsert é idempotente por NF, nunca por mês agregado.
+const CATEGORIA_PRODUTO_DANFE_RAMPA = 361455283; // "1.01.01 Produtos vendidos (Danfe)"
+const CATEGORIA_SERVICO_PRESTADO_RAMPA = 361455286; // "1.01.03 Serviços prestados"
+const CATEGORIA_DEVOLUCAO_RAMPA = 361455287; // "1.01.04 (-) Devoluções e estornos"
 const CODIGO_GRUPO_VENDA_INTERNA = "1.01";
 
-async function somarRelatorioCache(tipo, dataIniIso, dataFimIso) {
+async function listarRelatorioCache(tipo, dataIniIso, dataFimIso) {
   const r = await httpsRequest("GET", supaHost(),
-    `/rest/v1/relatorio_cache?tipo=eq.${tipo}&data=gte.${dataIniIso}&data=lte.${dataFimIso}&select=valor`,
+    `/rest/v1/relatorio_cache?tipo=eq.${tipo}&data=gte.${dataIniIso}&data=lte.${dataFimIso}&select=id_olist,valor,cliente_razao_social,cliente_cnpj`,
     null, supaHeaders);
   const linhas = parseJSON(r.text);
-  return (Array.isArray(linhas) ? linhas : []).reduce((s, l) => s + (Number(l.valor) || 0), 0);
+  return Array.isArray(linhas) ? linhas : [];
 }
 
-async function somarClassificadoReceber(empresa, ano, mes, codigoGrupo) {
-  const r = await httpsRequest("GET", supaHost(),
-    `/rest/v1/financeiro_mensal?empresa=eq.${empresa}&ano=eq.${ano}&mes=eq.${mes}` +
-    `&codigo_grupo=eq.${codigoGrupo}&titulo_tipo=eq.receber&select=valor`,
-    null, supaHeaders);
-  const linhas = parseJSON(r.text);
-  return (Array.isArray(linhas) ? linhas : []).reduce((s, l) => s + (Number(l.valor) || 0), 0);
-}
-
-async function sincronizarConciliacaoRelatorioVendas(empresa, periodosFechados) {
+async function sincronizarReceitaPorNotasFiscais(empresa, periodos) {
   if (empresa !== "rampa") return; // relatorio_cache (Relatório de Vendas) é Rampa-only
-  for (const p of periodosFechados) {
+  for (const p of periodos) {
+    // Limpa título de contas a receber que já tenha sido classificado em 1.01
+    // numa execução anterior e cujo ID não voltou a aparecer na janela de
+    // listarIdsContasReceber desta vez (ex: parcela cuja própria data cai fora
+    // da janela mesmo com a NF referenciada dentro do mês — mesmo padrão de
+    // borda do caso Germano Petersen, só que aqui sobra em vez de faltar).
+    // A exclusão no loop de contas a receber só acontece pra título
+    // efetivamente revisitado; sem isso, um título assim duplica a receita
+    // pra sempre (título antigo + NF nova) — achado ao vivo em 2026-11-23: 7
+    // títulos de outubro (D1 Litoral, Bordini Green, Kalil OC 1852, Termofrax
+    // — R$20.911,34) continuaram em "receber" depois do primeiro sync com NF.
+    await httpsRequest("DELETE", supaHost(),
+      `/rest/v1/financeiro_mensal?empresa=eq.${empresa}&codigo_grupo=eq.${CODIGO_GRUPO_VENDA_INTERNA}` +
+      `&titulo_tipo=eq.receber&ano=eq.${p.ano}&mes=eq.${p.mes}`,
+      null, { ...supaHeaders, Prefer: "return=minimal" });
+
     const dataIni = formatarData(p.ano, p.mes, 1);
     const dataFim = formatarData(p.ano, p.mes, ultimoDiaDoMes(p.ano, p.mes));
-    const [totalProduto, totalDevolucao, totalClassificado] = await Promise.all([
-      somarRelatorioCache("produto", dataIni, dataFim),
-      somarRelatorioCache("devolucao", dataIni, dataFim),
-      somarClassificadoReceber(empresa, p.ano, p.mes, CODIGO_GRUPO_VENDA_INTERNA),
+    const [produtos, servicos, devolucoes] = await Promise.all([
+      listarRelatorioCache("produto", dataIni, dataFim),
+      listarRelatorioCache("servico", dataIni, dataFim),
+      listarRelatorioCache("devolucao", dataIni, dataFim),
     ]);
-    const ajuste = totalProduto - totalClassificado;
-    const chave = p.ano * 100 + p.mes; // sem colisão: IDs reais da Tiny têm 8-9 dígitos
+    // Venda da Rampa pro cliente TF (mesmo CNPJ_TF usado no CMV — ver CLAUDE.md
+    // "Intercompany Rampa↔TF") marca intercompany sozinha, igual já fazia o
+    // caminho por título — sem isso a receita por NF perderia esse apontamento
+    // automático (ex: NF 013495, R$0,50, cliente "TF Comercio e Serviços").
     const linhas = [
-      {
+      ...produtos.map(l => ({
+        ano: p.ano, mes: p.mes, codigo_grupo: CODIGO_GRUPO_VENDA_INTERNA, categoria_id: CATEGORIA_PRODUTO_DANFE_RAMPA,
+        origem: "relatorio_cache", regime: "competencia", titulo_tipo: "nf_produto", titulo_id: Number(l.id_olist),
+        valor: Number(l.valor) || 0, descricao: l.cliente_razao_social || null,
+        intercompany: limparCnpj(l.cliente_cnpj) === CNPJ_TF,
+      })),
+      ...servicos.map(l => ({
+        ano: p.ano, mes: p.mes, codigo_grupo: CODIGO_GRUPO_VENDA_INTERNA, categoria_id: CATEGORIA_SERVICO_PRESTADO_RAMPA,
+        origem: "relatorio_cache", regime: "competencia", titulo_tipo: "nf_servico", titulo_id: Number(l.id_olist),
+        valor: Number(l.valor) || 0, descricao: l.cliente_razao_social || null,
+        intercompany: limparCnpj(l.cliente_cnpj) === CNPJ_TF,
+      })),
+      ...devolucoes.map(l => ({
         ano: p.ano, mes: p.mes, codigo_grupo: CODIGO_GRUPO_VENDA_INTERNA, categoria_id: CATEGORIA_DEVOLUCAO_RAMPA,
-        origem: "relatorio_cache", regime: "competencia", titulo_tipo: "devolucao", titulo_id: chave,
-        valor: -totalDevolucao, descricao: "Devoluções (Relatório de Vendas)",
-      },
-      {
-        ano: p.ano, mes: p.mes, codigo_grupo: CODIGO_GRUPO_VENDA_INTERNA, categoria_id: null,
-        origem: "ajuste_conciliacao", regime: "competencia", titulo_tipo: "ajuste_conciliacao", titulo_id: chave,
-        valor: ajuste, descricao: "Ajuste de conciliação com o Relatório de Vendas",
-      },
+        origem: "relatorio_cache", regime: "competencia", titulo_tipo: "devolucao", titulo_id: Number(l.id_olist),
+        valor: -(Number(l.valor) || 0), descricao: l.cliente_razao_social || null,
+        intercompany: limparCnpj(l.cliente_cnpj) === CNPJ_TF,
+      })),
     ];
-    await upsertMensal(empresa, linhas);
-    console.log(`[financeiro-sync:${empresa}] conciliação ${p.ano}-${p.mes}: produto=${totalProduto.toFixed(2)} devolucao=${totalDevolucao.toFixed(2)} classificado=${totalClassificado.toFixed(2)} ajuste=${ajuste.toFixed(2)}`);
+    if (linhas.length) await upsertMensal(empresa, linhas);
+    console.log(`[financeiro-sync:${empresa}] receita por NF ${p.ano}-${p.mes}: ${produtos.length} produto + ${servicos.length} serviço + ${devolucoes.length} devolução`);
   }
 }
 
@@ -881,7 +902,15 @@ async function executarSyncDiario(req, res) {
         if (!(cat && cat.forca_manual)) {
           const codigoGrupo = cat?.codigo_grupo || null;
           const linha = codigoGrupo ? planoContas[codigoGrupo] : null;
-          if (!linha || linha.fonte_tiny === "contas_receber") {
+          if (empresa === "rampa" && codigoGrupo === CODIGO_GRUPO_VENDA_INTERNA) {
+            // Grupo 1.01 (Venda Interna) da Rampa agora vem direto da nota
+            // fiscal (sincronizarReceitaPorNotasFiscais, relatorio_cache), não
+            // mais do título — decisão do Rafael (2026-11-23): "o que deve
+            // entrar no DRE é valor total da NF, não o título". Título que já
+            // tivesse caído aqui numa execução anterior precisa ser apagado,
+            // senão duplica a receita (título + NF).
+            await excluirMensal(empresa, "receber", item.id);
+          } else if (!linha || linha.fonte_tiny === "contas_receber") {
             // "Serviço de apoio em vendas" (comissão, não venda de verdade —
             // decisão do Rafael, 2026-11-23): costuma vir com categoria
             // "Serviços prestados", mas também aparece SEM categoria nenhuma
@@ -1057,18 +1086,17 @@ async function executarSyncDiario(req, res) {
     status.processados = status.total - filaReceita.length - filaPagar.length - filaCmv.length;
 
     if (filaReceita.length === 0 && filaPagar.length === 0 && filaCmv.length === 0) {
-      // Só roda depois que a fila de contas a receber terminou de verdade —
-      // senão o "classificado" usado pra calcular o ajuste fica incompleto
-      // (sync que precisou de várias chamadas pra terminar). E só pro mês
-      // ANTERIOR (fechado), nunca pro mês atual: o cache do Relatório de
-      // Vendas (relatorio_cache) é alimentado pelo sync diário de
-      // Relatórios, que só revisita os últimos 7 dias (ver api/relatorios.js)
-      // — confirmado ao vivo (2026-11-23): o mês corrente tinha um buraco
-      // justamente nos dias mais recentes (faltavam exatamente os últimos
-      // dias antes de hoje). Comparar o DRE contra um cache incompleto do
-      // mês em andamento geraria um "ajuste" negativo artificial, subtraindo
-      // receita real. O mês anterior já está fechado e totalmente coletado.
-      await sincronizarConciliacaoRelatorioVendas(empresa, [mesAnterior]);
+      // Roda depois que a fila de contas a receber terminou de verdade —
+      // é nesse mesmo passo que títulos de grupo 1.01 (Venda Interna) da
+      // Rampa são excluídos (ver loop acima), então só faz sentido gravar a
+      // receita por NF depois que essa exclusão já rodou pra todos. Cobre os
+      // dois períodos (mês atual + anterior): diferente do antigo ajuste de
+      // conciliação (que comparava contra um total e podia ficar negativo se
+      // o cache do mês corrente estivesse incompleto), aqui cada linha é só
+      // "o que o Relatório de Vendas já sabe pra essa NF" — nunca fica errado,
+      // só fica incompleto até o sync de Relatórios (relatorio_cache) trazer
+      // os dias que faltam do mês em andamento.
+      await sincronizarReceitaPorNotasFiscais(empresa, periodos);
       status.em_andamento = false;
       status.concluido_em = new Date().toISOString();
       await salvarStatusSync(empresa, status);

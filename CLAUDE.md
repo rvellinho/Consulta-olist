@@ -800,51 +800,68 @@ X" — já estava corretamente contada, só não bate com o regex de verificaç�
 - Gap residual original (~R$300 de ~R$493 mil) nunca foi rastreado item a item — resolvido junto
   com o resto pela reconciliação abaixo, não por achar a causa exata dele.
 
-### Devolução no DRE + reconciliação automática contra o Relatório de Vendas (2026-11-23)
-Decisão do Rafael: devolução tem que constar no DRE (leaf `1.01.04 (-) Devoluções e estornos`) e
-**os dois relatórios têm que bater, sem nenhum resíduo** — não dava pra deixar Kalil + Dario Neves
-+ Germano Petersen (R$3.258,61, ver investigação acima) e o resíduo de ~R$300 só documentados como
-gap aceitável. Tentar achar cada título individualmente (inclusive alargando a janela de busca) já
-tinha se mostrado arriscado — ver "tentativa de correção abortada" acima, que trocou um gap pequeno
-por um erro maior. Em vez de caçar título a título, `api/financeiro.js` ganhou uma reconciliação
-automática contra o Relatório de Vendas (`relatorio_cache`), que é a fonte que o Rafael já validou
-como correta (cancelamento, revalidação e backfill de buracos já corrigidos nela — ver seções
-abaixo):
-- **`1.01.04 (-) Devoluções e estornos`**: não é um rótulo sintético novo — é a categoria **real**
-  da própria Tiny (`categoria_id` 361455287, já existia no plano de contas da Rampa, só nunca era
-  usada porque devolução não passa por título de contas a receber). O sync grava uma linha
-  (`titulo_tipo='devolucao'`) com esse `categoria_id`, valor negativo = soma de
-  `relatorio_cache` tipo `devolucao` no mês, e `resolverLeaf` resolve ela automaticamente pela
-  categoria, sem código especial.
-- **`1.01.05 Ajuste de conciliação (Relatório de Vendas)`**: fecha o resto da diferença. A cada
-  sync, calcula `ajuste = soma(relatorio_cache tipo='produto' no mês) - soma(financeiro_mensal
-  titulo_tipo='receber' codigo_grupo='1.01' no mês)` e grava como uma linha própria
-  (`titulo_tipo='ajuste_conciliacao'`, sem categoria). **Idempotente e autocorretivo**: recalculado
-  do zero a cada chamada do sync (upsert por `titulo_id = ano*100+mes`, uma linha por mês/empresa)
-  — se um título "sumido" (tipo Kalil/Dario Neves/Germano) aparecer na Tiny depois, o ajuste encolhe
-  sozinho no próximo sync, nunca duplica nem acumula. Testado ao vivo pra outubro/2026 Rampa: Receita
-  Bruta (grupo `1.01`) foi de R$490.042,46 pra **R$490.164,21** — bate em cima do centavo com a linha
-  "Notas de Produto" do Relatório de Vendas (R$493.601,56 − R$3.437,35 de devolução).
-- **Só Rampa, só pro mês ANTERIOR (fechado), nunca pro mês atual**: `relatorio_cache` não tem
-  coluna `empresa` (Relatório de Vendas é Rampa-only, ver "Multi-empresa"), e pro mês em andamento
-  o cache está estruturalmente incompleto — o sync diário de Relatórios só revisita os últimos 7
-  dias (`api/relatorios.js`), então o mês corrente sempre tem buraco justo nos dias mais recentes.
-  Confirmado ao vivo (2026-11-23): aplicar a mesma conta em novembro/2026 (mês aberto) dava um
-  ajuste de **-R$14.227,71** — não porque a receita estivesse errada, mas porque o cache de
-  novembro só tinha dados até dia 19, faltando os últimos dias antes de "hoje". Comparar contra um
-  cache parcial geraria um ajuste negativo artificial, subtraindo receita real. Por isso a
-  reconciliação roda só com `mesAnterior` (nunca `periodos` inteiro), e só depois que a fila de
-  contas a receber termina de verdade (senão o "classificado" usado no cálculo fica incompleto).
-- **Não cobre `1.01.03 Serviços prestados`** — a reconciliação compara só contra `relatorio_cache`
-  tipo `produto`; se um mês futuro tiver serviço de verdade classificado em `1.01.03` (frete etc,
-  não "apoio em vendas"), ele continua separado e intocado pela conciliação (confirmado: em
-  out/nov-2026 a Rampa não tinha nada em `1.01.03`, só `1.01.01`).
-- **Lição**: perseguir reconciliação exata título a título contra uma fonte externa (Tiny) é um
-  objetivo sem fim garantido — sempre pode haver um caso novo de borda. Reconciliar contra uma
-  fonte interna já validada e auditável (o próprio Relatório de Vendas, cujos bugs de buraco/
-  cancelamento/revalidação já foram caçados e corrigidos à parte) e fechar a diferença com uma
-  linha visível e recalculada do zero a cada sync é mais robusto do que tentar prever todo caso de
-  título ausente/fora de janela.
+### Receita de Venda Interna (grupo 1.01) virou NF-based, não mais título (decisão do Rafael, 2026-11-23)
+Depois da investigação acima (Kalil, Dario Neves, Germano, e um resíduo que nunca foi 100% caçado),
+o Rafael cortou o problema pela raiz: **"nesse primeiro momento devemos olhar somente notas/
+faturamento, e não títulos/contas a receber. O que deve entrar no DRE é o valor total da NF, não o
+título. Títulos olharemos apenas depois, quando partirmos para auditoria, balanço e outras
+análises."** Uma primeira tentativa (reconciliação por um "ajuste" que só fechava a diferença em
+dinheiro, sem saber se cada caso individual estava certo) foi explicitamente rejeitada pelo Rafael
+("você colocou só um número no DRE pra fechar a conta, mas não sabe nem se está certo") — reescrito
+do zero pra fonte direta.
+
+- **Fonte**: `sincronizarReceitaPorNotasFiscais(empresa, periodos)` em `api/financeiro.js`, chamada
+  no fim do sync diário (depois que a fila de contas a receber termina). Só Rampa — `relatorio_cache`
+  (fonte do Relatório de Vendas) não tem coluna `empresa`. Lê `relatorio_cache` (já auditado:
+  cancelamento, revalidação, buracos de coleta corrigidos nas seções acima — não refaz nenhuma
+  consulta na Olist) pros dois períodos reprocessados (mês atual + anterior) e grava uma linha por
+  NF em `financeiro_mensal`, `titulo_id = id_olist` (estável e único por tipo):
+  - `tipo='produto'` → leaf `1.01.01 Produtos vendidos (Danfe)` (`titulo_tipo='nf_produto'`)
+  - `tipo='servico'` → leaf `1.01.03 Serviços prestados` (`titulo_tipo='nf_servico'`) — a coleta de
+    Relatórios já filtra "apoio em vendas" na própria origem (`DESCRICOES_SERVICO_EXCLUIDAS`), então
+    tudo que chega aqui é serviço de verdade (ex: a NF de R$2.200 da "SOCIEDADE GERAL DE EMPREITADAS",
+    que o Rafael confirmou ser 1.01.03).
+  - `tipo='devolucao'` → leaf `1.01.04 (-) Devoluções e estornos` (categoria real da Tiny,
+    `categoria_id` 361455287), valor negativo, **como linha própria por NF** — nunca abate a venda
+    original. Caso Kalil (venda NF 013421 R$1.620,05 + devolução NF 013429 R$1.620,05): as duas
+    aparecem separadas, exatamente como o Rafael pediu ("tem que constar 2x, venda e estorno").
+  - `intercompany`: marcado automaticamente comparando o CNPJ do cliente da NF
+    (`relatorio_cache.cliente_cnpj`) contra `CNPJ_TF` — mesmo padrão já usado no CMV (ver
+    "Intercompany Rampa↔TF"). Sem isso a receita por NF perderia esse apontamento (achado testando a
+    NF 013495, R$0,50, cliente TF).
+- **Título de contas a receber não gera mais linha em 1.01 pra Rampa**: no loop de contas a receber,
+  um título cuja categoria resolve pra `codigo_grupo='1.01'` agora é só `excluirMensal`'d (nunca
+  `lote.push`), pra não duplicar a NF já contada pela função acima. Grupos 1.02/1.03 (outras receitas
+  operacionais/financeiras — comissão, frete CTe, juros — que não são "venda interna" e não têm NF
+  equivalente) continuam normalmente por título, sem mudança.
+- **Resolve os três casos da investigação sem nenhum código especial**: Germano Petersen (NF do dia
+  1/10, nunca teve problema — só o título que ficava fora da janela por causa da emissão num dia
+  diferente), Dario Neves (NF do dia 9/10 marcada "nota futura", mas é a nota de entrega/remessa de
+  verdade, contada normal), Castanhel (entra pelo valor cheio da NF, sem segunda-adivinhação contra o
+  título — o Rafael reconheceu que esse caso "está estranho", mas títulos ficam pra depois) — todos
+  já estavam certos em `relatorio_cache`, o problema nunca foi a NF, só a tentativa de achar o título
+  certo pra ela.
+- **Bug achado rodando a primeira vez (corrigido no mesmo dia)**: 7 títulos de outubro (D1 Litoral
+  R$11.014,50, Bordini Green R$4.797,52 em 3 parcelas, Kalil OC 1852 R$3.759,32 em 2 parcelas —
+  uma NF diferente da do caso de devolução acima —, Termofrax R$1.340,00) continuaram classificados
+  como `receber` depois do primeiro sync, duplicando a receita (R$20.911,34) porque a NF deles já
+  tinha sido contada pela função nova, mas o título antigo nunca foi revisitado nessa chamada
+  (mesmo padrão de borda do caso Germano, só que aqui sobra em vez de faltar — a parcela/título tem
+  uma data própria que pode cair fora da janela de busca mesmo com a NF dentro do mês). **Corrigido**:
+  `sincronizarReceitaPorNotasFiscais` agora começa cada período apagando qualquer `titulo_tipo='receber'`
+  ainda presente em `codigo_grupo='1.01'` daquele mês/empresa, antes de gravar as linhas por NF — torna
+  a limpeza automática a cada sync, sem precisar de SQL manual de novo.
+- **Escopo: só os 2 meses reprocessados (mês atual + anterior)** — mês que já saiu da janela fica
+  congelado com a classificação antiga por título (mesmo padrão de "congelamento" já usado no CMV).
+  Confirmado ao vivo: setembro/2026 Rampa ainda tem 17 títulos somando R$44.364,49 em `1.01` pela via
+  antiga, intocados de propósito (não foram migrados nem apagados — apagar sem substituir seria
+  perder receita real de um mês fechado). Se precisar re-auditar um mês antigo pelo método novo,
+  seria um backfill manual, não automático.
+- **Lição**: um "ajuste" que só fecha o número total escondia um caso novo (viu-se isso rodando essa
+  mesma correção — achamos a duplicação dos 7 títulos só porque comparamos a NF-based contra a
+  título-based linha a linha, não só o total). Fonte única por NF, com `titulo_id` estável por nota,
+  deixa qualquer divergência futura visível e fácil de achar (basta comparar os dois caminhos), em
+  vez de escondida atrás de uma única linha de ajuste.
 
 ---
 
@@ -860,7 +877,7 @@ abaixo):
 | `estoque_sync_status` | `empresa` (uma linha por empresa) | Progresso/estado da rotina diária de estoque (lista de pendentes, saltos, última conclusão, última tentativa e último erro — ver "Falha silenciosa do cron diário") |
 | `financeiro_plano_contas` | `codigo_grupo` | Mapeamento grupo→linha do DRE + regime (competência/caixa/manual) + fonte Tiny — seed manual, sem coluna `empresa` (compartilhado) |
 | `financeiro_categorias` | `categoria_id` + `empresa` | Cache de `GET /categorias-receita-despesa`, com `codigo_grupo` extraído e flag `forca_manual` |
-| `financeiro_mensal` | `empresa` + `titulo_tipo` + `titulo_id` | Uma linha por título de contas a receber/pagar já classificado (não pré-somado — ver "Módulo Financeiro (DRE)"). Colunas `intercompany` (bool, default `false`) e `descricao` (texto) — ver "Intercompany Rampa↔TF" |
+| `financeiro_mensal` | `empresa` + `titulo_tipo` + `titulo_id` | Uma linha por título/NF já classificado (não pré-somado — ver "Módulo Financeiro (DRE)"). `titulo_tipo`: `receber`/`pagar` (título), `cmv`/`nf_produto`/`nf_servico`/`devolucao` (direto da NF, `titulo_id=id_olist` — grupo 1.01 da Rampa é só isso, nunca `receber`), `ajuste_conciliacao` (legado, não mais gravado). Colunas `intercompany` (bool, default `false`) e `descricao` (texto) — ver "Intercompany Rampa↔TF" |
 | `financeiro_lancamentos_manuais` | `id` | Lançamentos que nunca vêm da Olist (provisões, ajustes) — `codigo_grupo` + `subitem` livre opcional |
 | `financeiro_sync_status` | `empresa` (uma linha por empresa) | Progresso/estado da rotina diária financeira, mesmo padrão de `estoque_sync_status` |
 
