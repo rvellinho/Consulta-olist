@@ -476,40 +476,46 @@
       <button class="btn-sec" onclick="el('cmvp-arquivo-saldo').click()">📥 Importar saldo (.xls da Tiny)</button>
       <input type="file" id="cmvp-arquivo-saldo" accept=".xls,.xlsx" style="display:none;" onchange="importarSaldoCmvParalelo(this)" />
       <button class="btn-sec" onclick="sincronizarMovimentosCmvParalelo()">🔄 Sincronizar compras + vendas do mês</button>
+      <label style="display:flex;align-items:center;gap:6px;white-space:nowrap;font-size:13px;color:var(--tx);">
+        <input type="checkbox" id="cmvp-filtro-diferenca" onchange="renderCmvParalelo(cmvpDadosAtual)" style="width:auto;" />
+        Somente com diferença
+      </label>
     </div>
     <div id="cmvp-status" class="hidden" style="border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px;"></div>
     <div id="estado-cmv-paralelo" class="hidden"><div class="state-center"><div class="spinner"></div><p>Carregando...</p></div></div>
     <div id="cmvp-avisos" class="hidden" style="background:var(--redl);color:var(--red);border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px;"></div>
     <div id="tabela-cmv-paralelo-wrap" class="hidden">
-      <div class="table-wrap">
-        <table style="width:100%;border-collapse:collapse;font-size:13px;">
-          <thead>
-            <tr style="border-bottom:1px solid var(--br);">
-              <th rowspan="2" style="text-align:left;padding:6px 10px;vertical-align:bottom;">SKU</th>
-              <th rowspan="2" style="text-align:left;padding:6px 10px;vertical-align:bottom;">Produto</th>
-              <th rowspan="2" style="text-align:right;padding:6px 10px;vertical-align:bottom;">Inicial</th>
-              <th colspan="2" style="text-align:center;padding:6px 10px;border-bottom:1px solid var(--br);">Compras</th>
-              <th colspan="2" style="text-align:center;padding:6px 10px;border-bottom:1px solid var(--br);">Vendas</th>
-              <th rowspan="2" style="text-align:right;padding:6px 10px;vertical-align:bottom;">Final calculado</th>
-              <th rowspan="2" style="text-align:right;padding:6px 10px;vertical-align:bottom;">Final real (Tiny)</th>
-              <th rowspan="2" style="text-align:right;padding:6px 10px;vertical-align:bottom;">Diferença</th>
-              <th rowspan="2" style="text-align:right;padding:6px 10px;vertical-align:bottom;">Custo da diferença</th>
-            </tr>
-            <tr style="border-bottom:1px solid var(--br);">
-              <th style="text-align:right;padding:4px 10px;font-weight:400;color:var(--mt);">C</th>
-              <th style="text-align:right;padding:4px 10px;font-weight:400;color:var(--mt);">D</th>
-              <th style="text-align:right;padding:4px 10px;font-weight:400;color:var(--mt);">V</th>
-              <th style="text-align:right;padding:4px 10px;font-weight:400;color:var(--mt);">D</th>
-            </tr>
-          </thead>
-          <tbody id="tbody-cmv-paralelo"></tbody>
-          <tfoot>
-            <tr style="border-top:2px solid var(--br);font-weight:600;">
-              <td colspan="10" style="padding:6px 10px;text-align:right;">Total custo da diferença</td>
-              <td id="cmvp-total-custo-diferenca" style="padding:6px 10px;text-align:right;"></td>
-            </tr>
-          </tfoot>
-        </table>
+      <div style="border:1px solid var(--br);border-radius:var(--r);overflow:hidden;box-shadow:var(--sh);">
+        <div style="overflow:auto;max-height:65vh;">
+          <table style="width:100%;border-collapse:collapse;font-size:13px;">
+            <thead style="position:sticky;top:0;z-index:10;">
+              <tr style="border-bottom:1px solid var(--br);">
+                <th rowspan="2" style="text-align:left;padding:6px 10px;vertical-align:bottom;background:var(--s2);">SKU</th>
+                <th rowspan="2" style="text-align:left;padding:6px 10px;vertical-align:bottom;background:var(--s2);">Produto</th>
+                <th rowspan="2" style="text-align:right;padding:6px 10px;vertical-align:bottom;background:var(--s2);">Inicial</th>
+                <th colspan="2" style="text-align:center;padding:6px 10px;border-bottom:1px solid var(--br);background:var(--s2);">Compras</th>
+                <th colspan="2" style="text-align:center;padding:6px 10px;border-bottom:1px solid var(--br);background:var(--s2);">Vendas</th>
+                <th rowspan="2" style="text-align:right;padding:6px 10px;vertical-align:bottom;background:var(--s2);">Final calculado</th>
+                <th rowspan="2" style="text-align:right;padding:6px 10px;vertical-align:bottom;background:var(--s2);">Final real (Tiny)</th>
+                <th rowspan="2" style="text-align:right;padding:6px 10px;vertical-align:bottom;background:var(--s2);">Diferença</th>
+                <th rowspan="2" style="text-align:right;padding:6px 10px;vertical-align:bottom;background:var(--s2);">Custo da diferença</th>
+              </tr>
+              <tr style="border-bottom:1px solid var(--br);">
+                <th style="text-align:right;padding:4px 10px;font-weight:400;color:var(--mt);background:var(--s2);">C</th>
+                <th style="text-align:right;padding:4px 10px;font-weight:400;color:var(--mt);background:var(--s2);">D</th>
+                <th style="text-align:right;padding:4px 10px;font-weight:400;color:var(--mt);background:var(--s2);">V</th>
+                <th style="text-align:right;padding:4px 10px;font-weight:400;color:var(--mt);background:var(--s2);">D</th>
+              </tr>
+            </thead>
+            <tbody id="tbody-cmv-paralelo"></tbody>
+            <tfoot>
+              <tr style="border-top:2px solid var(--br);font-weight:600;">
+                <td colspan="10" style="padding:6px 10px;text-align:right;">Total custo da diferença</td>
+                <td id="cmvp-total-custo-diferenca" style="padding:6px 10px;text-align:right;"></td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
       </div>
     </div>
   </div>
@@ -2427,6 +2433,10 @@ async function sincronizarMovimentosCmvParalelo(){
   }
 }
 
+// Guarda a última resposta carregada, pra reaplicar o filtro "somente com
+// diferença" sem precisar reconsultar a API.
+let cmvpDadosAtual = null;
+
 async function carregarCmvParalelo(){
   const empresa = el("cmvp-empresa").value;
   const ano = parseInt(el("cmvp-ano").value,10);
@@ -2439,8 +2449,10 @@ async function carregarCmvParalelo(){
     const r = await fetch(`/api/financeiro?acao=estoque-cmv-paralelo&empresa=${empresa}&ano=${ano}&mes=${mes}`);
     if(!r.ok) throw new Error((await r.json()).erro || `Erro ${r.status}`);
     const dados = await r.json();
+    cmvpDadosAtual = dados;
     renderCmvParalelo(dados);
   }catch(e){
+    cmvpDadosAtual = null;
     el("tbody-cmv-paralelo").innerHTML = `<tr><td colspan="11" style="text-align:center;color:var(--red);padding:16px;">Erro: ${e.message}</td></tr>`;
     el("tabela-cmv-paralelo-wrap").classList.remove("hidden");
   }finally{
@@ -2449,6 +2461,7 @@ async function carregarCmvParalelo(){
 }
 
 function renderCmvParalelo(dados){
+  if(!dados) return;
   const avisos = [];
   if(!dados.temSaldoInicial) avisos.push(`Falta importar o saldo de fechamento de ${MESES_NOME[dados.anterior.mes-1]}/${dados.anterior.ano} (estoque inicial deste mês).`);
   if(!dados.temSaldoFinal) avisos.push(`Falta importar o saldo de fechamento deste mês (estoque final real).`);
@@ -2458,7 +2471,10 @@ function renderCmvParalelo(dados){
   }
   const fmt = n => (n==null ? "—" : Number(n).toLocaleString("pt-BR",{maximumFractionDigits:2}));
   const fmtDevol = n => (!n ? "—" : "-"+fmt(n)); // devolução sempre com sinal contrário à sua coluna-mãe (pedido do Rafael)
-  el("tbody-cmv-paralelo").innerHTML = dados.produtos.map(p => {
+  const temDiferenca = p => p.diferenca != null && Math.abs(p.diferenca) >= 0.001;
+  const soComDiferenca = el("cmvp-filtro-diferenca").checked;
+  const produtos = soComDiferenca ? dados.produtos.filter(temDiferenca) : dados.produtos;
+  el("tbody-cmv-paralelo").innerHTML = produtos.map(p => {
     const corDif = p.diferenca==null ? "" : (Math.abs(p.diferenca) < 0.001 ? "" : "color:var(--red);font-weight:600;");
     return `<tr style="border-bottom:1px solid var(--br);">
       <td style="padding:6px 10px;">${p.sku||"—"}</td>
@@ -2473,7 +2489,7 @@ function renderCmvParalelo(dados){
       <td style="padding:6px 10px;text-align:right;${corDif}">${fmt(p.diferenca)}</td>
       <td style="padding:6px 10px;text-align:right;${corDif}">${p.custoDiferenca==null ? "—" : formatarMoeda(p.custoDiferenca)}</td>
     </tr>`;
-  }).join("") || `<tr><td colspan="11" style="text-align:center;color:var(--mt);padding:16px;">Nenhum produto com saldo ou movimento neste mês.</td></tr>`;
+  }).join("") || `<tr><td colspan="11" style="text-align:center;color:var(--mt);padding:16px;">${soComDiferenca ? "Nenhum produto com diferença neste mês." : "Nenhum produto com saldo ou movimento neste mês."}</td></tr>`;
   el("cmvp-total-custo-diferenca").textContent = formatarMoeda(dados.totalCustoDiferenca || 0);
   el("tabela-cmv-paralelo-wrap").classList.remove("hidden");
 }
