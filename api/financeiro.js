@@ -1151,6 +1151,259 @@ async function executarSyncDiario(req, res) {
 }
 
 // ============================================================================
+// CMV paralelo (Estoque Inicial + Compras − Estoque Final) — em desenho desde
+// 2026-11-25, ver CLAUDE.md. Controle INDEPENDENTE do CMV do DRE acima (nota ×
+// custo do produto) — serve pra comparar os dois e investigar divergência,
+// nunca substitui nem altera o CMV que já entra no DRE.
+//
+// v1, escopo deliberadamente contido:
+//   - Estoque inicial/final: a Olist não tem endpoint de saldo histórico (o
+//     endpoint de log de movimentação devolve 403 — provável permissão de
+//     app, mesmo padrão do /caixa, só o Rafael resolve isso no painel da
+//     Tiny). Em vez disso, o saldo de fechamento de cada mês é IMPORTADO do
+//     relatório "Saldos em Estoque" que o Rafael exporta direto da tela da
+//     Tiny (ela reconstrói esse histórico internamente, só não expõe via
+//     API) — ver acao=estoque-saldo-importar.
+//   - Compras do mês: ordens de compra com situacao=Atendido cuja `data` cai
+//     no mês (decisão do Rafael, 2026-11-25) — custo rateia o FRETE da
+//     própria OC entre os itens (proporcional ao valor de cada item); o
+//     DESCONTO da OC fica de fora do rateio por enquanto (vem como texto da
+//     Tiny, sem ficar claro se é valor ou percentual — rateá-lo errado seria
+//     pior que não ratear). Frete de CTe separada (quando a OC não embute
+//     frete) e devoluções de compra/venda ficam pra uma v2 — não tem exemplo
+//     vivo de devolução ainda (confirmado raro) e a CTe depende de um vínculo
+//     manual que ainda não foi construído.
+//   - Vendas do mês: mesma fonte de nota V2 que o CMV do DRE já usa (mas é um
+//     passe PRÓPRIO, independente do sync-diario acima — não reaproveita nem
+//     altera nada da fila de CMV, pra não arriscar o sync que já está em
+//     produção) — soma quantidade por produto a partir dos itens de cada nota.
+//   - Sem cron: tudo acionado manualmente (botão na tela), nos moldes do
+//     "Atualizar Catálogo Agora" da aba Estoque. Dá pra automatizar depois se
+//     fizer sentido.
+// ============================================================================
+
+const ORCAMENTO_MOVIMENTOS_MS = 280000;
+
+async function buscarSkuParaProdutoId(empresa) {
+  const mapa = new Map();
+  const limit = 1000;
+  let offset = 0;
+  while (true) {
+    const r = await httpsRequest("GET", supaHost(),
+      `/rest/v1/estoque_catalogo?empresa=eq.${empresa}&select=produto_id,sku&limit=${limit}&offset=${offset}`,
+      null, supaHeaders);
+    const linhas = parseJSON(r.text);
+    if (!Array.isArray(linhas)) break;
+    linhas.forEach(l => { if (l.sku) mapa.set(String(l.sku).trim().toUpperCase(), Number(l.produto_id)); });
+    if (linhas.length < limit) break;
+    offset += limit;
+  }
+  return mapa;
+}
+
+// Importa o snapshot de saldo de fechamento de um mês (linhas vindas do
+// relatório "Saldos em Estoque" exportado da Tiny, já parseado no navegador —
+// mesmo padrão de upload client-side que a aba Importar já usa pra planilha
+// de clientes). SKU que não bate com nenhum produto do catálogo (produto
+// descontinuado há muito tempo, ou erro de digitação na planilha) entra na
+// lista de "não encontrados" devolvida pro usuário, em vez de travar o resto.
+async function importarSaldoMensal(empresa, ano, mes, linhas) {
+  const skuParaProdutoId = await buscarSkuParaProdutoId(empresa);
+  const naoEncontrados = [];
+  const payload = [];
+  for (const l of linhas) {
+    const sku = String(l.sku || "").trim().toUpperCase();
+    const produtoId = skuParaProdutoId.get(sku);
+    if (!produtoId) { naoEncontrados.push(l.sku); continue; }
+    payload.push({
+      empresa, ano, mes, produto_id: produtoId, sku: l.sku,
+      quantidade: Number(l.quantidade) || 0, importado_em: new Date().toISOString(),
+    });
+  }
+  if (payload.length) {
+    const body = JSON.stringify(payload);
+    const r = await httpsRequest("POST", supaHost(), "/rest/v1/estoque_saldo_mensal?on_conflict=empresa,ano,mes,produto_id", body,
+      { ...supaHeaders, "Content-Length": Buffer.byteLength(body), Prefer: "resolution=merge-duplicates,return=minimal" });
+    if (r.status >= 300) {
+      throw new Error(`upsert estoque_saldo_mensal: HTTP ${r.status} - ${r.text.slice(0, 500)}`);
+    }
+  }
+  return { importados: payload.length, naoEncontrados };
+}
+
+async function upsertMovimentos(empresa, linhas) {
+  if (!linhas.length) return;
+  const payload = JSON.stringify(linhas.map(l => ({ ...l, empresa, atualizado_em: new Date().toISOString() })));
+  const r = await httpsRequest("POST", supaHost(), "/rest/v1/estoque_movimentos_mensal?on_conflict=empresa,tipo,origem_id,produto_id", payload,
+    { ...supaHeaders, "Content-Length": Buffer.byteLength(payload), Prefer: "resolution=merge-duplicates,return=minimal" });
+  if (r.status >= 300) {
+    throw new Error(`upsert estoque_movimentos_mensal: HTTP ${r.status} - ${r.text.slice(0, 500)}`);
+  }
+}
+
+// Ordens de compra Atendido (situacao=1) cuja `data` cai no mês pedido —
+// decisão do Rafael (2026-11-25). A listagem não filtra por data (só por
+// situacao), então pagina tudo e filtra aqui. Custo de cada item = preço do
+// item + rateio do FRETE da própria OC (proporcional ao valor do item); o
+// DESCONTO da OC fica de fora (ver comentário no topo desta seção).
+async function buscarOrdensCompraAtendidasDoMes(accessToken, ano, mes) {
+  const alvo = formatarYYYYMM(ano, mes);
+  const linhas = [];
+  const limit = 100;
+  let offset = 0;
+  while (true) {
+    const r = await httpsRequest("GET", "api.tiny.com.br",
+      `/public-api/v3/ordem-compra?situacao=1&limit=${limit}&offset=${offset}`,
+      null, { Authorization: "Bearer " + accessToken });
+    const data = parseJSON(r.text);
+    if (r.status !== 200 || !Array.isArray(data.itens)) {
+      throw new Error(`ordem-compra (listagem offset=${offset}): HTTP ${r.status} - ${r.text.slice(0, 200)}`);
+    }
+    for (const ordem of data.itens) {
+      if (String(ordem.data || "").slice(0, 7) !== alvo) continue;
+      const itensOrdem = ordem.itens || [];
+      const totalProdutos = Number(ordem.totalProdutos) || itensOrdem.reduce((s, it) => s + (Number(it.preco) || 0) * (Number(it.quantidade) || 0), 0);
+      const frete = Number(ordem.frete) || 0;
+      const divergenteData = !!ordem.dataPrevista && String(ordem.dataPrevista).slice(0, 7) !== alvo;
+      // Uma mesma OC pode listar o mesmo produto em mais de uma linha (lotes/preços
+      // diferentes) — agrega por produto ANTES de empilhar em `linhas`, porque o
+      // upsert é por (empresa,tipo,origem_id,produto_id) e duas linhas com a mesma
+      // chave no mesmo lote fazem o Postgres rejeitar o upsert inteiro (erro 21000,
+      // "ON CONFLICT DO UPDATE command cannot affect row a second time")
+      const porProduto = new Map();
+      for (const item of itensOrdem) {
+        const produtoId = item.produto?.id;
+        const quantidade = Number(item.quantidade) || 0;
+        if (!produtoId || !quantidade) continue;
+        const valorItem = (Number(item.preco) || 0) * quantidade;
+        const rateioFrete = totalProdutos > 0 ? frete * (valorItem / totalProdutos) : 0;
+        const custoTotalItem = valorItem + rateioFrete;
+        const acc = porProduto.get(produtoId) || { quantidade: 0, custoTotal: 0 };
+        acc.quantidade += quantidade;
+        acc.custoTotal += custoTotalItem;
+        porProduto.set(produtoId, acc);
+      }
+      for (const [produtoId, acc] of porProduto) {
+        linhas.push({
+          ano, mes, produto_id: produtoId, tipo: "compra", origem_id: ordem.id,
+          quantidade: acc.quantidade, custo_unitario: acc.custoTotal / acc.quantidade, custo_total: acc.custoTotal,
+          data: ordem.data || null, data_prevista: ordem.dataPrevista || null, divergente_data: divergenteData,
+        });
+      }
+    }
+    const total = data.paginacao?.total ?? data.itens.length;
+    offset += limit;
+    if (data.itens.length < limit || offset >= total) break;
+    await sleep(600);
+  }
+  return linhas;
+}
+
+// Vendas do mês, por quantidade — mesma fonte V2 (nota.fiscal.*) que o CMV do
+// DRE já usa, mas um passe PRÓPRIO e independente do sync-diario acima (ver
+// comentário no topo desta seção pro motivo de não reaproveitar aquela fila).
+async function buscarVendasDoMes(tokenV2, ano, mes) {
+  const iniBR = formatarDataBR(ano, mes, 1);
+  const fimBR = formatarDataBR(ano, mes, ultimoDiaDoMes(ano, mes));
+  const notas = await listarNotasVendaV2(tokenV2, iniBR, fimBR);
+  const linhas = [];
+  for (const n of notas) {
+    await sleep(600);
+    let detalhe;
+    try {
+      detalhe = await buscarDetalheNotaVendaV2(tokenV2, n.id);
+    } catch (e) {
+      console.error(`[estoque-movimentos-sync] erro ao buscar nota ${n.id}: ${e.message}`);
+      continue;
+    }
+    // Mesma agregação por produto que `buscarOrdensCompraAtendidasDoMes` faz —
+    // uma nota pode ter o mesmo produto em mais de uma linha de item.
+    const porProduto = new Map();
+    for (const itWrap of (detalhe?.itens || [])) {
+      const it = itWrap?.item;
+      const produtoId = it?.id_produto;
+      const quantidade = Number(it?.quantidade) || 0;
+      if (!produtoId || !quantidade) continue;
+      porProduto.set(produtoId, (porProduto.get(produtoId) || 0) + quantidade);
+    }
+    for (const [produtoId, quantidade] of porProduto) {
+      linhas.push({
+        ano, mes, produto_id: produtoId, tipo: "venda", origem_id: n.id,
+        quantidade, custo_unitario: null, custo_total: null,
+        data: dataBRparaISO(n.data_emissao), data_prevista: null, divergente_data: false,
+      });
+    }
+  }
+  return linhas;
+}
+
+async function executarMovimentosSync(empresa, ano, mes) {
+  const inicio = Date.now();
+  const accessToken = await getAccessToken(empresa);
+  const tokenV2 = getConfigEmpresa(empresa).tokenV2;
+
+  const compras = await buscarOrdensCompraAtendidasDoMes(accessToken, ano, mes);
+  await upsertMovimentos(empresa, compras);
+
+  if (Date.now() - inicio > ORCAMENTO_MOVIMENTOS_MS) {
+    return { ok: true, concluido: false, etapa: "compras", compras: compras.length, vendas: 0 };
+  }
+
+  const vendas = await buscarVendasDoMes(tokenV2, ano, mes);
+  await upsertMovimentos(empresa, vendas);
+
+  return { ok: true, concluido: true, compras: compras.length, vendas: vendas.length };
+}
+
+// Relatório de reconciliação em si: estoque inicial (saldo importado do mês
+// anterior) + compras − vendas = estoque final CALCULADO, comparado contra o
+// estoque final REAL (saldo importado do mês pedido). Produto sem saldo
+// importado nos dois extremos ainda aparece se tiver movimento no mês (com
+// `inicial=0` e `temSaldoInicial=false` pro front avisar que falta importar).
+async function montarCmvParalelo(empresa, ano, mes) {
+  const anterior = mesAlvoAnterior(ano, mes);
+  const [rInicial, rFinal, rMov, rCatalogo] = await Promise.all([
+    httpsRequest("GET", supaHost(), `/rest/v1/estoque_saldo_mensal?empresa=eq.${empresa}&ano=eq.${anterior.ano}&mes=eq.${anterior.mes}&select=produto_id,quantidade`, null, supaHeaders),
+    httpsRequest("GET", supaHost(), `/rest/v1/estoque_saldo_mensal?empresa=eq.${empresa}&ano=eq.${ano}&mes=eq.${mes}&select=produto_id,quantidade`, null, supaHeaders),
+    httpsRequest("GET", supaHost(), `/rest/v1/estoque_movimentos_mensal?empresa=eq.${empresa}&ano=eq.${ano}&mes=eq.${mes}&select=produto_id,tipo,quantidade`, null, supaHeaders),
+    httpsRequest("GET", supaHost(), `/rest/v1/estoque_catalogo?empresa=eq.${empresa}&select=produto_id,sku,nome`, null, supaHeaders),
+  ]);
+  const inicialMap = new Map((parseJSON(rInicial.text) || []).map(l => [Number(l.produto_id), Number(l.quantidade) || 0]));
+  const finalRealMap = new Map((parseJSON(rFinal.text) || []).map(l => [Number(l.produto_id), Number(l.quantidade) || 0]));
+  const catalogoMap = new Map((parseJSON(rCatalogo.text) || []).map(l => [Number(l.produto_id), l]));
+
+  const comprasMap = new Map(), vendasMap = new Map();
+  for (const m of (parseJSON(rMov.text) || [])) {
+    const mapa = m.tipo === "compra" ? comprasMap : vendasMap;
+    const id = Number(m.produto_id);
+    mapa.set(id, (mapa.get(id) || 0) + (Number(m.quantidade) || 0));
+  }
+
+  const produtoIds = new Set([...inicialMap.keys(), ...finalRealMap.keys(), ...comprasMap.keys(), ...vendasMap.keys()]);
+  const produtos = [...produtoIds].map(id => {
+    const inicial = inicialMap.get(id) || 0;
+    const compras = comprasMap.get(id) || 0;
+    const vendas = vendasMap.get(id) || 0;
+    const finalCalculado = inicial + compras - vendas;
+    const temFinalReal = finalRealMap.has(id);
+    const finalReal = temFinalReal ? finalRealMap.get(id) : null;
+    const cat = catalogoMap.get(id);
+    return {
+      produto_id: id, sku: cat?.sku || null, nome: cat?.nome || `Produto ${id}`,
+      inicial, temInicial: inicialMap.has(id), compras, vendas, finalCalculado,
+      finalReal, temFinalReal, diferenca: temFinalReal ? finalCalculado - finalReal : null,
+    };
+  });
+  produtos.sort((a, b) => Math.abs(b.diferenca || 0) - Math.abs(a.diferenca || 0));
+
+  return {
+    ano, mes, anterior,
+    temSaldoInicial: inicialMap.size > 0, temSaldoFinal: finalRealMap.size > 0,
+    produtos,
+  };
+}
+
+// ============================================================================
 // Handler principal
 // ============================================================================
 
@@ -1268,6 +1521,15 @@ module.exports = async (req, res) => {
         return res.status(200).json(data);
       }
 
+      if (acao === "estoque-cmv-paralelo") {
+        const empresaCmvPar = String(req.query.empresa || "rampa").toLowerCase();
+        const anoCmvPar = parseInt(req.query.ano, 10);
+        const mesCmvPar = parseInt(req.query.mes, 10);
+        if (!anoCmvPar || !mesCmvPar) return res.status(400).json({ erro: "ano e mes são obrigatórios" });
+        const relatorio = await montarCmvParalelo(empresaCmvPar, anoCmvPar, mesCmvPar);
+        return res.status(200).json(relatorio);
+      }
+
       if (acao === "plano-contas") {
         const empresa = String(req.query.empresa || "rampa").toLowerCase();
         const [planoContas, rCategorias] = await Promise.all([
@@ -1288,6 +1550,26 @@ module.exports = async (req, res) => {
       const r = await httpsRequest("GET", supaHost(), path, null, supaHeaders);
       const data = parseJSON(r.text);
       return res.status(200).json(Array.isArray(data) ? data : []);
+    }
+
+    if (req.method === "POST" && req.query.acao === "estoque-saldo-importar") {
+      const { empresa, ano, mes, linhas } = parseBody(req.body);
+      if (!empresa || !ano || !mes || !Array.isArray(linhas)) {
+        return res.status(400).json({ erro: "empresa, ano, mes e linhas (array) são obrigatórios" });
+      }
+      const resultado = await importarSaldoMensal(String(empresa).toLowerCase(), parseInt(ano, 10), parseInt(mes, 10), linhas);
+      return res.status(200).json({ ok: true, ...resultado });
+    }
+
+    if (req.method === "POST" && req.query.acao === "estoque-movimentos-sync") {
+      const { empresa, ano, mes } = parseBody(req.body);
+      if (!empresa || !ano || !mes) return res.status(400).json({ erro: "empresa, ano e mes são obrigatórios" });
+      try {
+        const resultado = await executarMovimentosSync(String(empresa).toLowerCase(), parseInt(ano, 10), parseInt(mes, 10));
+        return res.status(200).json(resultado);
+      } catch (e) {
+        return res.status(500).json({ erro: e.message });
+      }
     }
 
     if (req.method === "POST" && req.query.acao === "intercompany-alocacao") {

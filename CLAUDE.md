@@ -509,11 +509,16 @@ outubro pode só ser vendido em dezembro). Produziu ~R$627 mil de "CMV" incorret
   (CMV = R$3.835,85 em 260 notas, não-zero)** — pra Rampa, enquanto isso não mudar, o CMV aparece
   como R$0 no DRE (subestimado, não estimado errado); pra TF, o valor já reflete parcialmente a
   realidade, mas ainda subestimado enquanto nem todo produto tiver custo cadastrado. O cadastro de
-  custo é manual, direto na Tiny (tela do produto, ou um import de planilha se o Tiny tiver essa
-  opção na própria interface) — **não existe endpoint de
-  API (nem v2 nem v3) pra escrever `preco_custo`**, confirmado na documentação oficial da v3
-  (`PUT /produtos/{id}/preco` só aceita `preco`/`precoPromocional`). A leitura funciona normal
-  pelas duas versões.
+  custo é manual, direto na Tiny (tela do produto). **Correção (2026-11-25)**: a afirmação
+  original aqui ("não existe endpoint de API pra escrever `preco_custo`") estava incompleta —
+  checava só o endpoint errado. `PUT /produtos/{id}/preco` é mesmo só pra preço de venda
+  (`preco`/`precoPromocional`), mas existe um endpoint **dedicado** pra custo:
+  `PUT /produtos/{id}/custos`, que edita o histórico de custo do produto — confirmado ao vivo que
+  esse histórico existe de verdade na conta (campo `custos[]` no `GET /produtos/{id}`, cada item
+  com `id`, `data`, `saldoAtual`, `saldoAnterior`, `precoCusto`, `custoMedio`, `precoVenda`,
+  `impostosRecuperaveis` — exatamente o payload que a doc da v3 pede pra escrever nesse endpoint).
+  **Nenhuma escrita foi testada ainda** (mudaria custo real em produção) — só a leitura foi
+  confirmada ao vivo. Ver "CMV paralelo" abaixo pro que isso destrava.
 - **Congelamento por mês, mesma regra de reprocessamento de 2 meses**: enquanto um mês está
   dentro da janela (atual + anterior), o CMV é recalculado a cada sync com o custo que estiver na
   Tiny **naquele dia**; quando o mês sai da janela, nunca mais é tocado — fica congelado no
@@ -1220,6 +1225,180 @@ igual as subcategorias reais que já aparecem na árvore.
   (título ainda não alocado) abre sem nada selecionado; salvar grava `codigo_grupo_destino` e
   `leaf_destino` corretos; editar a mesma alocação duas vezes não duplica (upsert funcionando).
 
+### CMV paralelo (Estoque Inicial + Compras − Estoque Final) — v1 implementada (2026-11-25)
+Pedido do Rafael: um controle de CMV **paralelo** ao que já existe no DRE (hoje: nota de venda ×
+custo do produto — ver "CMV real" acima), calculado pela fórmula clássica `Estoque Inicial +
+Compras − Estoque Final`, separado por empresa, pra comparar os dois e apontar divergência. Partes
+do pedido original (descrição completa abaixo) e, em seguida, o escopo real da v1 implementada.
+- **Compras do mês**: todo pedido (OC) com "data de entrada" (chegada da mercadoria) dentro do mês
+  considerado, mais as notas de frete/CTe de entrada "registradas" (que sempre devem ter o número
+  da OC nas observações). Na visualização, OC de mercadoria + CTe de frete da mesma compra podem
+  aparecer agrupadas. Se uma CTe não tiver o número do pedido na OBS (e não dá pra editar OBS na
+  Tiny depois que a CTe foi paga), precisa de um campo próprio no nosso app pra apontar manualmente
+  a qual OC ela pertence.
+- **Custo de entrada por produto**: nessas compras, registrar custo = custo da OC + frete/descontos/
+  acréscimos constantes na OC (rateados entre os itens) + frete da CTe (rateado) — e comparar contra
+  o custo atual cadastrado (`estoque_catalogo.custo_atual`). Serve pra auditoria e, possivelmente,
+  pra atualizar o custo cadastrado. **Atualizado (2026-11-25, corrige o bloqueio que constava
+  aqui)**: cadastro de custo É editável via API, pelo endpoint dedicado `PUT /produtos/{id}/custos`
+  (ver correção na seção "CMV real" acima) — só não foi testado em escrita ainda. Uma ferramenta de
+  "atualizar custo pelo app" passa a ser viável em tese; decisão de construir ou não isso fica pro
+  Rafael depois que o resto do desenho estiver pronto (prioridade mais baixa que o CMV paralelo
+  em si, que funciona mesmo só mostrando divergência).
+- **Movimentação de estoque (data/qtde/entrada-saída) via API**: `GET /produtos/{id}/estoque/.../
+  logs-movimentacao` (existe na doc da v3) devolve **403 com corpo vazio**, confirmado de novo em
+  2026-11-25 com parâmetros/produtos diferentes (mesmo sem nenhum filtro) — mesmo padrão já visto
+  no endpoint `/caixa` (ver "Payload V3"/Erros conhecidos): o token tem os roles normais de estoque
+  (`estoque-leitura`/`estoque-escrita`, confirmado decodificando o JWT), então a suspeita é a mesma
+  de sempre — permissão de **app**, liberada no painel da Tiny, não um role que falta no token.
+  **Só o Rafael pode investigar/liberar isso diretamente no painel de apps da Tiny** — até lá, a
+  única fonte de "o que entrou/saiu" fica sendo os documentos reais (nota, OC, devolução), nunca um
+  log de movimento cru; um ajuste manual (quebra, avaria) feito direto na tela de controle de
+  estoques da Tiny não aparece em nenhum documento, então só vira visível pra nós como a
+  **divergência residual** do relatório paralelo (estoque inicial + compras − vendas ≠ estoque
+  final real), nunca como um lançamento identificável por data/motivo.
+- **Estoque inicial/final**: posição de estoque (produto × quantidade) no último dia do mês,
+  valorizada pelo custo daquele mês (mesma regra de congelamento por mês já usada no CMV do DRE —
+  ver `financeiro_custo_mensal`/"CMV real" acima). **Resolvido (2026-11-25)**: a API não tem
+  endpoint de saldo histórico, mas a própria tela da Tiny tem — Rafael exportou da Tiny (telas de
+  relatório, não API) 3 "Saldos em Estoque" (fim de agosto, setembro e outubro/2026 da Rampa) e 2
+  "Entradas e Saídas de Estoque" (setembro e outubro/2026), todos `.xls` reais (BIFF/OLE2, não o
+  truque de HTML que o próprio app usa pra exportar — ver Estoque tab). Conferido linha a linha:
+  bate exatamente (saldo final de um mês = saldo inicial do mês seguinte = coluna "Saldo antes
+  de"/"Saldo em" do relatório de movimentação do mês certo), confirmando que a Tiny consegue
+  reconstruir saldo histórico internamente (só não expõe isso pra nós via API, por causa do 403
+  acima). **Então o plano passa a ser**: Rafael (ou quem tiver acesso) exporta manualmente esse
+  relatório da Tiny no fechamento de cada mês, e o app importa esse arquivo (mesmo padrão de
+  upload client-side que a aba Importar já usa) pra popular o "estoque final do mês" — sem rotina
+  de "fotografia" automática nossa, pelo menos enquanto o 403 não for resolvido. **Pendência real**:
+  o relatório de movimentação da Tiny só tem Entradas/Saídas agregadas por produto, sem quebra por
+  depósito. **Confirmado pelo Rafael (2026-11-25)**: o relatório da Tiny já ignora os depósitos
+  marcados `desconsiderar` — mesma régua que o `saldo`/`disponivel` da API já usa (ver seção
+  "Multi-empresa"/deposit no histórico desta investigação). Nenhuma mudança necessária por conta
+  disso.
+- **Validado com dado real (2026-11-25)**: Rafael exportou e eu confirmei, linha a linha, pra
+  Rampa E TF (ago/set/out/2026, ~130 produtos na Rampa e ~800 na TF): saldo final de um relatório
+  bate 100% com o "saldo antes de" do relatório de movimentação do mês seguinte, e com o "saldo em"
+  do mês atual — zero divergência de encadeamento nos dois casos. A conta interna
+  (antes + entradas − saídas = depois) também bateu perfeitamente, **com uma única exceção real**:
+  TF, setembro/2026, `OLPEMO1` (Óleo para madeira Olio Per Mobili 1L) — antes=8, entradas=30,
+  saídas=23, depois=14 (deveria ser 15, falta 1 unidade). Não investigado a fundo (não é o foco
+  agora), mas serve de exemplo real do tipo de coisa que o relatório de reconciliação paralelo vai
+  capturar.
+
+#### Implementação v1 (2026-11-25) — escopo real, menor que o pedido original acima
+2 tabelas novas no Supabase (`estoque_saldo_mensal`, `estoque_movimentos_mensal` — RLS ligado, sem
+policy, igual toda tabela do projeto) e 3 `?acao=` novas em `api/financeiro.js` (sem arquivo novo —
+limite de 12 funções do Hobby):
+- **`estoque-saldo-importar`** (POST): recebe `{empresa, ano, mes, linhas:[{sku,quantidade}]}` já
+  parseado no navegador a partir do `.xls` "Saldos em Estoque" exportado da Tiny — resolve
+  `sku -> produto_id` via `estoque_catalogo` e faz upsert em `estoque_saldo_mensal`
+  (`empresa,ano,mes,produto_id`). SKU sem match (produto não existe no catálogo) entra em
+  `naoEncontrados` na resposta, não trava o resto.
+- **`estoque-movimentos-sync`** (POST, manual — sem cron, sem checkpoint, igual o botão "Atualizar
+  Catálogo Agora" da aba Estoque): recebe `{empresa, ano, mes}` e faz DOIS passes:
+  - **Compras**: pagina `GET /ordem-compra?situacao=1` (Atendido) e filtra pela `data` caindo no
+    mês pedido (decisão do Rafael, 2026-11-25) — custo de cada item = preço do item + rateio do
+    **frete da própria OC** (proporcional ao valor do item); **o desconto da OC fica de fora do
+    rateio** (vem como texto da Tiny, ambíguo se é valor ou percentual) e **frete de CTe separada
+    também fica de fora** (dependeria do vínculo manual CTe↔OC do pedido original, não construído
+    nesta v1). `divergente_data=true` quando o mês de `dataPrevista` diverge do mês de `data`.
+  - **Vendas**: passe PRÓPRIO e independente do sync-diario do DRE (mesma fonte V2 de notas de
+    venda, mas não reaproveita a fila `filaCmv` — decisão deliberada pra não arriscar o sync
+    financeiro que já está em produção) — soma quantidade por produto a partir dos itens de cada
+    nota de venda do mês.
+  - **Devoluções (compra e venda) ficam de fora desta v1** — sem exemplo vivo até hoje (confirmado
+    raro), e exigiriam escanear notas V3 por CFOP (fonte totalmente separada da V2 usada pro resto)
+    só pra um caso que nunca ocorreu ainda. Entram como divergência residual não explicada se/quando
+    acontecerem — tratamento melhor fica pra quando houver um caso real pra testar contra.
+  - Roda dentro do orçamento de tempo da função (`maxDuration=300` já configurado); se não couber
+    (catálogo grande, muitas notas), devolve `concluido:false` e o usuário clica de novo — sem
+    perda de progresso porque o upsert é idempotente, só reprocessa mais devagar que o ideal.
+- **`estoque-cmv-paralelo`** (GET `?empresa=&ano=&mes=`): monta o relatório — pra cada produto com
+  saldo ou movimento no período, `inicial` (saldo do mês anterior) `+ compras − vendas = final
+  calculado`, comparado contra `final real` (saldo importado do próprio mês); ordenado por
+  `|diferença|` desc. Avisa explicitamente quando falta importar o saldo inicial e/ou final do
+  período (em vez de mostrar um número incompleto como se fosse definitivo).
+- **Tela**: novo item "📦 CMV Paralelo" no mesmo menu suspenso "💰 Financeiro" (admin-only, herda a
+  mesma trava de perfil que já escondia o menu inteiro) — filtro empresa/ano/mês, botão de
+  importar o `.xls` (usa SheetJS, carregado via CDN só pra isso — o parser da aba Importar é
+  texto/CSV puro, não lê o binário real do `.xls` da Tiny) e botão de sincronizar compras+vendas,
+  mais a tabela de reconciliação.
+- **Testado ao vivo via `vercel dev`** com os 5 relatórios reais que o Rafael exportou: importado
+  saldo de ago/set/out/2026 pra Rampa e TF (6 importações, 126 produtos Rampa / 797 TF cada),
+  sincronizado compras+vendas de setembro e outubro pras duas empresas. Nenhum valor de custo foi
+  escrito na Tiny (só leitura, confirma o que já estava documentado em "CMV real").
+- **Deferido pra uma v2** (não construído): vínculo manual CTe↔OC (frete separado da compra),
+  rateio do desconto da OC, devolução de compra/venda, e a ferramenta de "atualizar custo
+  cadastrado pelo app" (agora viável via `PUT /produtos/{id}/custos`, ver correção acima) — nenhum
+  desses bloqueia o uso da v1, que já funciona mostrando a divergência produto a produto.
+
+#### Bug: upsert de movimentos nunca checava o status HTTP → lote com produto duplicado sumia inteiro, sem erro nenhum (corrigido, 2026-11-25)
+Achado na própria verificação pós-implementação (antes de reportar a v1 como validada): rodando
+os 4 combos de teste (Rampa/TF × set/out), **Rampa/outubro saiu com ZERO linhas** em
+`estoque_movimentos_mensal` (nem compra nem venda) e **TF/setembro saiu sem nenhuma venda** —
+mesmo com a resposta do endpoint dizendo `{"ok":true,"concluido":true,"compras":52,"vendas":230}`
+pra Rampa/outubro. `upsertMovimentos` fazia o `POST` pro Supabase e **nunca checava `r.status`** —
+se o Postgres rejeitasse o lote inteiro, a função engolia o erro e devolvia sucesso baseado só no
+tamanho do array em memória, nunca no que de fato foi gravado.
+
+Causa raiz, achada ligando a checagem de status (`r.status >= 300` → lança erro) e rodando de
+novo: erro Postgres `21000` — **"ON CONFLICT DO UPDATE command cannot affect row a second time"**
+— porque `buscarOrdensCompraAtendidasDoMes`/`buscarVendasDoMes` empilhavam uma linha por item de
+pedido/nota sem agregar, e quando o MESMO produto aparece em mais de uma linha de item dentro da
+MESMA OC/nota (lote diferente, preço diferente), o upsert tenta inserir duas linhas com a mesma
+chave (`empresa,tipo,origem_id,produto_id`) no mesmo comando — o Postgres rejeita o **lote
+inteiro**, não só a linha duplicada. Confirmado ao vivo que OCs reais de Rampa/outubro (ex: OC
+395280168, produto GEU2510540/SEU257540) batiam nesse padrão.
+
+**Corrigido**: (1) `upsertMovimentos` agora lança erro se `r.status >= 300`, nunca mais silencioso;
+(2) as duas funções de coleta agora agregam por produto (soma quantidade, soma custo) **antes**
+de empilhar em `linhas`, uma linha por produto por OC/nota, nunca mais uma por item bruto. Testado
+ao vivo re-rodando os 4 combos depois do fix — Rampa/outubro e TF/setembro passaram a gravar
+normalmente, e a reconciliação de Rampa/outubro (que antes do fix mostrava 54 produtos com
+divergência >5 unidades, muito acima dos outros 3 combos) caiu pra 13 — mesma faixa dos outros
+3 (Rampa/set 13, TF/set 6, TF/out 12) — confirmando que o problema era esse bug, não uma
+característica real dos dados de outubro.
+
+**Lição**: é a mesma categoria de erro já documentada várias vezes neste arquivo ("200 com erro
+no corpo", "`data.itens||[]` virando lista vazia") — uma chamada que nunca falha visivelmente
+porque ninguém checou a resposta. Aqui o padrão específico é novo: um **upsert em lote cujo
+`Prefer: resolution=merge-duplicates` falha inteiro** quando há chave duplicada dentro do próprio
+lote (não entre lotes) — qualquer upsert em lote contra o Supabase/PostgREST que agrupa dados de
+uma origem com granularidade mais fina que a chave de conflito (aqui: item de pedido → produto)
+precisa agregar por chave antes de montar o payload, e toda chamada HTTP de escrita precisa
+checar o status, nunca assumir sucesso pelo que foi *tentado* enviar.
+
+#### Convenção interna sobre datas de estoque/contas a pagar em compras (e-mail do Rafael pra equipe, registrado 2026-11-25)
+Contexto de negócio por trás da divergência "data da OC" vs. "data prevista" que o CMV paralelo
+precisa apontar quando não baterem — Rafael pediu que isso fique registrado tanto pra levar em
+conta no cálculo quanto pra eventuais auditorias futuras:
+> Para nossos controles internos, por padrão sempre consideramos nas OC de mercadorias que:
+> • Estoque entra na data de chegada da mercadoria
+> • Contas a pagar tem data de emissão na data de chegada da mercadoria.
+>
+> Porém o Olist tem o lançamento de estoque e das contas a pagar manual, e o sistema considera para
+> os dois casos a data em que foi feito esse lançamento, e não a data da OC ou da previsão. Portanto,
+> se fizermos hoje uma entrada de material que chegou em outra data, ao lançarmos estoque e contas a
+> data fica errada.
+>
+> Essas datas podem ser ajustadas manualmente após o lançamento:
+> • Sempre procurar fazer a entrada de OC e lançamento de estoque e contas na data de chegada
+> • Caso não seja possível (ou os lançamentos precisem ser estornados e refeitos): entrar no item
+>   pelo controle de estoque, clicar no lançamento de entrada e alterar a data; entrar nas contas a
+>   pagar, filtrar pelas contas a pagar da OC em questão, entrar em cada parcela e alterar manualmente.
+>
+> Se o pedido tem muitos itens/parcelas, corrigir um por um é trabalhoso (não achamos forma de
+> corrigir o conjunto de uma vez). Em termos de impacto, só é problema quando a data errada vira o
+> mês — então, se for muito trabalhoso trocar, pode deixar a data errada, com atenção especial só
+> pros pedidos recebidos no fim do mês (garantir que esses não fiquem com data errada).
+
+- **Implicação pro CMV paralelo**: como esse erro de data só importa quando cruza virada de mês, e
+  é uma convenção interna (não um campo que a Tiny valida), o cálculo de "compras do mês" vai
+  precisar comparar `data` (data da OC) contra `dataPrevista` e apontar divergência pro Rafael
+  corrigir manualmente na Tiny quando fizer diferença de mês — nunca tentar adivinhar/corrigir
+  sozinho qual é a data "certa".
+
 ---
 
 ## RLS (Row Level Security) nas 16 tabelas do projeto — ligado (2026-11-24)
@@ -1276,6 +1455,8 @@ era exposição teórica.
 | `financeiro_intercompany_alocacoes` | `empresa_origem` + `titulo_tipo` + `titulo_id` | Alocação manual de despesa intercompany (valor parcial + categoria de destino, nível 3 via `leaf_destino` — `codigo_grupo_destino` é derivado dele) — ver "Alocação intercompany manual" e "Categoria de destino do intercompany agora é do nível 3" |
 | `financeiro_lancamentos_manuais` | `id` | Lançamentos que nunca vêm da Olist (provisões, ajustes) — `codigo_grupo` + `subitem` livre opcional |
 | `financeiro_sync_status` | `empresa` (uma linha por empresa) | Progresso/estado da rotina diária financeira, mesmo padrão de `estoque_sync_status` |
+| `estoque_saldo_mensal` | `empresa` + `ano` + `mes` + `produto_id` | Saldo de FECHAMENTO de cada mês, importado manualmente do relatório "Saldos em Estoque" exportado da Tiny (sem endpoint de saldo histórico na API) — ver "CMV paralelo" |
+| `estoque_movimentos_mensal` | `empresa` + `tipo` + `origem_id` + `produto_id` | Compras (via OC) e vendas (via nota) do mês, por produto — alimenta o relatório de reconciliação do "CMV paralelo", nunca o DRE |
 
 - CNPJ é a chave primária preferida (mais estável que IDs internos da Olist)
 - CNPJ sempre armazenado limpo (sem `.`, `/`, `-`)

@@ -227,6 +227,7 @@
       <button class="nav-tab" type="button" onclick="toggleDropFinanceiro(event)">💰 Financeiro ▾</button>
       <div class="drop-menu hidden" id="drop-financeiro-menu">
         <button class="drop-item" type="button" onclick="acaoDreMenu()">📊 DRE</button>
+        <button class="drop-item" type="button" onclick="acaoCmvParaleloMenu()">📦 CMV Paralelo</button>
       </div>
     </div>
   </div>
@@ -445,6 +446,56 @@
       <div class="table-wrap">
         <table style="width:100%;border-collapse:collapse;">
           <tbody id="tbody-financeiro"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ABA CMV PARALELO (Estoque Inicial + Compras − Estoque Final, pra comparar com o CMV do DRE) -->
+  <div id="aba-cmv-paralelo" class="hidden">
+    <p style="font-size:13px;color:var(--mt);margin-bottom:14px;">
+      Controle paralelo de estoque — compara o estoque calculado (inicial + compras − vendas) com o saldo
+      real importado da Tiny, pra achar divergência produto a produto. Não altera o CMV que já entra no DRE.
+    </p>
+    <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:12px;align-items:flex-end;">
+      <div class="fg-sm" style="min-width:150px;">
+        <label>Empresa</label>
+        <select id="cmvp-empresa" onchange="carregarCmvParalelo()">
+          <option value="rampa">Rampa</option>
+          <option value="tf">TF</option>
+        </select>
+      </div>
+      <div class="fg-sm" style="width:90px;">
+        <label>Ano</label>
+        <input type="number" id="cmvp-ano" onchange="carregarCmvParalelo()" />
+      </div>
+      <div class="fg-sm" style="width:150px;">
+        <label>Mês</label>
+        <select id="cmvp-mes" onchange="carregarCmvParalelo()"></select>
+      </div>
+      <button class="btn-sec" onclick="el('cmvp-arquivo-saldo').click()">📥 Importar saldo (.xls da Tiny)</button>
+      <input type="file" id="cmvp-arquivo-saldo" accept=".xls,.xlsx" style="display:none;" onchange="importarSaldoCmvParalelo(this)" />
+      <button class="btn-sec" onclick="sincronizarMovimentosCmvParalelo()">🔄 Sincronizar compras + vendas do mês</button>
+    </div>
+    <div id="cmvp-status" class="hidden" style="border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px;"></div>
+    <div id="estado-cmv-paralelo" class="hidden"><div class="state-center"><div class="spinner"></div><p>Carregando...</p></div></div>
+    <div id="cmvp-avisos" class="hidden" style="background:var(--redl);color:var(--red);border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px;"></div>
+    <div id="tabela-cmv-paralelo-wrap" class="hidden">
+      <div class="table-wrap">
+        <table style="width:100%;border-collapse:collapse;font-size:13px;">
+          <thead>
+            <tr style="border-bottom:1px solid var(--br);">
+              <th style="text-align:left;padding:6px 10px;">SKU</th>
+              <th style="text-align:left;padding:6px 10px;">Produto</th>
+              <th style="text-align:right;padding:6px 10px;">Inicial</th>
+              <th style="text-align:right;padding:6px 10px;">Compras</th>
+              <th style="text-align:right;padding:6px 10px;">Vendas</th>
+              <th style="text-align:right;padding:6px 10px;">Final calculado</th>
+              <th style="text-align:right;padding:6px 10px;">Final real (Tiny)</th>
+              <th style="text-align:right;padding:6px 10px;">Diferença</th>
+            </tr>
+          </thead>
+          <tbody id="tbody-cmv-paralelo"></tbody>
         </table>
       </div>
     </div>
@@ -774,6 +825,8 @@
   </div>
 </div>
 
+<!-- SheetJS: só pra ler .xls real (binário) do relatório "Saldos em Estoque" exportado da Tiny no CMV Paralelo -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 let usuarioAtual=null, paginaAtual=1, buscaAtual="", temProxima=false, clienteSel=null, modoDemo=false;
 let empresaAtual="rampa";
@@ -948,16 +1001,18 @@ function mudarAba(aba){
   el("aba-estoque").classList.toggle("hidden",aba!=="estoque");
   el("aba-relatorios").classList.toggle("hidden",aba!=="relatorios");
   el("aba-financeiro-dre").classList.toggle("hidden",aba!=="financeiro-dre");
+  el("aba-cmv-paralelo").classList.toggle("hidden",aba!=="cmv-paralelo");
   el("tab-clientes").classList.toggle("active",aba==="clientes");
   el("tab-configuracoes").classList.toggle("active",aba==="usuarios"||aba==="importar");
   el("tab-estoque").classList.toggle("active",aba==="estoque");
   el("tab-relatorios").classList.toggle("active",aba==="relatorios");
-  el("tab-financeiro").classList.toggle("active",aba==="financeiro-dre");
+  el("tab-financeiro").classList.toggle("active",aba==="financeiro-dre"||aba==="cmv-paralelo");
   el("tela-app").classList.toggle("app-wide",aba==="relatorios");
   if(aba==="usuarios")carregarUsuarios();
   if(aba==="relatorios")inicializarDatasRelatorio();
   if(aba==="estoque")carregarInfoCatalogoEstoque();
   if(aba==="financeiro-dre"){ inicializarFiltrosFinanceiro(); carregarDRE(); }
+  if(aba==="cmv-paralelo"){ inicializarFiltrosCmvParalelo(); carregarCmvParalelo(); }
 }
 
 // MENUS SUSPENSOS ("RELATÓRIOS", "CONFIGURAÇÕES" e "FINANCEIRO")
@@ -996,6 +1051,7 @@ function toggleDropFinanceiro(e){
   if(abrir)menu.classList.remove("hidden");
 }
 function acaoDreMenu(){ fecharTodosDropdowns(); mudarAba("financeiro-dre"); }
+function acaoCmvParaleloMenu(){ fecharTodosDropdowns(); mudarAba("cmv-paralelo"); }
 document.addEventListener("click",e=>{
   const dentroRelatorios=el("tab-relatorios")?.contains(e.target);
   const dentroConfig=el("tab-configuracoes")?.contains(e.target);
@@ -2264,6 +2320,144 @@ async function carregarDRE(){
   }finally{
     el("estado-financeiro").classList.add("hidden");
   }
+}
+
+// --- CMV Paralelo (Estoque Inicial + Compras − Estoque Final) ---
+
+function inicializarFiltrosCmvParalelo(){
+  if(!el("cmvp-mes").options.length){
+    el("cmvp-mes").innerHTML = MESES_NOME.map((nome,i)=>`<option value="${i+1}">${nome}</option>`).join("");
+  }
+  if(!el("cmvp-ano").value){
+    const hoje = new Date();
+    el("cmvp-ano").value = hoje.getFullYear();
+    el("cmvp-mes").value = hoje.getMonth() + 1;
+  }
+}
+
+function cmvpStatus(msg, tipo){
+  const el2 = el("cmvp-status");
+  el2.classList.remove("hidden");
+  el2.style.background = tipo === "erro" ? "var(--redl)" : "var(--gl)";
+  el2.style.color = tipo === "erro" ? "var(--red)" : "var(--g)";
+  el2.textContent = msg;
+}
+
+// Lê o .xls real (binário, exportado da Tiny) via SheetJS — o parser de texto
+// usado na aba Importar (lerArquivo) só funciona pra CSV, não serve pra esse
+// formato. Colunas esperadas (header na 1ª linha): "Código (SKU)", "Produto",
+// "Estoque físico", "Estoque reservado", "Unidade" — acha a coluna certa pelo
+// nome, não pela posição, pra não quebrar se a Tiny reordenar.
+function importarSaldoCmvParalelo(input){
+  const file = input.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = async function(e){
+    try{
+      const wb = XLSX.read(e.target.result, {type:"array"});
+      const planilha = wb.Sheets[wb.SheetNames[0]];
+      const linhas = XLSX.utils.sheet_to_json(planilha, {header:1});
+      const header = (linhas[0]||[]).map(h => String(h||"").trim().toLowerCase());
+      const idxSku = header.findIndex(h => h.includes("sku") || h.includes("código"));
+      const idxFisico = header.findIndex(h => h.includes("físico") || h.includes("fisico"));
+      if(idxSku===-1 || idxFisico===-1){
+        cmvpStatus("Não achei as colunas de SKU/Estoque físico no arquivo.", "erro");
+        return;
+      }
+      const dados = [];
+      for(let i=1;i<linhas.length;i++){
+        const sku = linhas[i][idxSku];
+        if(sku===undefined || sku===null || String(sku).trim()==="") continue;
+        dados.push({ sku: String(sku).trim(), quantidade: Number(linhas[i][idxFisico])||0 });
+      }
+      const empresa = el("cmvp-empresa").value;
+      const ano = parseInt(el("cmvp-ano").value,10);
+      const mes = parseInt(el("cmvp-mes").value,10);
+      cmvpStatus(`Importando ${dados.length} produtos...`, "ok");
+      const r = await fetch("/api/financeiro?acao=estoque-saldo-importar", {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({empresa, ano, mes, linhas: dados}),
+      });
+      const resp = await r.json();
+      if(!r.ok) throw new Error(resp.erro || `Erro ${r.status}`);
+      cmvpStatus(`Importado: ${resp.importados} produtos` + (resp.naoEncontrados?.length ? ` — ${resp.naoEncontrados.length} SKU(s) não encontrado(s) no catálogo` : ""), "ok");
+      carregarCmvParalelo();
+    }catch(err){
+      cmvpStatus("Erro ao importar: " + err.message, "erro");
+    }finally{
+      input.value = "";
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+async function sincronizarMovimentosCmvParalelo(){
+  const empresa = el("cmvp-empresa").value;
+  const ano = parseInt(el("cmvp-ano").value,10);
+  const mes = parseInt(el("cmvp-mes").value,10);
+  cmvpStatus("Sincronizando compras e vendas do mês (pode levar alguns minutos)...", "ok");
+  try{
+    const r = await fetch("/api/financeiro?acao=estoque-movimentos-sync", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({empresa, ano, mes}),
+    });
+    const resp = await r.json();
+    if(!r.ok) throw new Error(resp.erro || `Erro ${r.status}`);
+    if(resp.concluido){
+      cmvpStatus(`Sincronizado: ${resp.compras} compras, ${resp.vendas} vendas.`, "ok");
+    }else{
+      cmvpStatus(`Parcial (acabou o tempo) — clique de novo pra continuar de onde parou.`, "erro");
+    }
+    carregarCmvParalelo();
+  }catch(err){
+    cmvpStatus("Erro ao sincronizar: " + err.message, "erro");
+  }
+}
+
+async function carregarCmvParalelo(){
+  const empresa = el("cmvp-empresa").value;
+  const ano = parseInt(el("cmvp-ano").value,10);
+  const mes = parseInt(el("cmvp-mes").value,10);
+  if(!ano || !mes) return;
+  el("estado-cmv-paralelo").classList.remove("hidden");
+  el("tabela-cmv-paralelo-wrap").classList.add("hidden");
+  el("cmvp-avisos").classList.add("hidden");
+  try{
+    const r = await fetch(`/api/financeiro?acao=estoque-cmv-paralelo&empresa=${empresa}&ano=${ano}&mes=${mes}`);
+    if(!r.ok) throw new Error((await r.json()).erro || `Erro ${r.status}`);
+    const dados = await r.json();
+    renderCmvParalelo(dados);
+  }catch(e){
+    el("tbody-cmv-paralelo").innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--red);padding:16px;">Erro: ${e.message}</td></tr>`;
+    el("tabela-cmv-paralelo-wrap").classList.remove("hidden");
+  }finally{
+    el("estado-cmv-paralelo").classList.add("hidden");
+  }
+}
+
+function renderCmvParalelo(dados){
+  const avisos = [];
+  if(!dados.temSaldoInicial) avisos.push(`Falta importar o saldo de fechamento de ${MESES_NOME[dados.anterior.mes-1]}/${dados.anterior.ano} (estoque inicial deste mês).`);
+  if(!dados.temSaldoFinal) avisos.push(`Falta importar o saldo de fechamento deste mês (estoque final real).`);
+  if(avisos.length){
+    el("cmvp-avisos").classList.remove("hidden");
+    el("cmvp-avisos").innerHTML = avisos.join("<br>");
+  }
+  const fmt = n => (n==null ? "—" : Number(n).toLocaleString("pt-BR",{maximumFractionDigits:2}));
+  el("tbody-cmv-paralelo").innerHTML = dados.produtos.map(p => {
+    const corDif = p.diferenca==null ? "" : (Math.abs(p.diferenca) < 0.001 ? "" : "color:var(--red);font-weight:600;");
+    return `<tr style="border-bottom:1px solid var(--br);">
+      <td style="padding:6px 10px;">${p.sku||"—"}</td>
+      <td style="padding:6px 10px;">${p.nome}</td>
+      <td style="padding:6px 10px;text-align:right;">${fmt(p.inicial)}</td>
+      <td style="padding:6px 10px;text-align:right;">${fmt(p.compras)}</td>
+      <td style="padding:6px 10px;text-align:right;">${fmt(p.vendas)}</td>
+      <td style="padding:6px 10px;text-align:right;">${fmt(p.finalCalculado)}</td>
+      <td style="padding:6px 10px;text-align:right;">${p.temFinalReal ? fmt(p.finalReal) : "—"}</td>
+      <td style="padding:6px 10px;text-align:right;${corDif}">${fmt(p.diferenca)}</td>
+    </tr>`;
+  }).join("") || `<tr><td colspan="8" style="text-align:center;color:var(--mt);padding:16px;">Nenhum produto com saldo ou movimento neste mês.</td></tr>`;
+  el("tabela-cmv-paralelo-wrap").classList.remove("hidden");
 }
 
 // Guarda o contexto da última carga do DRE (empresa/ano/mês), pra alimentar o
