@@ -446,15 +446,22 @@ async function buscarAlocacoesParaDestino(empresa, ano, mes) {
 // travar o cálculo todo) — enquanto o cadastro de custos não estiver completo
 // na Tiny, o CMV fica subestimado, não errado por estimativa.
 const SITUACOES_INVALIDAS_NOTA_VENDA_V2 = ["1", "3", "5", "10"]; // Pendente, Cancelada, Rejeitada, Denegada
+// Mesmos códigos de `_lib/relatorio-coleta.js` (duplicado aqui de propósito,
+// mesmo padrão de pequena duplicação já existente entre api/*.js — ver
+// CLAUDE.md). Nota "S" (saída) com uma dessas finalidades = devolução de
+// COMPRA (mercadoria saindo de volta pro fornecedor); nota "E" (entrada) =
+// devolução de VENDA (cliente devolvendo) — mesma lógica já usada no
+// Relatório de Vendas, só que lá só a direção "E" importava.
+const FINALIDADES_DEVOLUCAO = ["4", "7", "8"];
 function ehErroSemResultadosV2(erro) {
   return String(erro?.erros?.[0]?.erro || "").toLowerCase().includes("não retornou");
 }
-async function listarNotasVendaV2(tokenV2, dataInicialBR, dataFinalBR) {
+async function listarNotasFiscaisV2(tokenV2, tipoNota, dataInicialBR, dataFinalBR) {
   const todas = [];
   let pagina = 1;
   while (true) {
     const body = new URLSearchParams({
-      token: tokenV2, formato: "JSON", tipoNota: "S",
+      token: tokenV2, formato: "JSON", tipoNota,
       dataInicial: dataInicialBR, dataFinal: dataFinalBR, pagina: String(pagina),
     }).toString();
     const r = await httpsRequest("POST", "api.tiny.com.br", "/api2/notas.fiscais.pesquisa.php", body,
@@ -925,7 +932,7 @@ async function executarSyncDiario(req, res) {
         if (grupoCmv) {
           const iniBR = formatarDataBR(p.ano, p.mes, 1);
           const fimBR = formatarDataBR(p.ano, p.mes, ultimoDiaDoMes(p.ano, p.mes));
-          const notasVenda = await listarNotasVendaV2(tokenV2, iniBR, fimBR);
+          const notasVenda = await listarNotasFiscaisV2(tokenV2, "S", iniBR, fimBR);
           notasVenda.forEach(n => filaCmv.push({ id: n.id, ano: p.ano, mes: p.mes, dataEmissaoBR: n.data_emissao }));
           await sleep(600);
         }
@@ -1302,38 +1309,69 @@ async function buscarOrdensCompraAtendidasDoMes(accessToken, ano, mes) {
 // Vendas do mês, por quantidade — mesma fonte V2 (nota.fiscal.*) que o CMV do
 // DRE já usa, mas um passe PRÓPRIO e independente do sync-diario acima (ver
 // comentário no topo desta seção pro motivo de não reaproveitar aquela fila).
-async function buscarVendasDoMes(tokenV2, ano, mes) {
+//
+// Separa por finalidade (pedido do Rafael, 2026-11-25 — colunas C/D de
+// compras e V/D de vendas): nota "S" (saída) com finalidade normal = venda;
+// com finalidade de devolução (FINALIDADES_DEVOLUCAO) = devolução de COMPRA
+// (mercadoria voltando pro fornecedor). Nota "E" (entrada) com essa mesma
+// finalidade = devolução de VENDA (cliente devolvendo) — mesmo padrão já
+// usado em `_lib/relatorio-coleta.js`/coletarDevolucoesSync, só que aqui por
+// quantidade/produto, não por valor. A devolução de COMPRA é suposição por
+// simetria (nunca vista ao vivo até hoje, ver CLAUDE.md "CMV paralelo") —
+// vale confirmar contra um caso real na Tiny quando aparecer um.
+async function buscarNotasComDetalhe(tokenV2, tipoNota, ano, mes) {
   const iniBR = formatarDataBR(ano, mes, 1);
   const fimBR = formatarDataBR(ano, mes, ultimoDiaDoMes(ano, mes));
-  const notas = await listarNotasVendaV2(tokenV2, iniBR, fimBR);
-  const linhas = [];
+  const notas = await listarNotasFiscaisV2(tokenV2, tipoNota, iniBR, fimBR);
+  const resultado = [];
   for (const n of notas) {
     await sleep(600);
-    let detalhe;
     try {
-      detalhe = await buscarDetalheNotaVendaV2(tokenV2, n.id);
+      const detalhe = await buscarDetalheNotaVendaV2(tokenV2, n.id);
+      resultado.push({ nota: n, detalhe });
     } catch (e) {
       console.error(`[estoque-movimentos-sync] erro ao buscar nota ${n.id}: ${e.message}`);
-      continue;
-    }
-    // Mesma agregação por produto que `buscarOrdensCompraAtendidasDoMes` faz —
-    // uma nota pode ter o mesmo produto em mais de uma linha de item.
-    const porProduto = new Map();
-    for (const itWrap of (detalhe?.itens || [])) {
-      const it = itWrap?.item;
-      const produtoId = it?.id_produto;
-      const quantidade = Number(it?.quantidade) || 0;
-      if (!produtoId || !quantidade) continue;
-      porProduto.set(produtoId, (porProduto.get(produtoId) || 0) + quantidade);
-    }
-    for (const [produtoId, quantidade] of porProduto) {
-      linhas.push({
-        ano, mes, produto_id: produtoId, tipo: "venda", origem_id: n.id,
-        quantidade, custo_unitario: null, custo_total: null,
-        data: dataBRparaISO(n.data_emissao), data_prevista: null, divergente_data: false,
-      });
     }
   }
+  return resultado;
+}
+
+// Agrega por produto (uma nota pode ter o mesmo produto em mais de uma linha
+// de item) — mesmo padrão que `buscarOrdensCompraAtendidasDoMes` já faz.
+function movimentosPorProduto(ano, mes, notaId, tipo, dataEmissaoBR, itens) {
+  const porProduto = new Map();
+  for (const itWrap of (itens || [])) {
+    const it = itWrap?.item;
+    const produtoId = it?.id_produto;
+    const quantidade = Number(it?.quantidade) || 0;
+    if (!produtoId || !quantidade) continue;
+    porProduto.set(produtoId, (porProduto.get(produtoId) || 0) + quantidade);
+  }
+  return [...porProduto].map(([produtoId, quantidade]) => ({
+    ano, mes, produto_id: produtoId, tipo, origem_id: notaId,
+    quantidade, custo_unitario: null, custo_total: null,
+    data: dataBRparaISO(dataEmissaoBR), data_prevista: null, divergente_data: false,
+  }));
+}
+
+async function buscarVendasDoMes(tokenV2, ano, mes) {
+  const linhas = [];
+
+  const notasSaida = await buscarNotasComDetalhe(tokenV2, "S", ano, mes);
+  for (const { nota, detalhe } of notasSaida) {
+    const ehDevolucaoCompra = FINALIDADES_DEVOLUCAO.includes(String(detalhe?.finalidade));
+    const tipo = ehDevolucaoCompra ? "devolucao_compra" : "venda";
+    linhas.push(...movimentosPorProduto(ano, mes, nota.id, tipo, nota.data_emissao, detalhe?.itens));
+  }
+
+  await sleep(600);
+  const notasEntrada = await buscarNotasComDetalhe(tokenV2, "E", ano, mes);
+  for (const { nota, detalhe } of notasEntrada) {
+    const ehDevolucaoVenda = FINALIDADES_DEVOLUCAO.includes(String(detalhe?.finalidade));
+    if (!ehDevolucaoVenda) continue; // nota de entrada que não é devolução não interessa aqui
+    linhas.push(...movimentosPorProduto(ano, mes, nota.id, "devolucao_venda", nota.data_emissao, detalhe?.itens));
+  }
+
   return linhas;
 }
 
@@ -1349,10 +1387,17 @@ async function executarMovimentosSync(empresa, ano, mes) {
     return { ok: true, concluido: false, etapa: "compras", compras: compras.length, vendas: 0 };
   }
 
-  const vendas = await buscarVendasDoMes(tokenV2, ano, mes);
-  await upsertMovimentos(empresa, vendas);
+  // buscarVendasDoMes devolve vendas, devoluções de compra (notas "S") e
+  // devoluções de venda (notas "E") misturadas em `tipo` — conta cada uma
+  // separado só pro retorno informativo do botão "Sincronizar agora".
+  const movimentosVenda = await buscarVendasDoMes(tokenV2, ano, mes);
+  await upsertMovimentos(empresa, movimentosVenda);
+  const contarTipo = (tipo) => movimentosVenda.filter(l => l.tipo === tipo).length;
 
-  return { ok: true, concluido: true, compras: compras.length, vendas: vendas.length };
+  return {
+    ok: true, concluido: true, compras: compras.length,
+    vendas: contarTipo("venda"), devolucoesCompra: contarTipo("devolucao_compra"), devolucoesVenda: contarTipo("devolucao_venda"),
+  };
 }
 
 // Relatório de reconciliação em si: estoque inicial (saldo importado do mês
@@ -1362,44 +1407,66 @@ async function executarMovimentosSync(empresa, ano, mes) {
 // `inicial=0` e `temSaldoInicial=false` pro front avisar que falta importar).
 async function montarCmvParalelo(empresa, ano, mes) {
   const anterior = mesAlvoAnterior(ano, mes);
-  const [rInicial, rFinal, rMov, rCatalogo] = await Promise.all([
+  const [rInicial, rFinal, rMov, rCatalogo, custoAtualMap, custoCongeladoMap] = await Promise.all([
     httpsRequest("GET", supaHost(), `/rest/v1/estoque_saldo_mensal?empresa=eq.${empresa}&ano=eq.${anterior.ano}&mes=eq.${anterior.mes}&select=produto_id,quantidade`, null, supaHeaders),
     httpsRequest("GET", supaHost(), `/rest/v1/estoque_saldo_mensal?empresa=eq.${empresa}&ano=eq.${ano}&mes=eq.${mes}&select=produto_id,quantidade`, null, supaHeaders),
     httpsRequest("GET", supaHost(), `/rest/v1/estoque_movimentos_mensal?empresa=eq.${empresa}&ano=eq.${ano}&mes=eq.${mes}&select=produto_id,tipo,quantidade`, null, supaHeaders),
     httpsRequest("GET", supaHost(), `/rest/v1/estoque_catalogo?empresa=eq.${empresa}&select=produto_id,sku,nome`, null, supaHeaders),
+    lerCustoAtualCatalogo(empresa),
+    lerCustoCongeladoMes(empresa, ano, mes),
   ]);
   const inicialMap = new Map((parseJSON(rInicial.text) || []).map(l => [Number(l.produto_id), Number(l.quantidade) || 0]));
   const finalRealMap = new Map((parseJSON(rFinal.text) || []).map(l => [Number(l.produto_id), Number(l.quantidade) || 0]));
   const catalogoMap = new Map((parseJSON(rCatalogo.text) || []).map(l => [Number(l.produto_id), l]));
+  // Mesmo custo "do mês" usado no CMV do DRE (congelado se o mês já passou
+  // por lá, senão o atual do catálogo) — só LÊ, nunca escreve/congela nada
+  // novo a partir daqui (isso é feito só pelo sync diário do financeiro, ver
+  // "CMV real" no CLAUDE.md), já que este é um relatório de leitura.
+  const custoDoMes = (id) => custoCongeladoMap.has(id) ? custoCongeladoMap.get(id) : (custoAtualMap.get(id) || 0);
 
-  const comprasMap = new Map(), vendasMap = new Map();
+  // Compras/vendas BRUTAS e devoluções somadas separado (pedido do Rafael,
+  // 2026-11-25: colunas "C"/"D" pra compras e "V"/"D" pra vendas) — o
+  // calculado usa o NETO de cada par (compra − devolução de compra, venda −
+  // devolução de venda), então a devolução entra com sinal contrário ao da
+  // sua coluna-mãe.
+  const comprasMap = new Map(), devCompraMap = new Map(), vendasMap = new Map(), devVendaMap = new Map();
+  const mapaPorTipo = { compra: comprasMap, devolucao_compra: devCompraMap, venda: vendasMap, devolucao_venda: devVendaMap };
   for (const m of (parseJSON(rMov.text) || [])) {
-    const mapa = m.tipo === "compra" ? comprasMap : vendasMap;
+    const mapa = mapaPorTipo[m.tipo];
+    if (!mapa) continue;
     const id = Number(m.produto_id);
     mapa.set(id, (mapa.get(id) || 0) + (Number(m.quantidade) || 0));
   }
 
-  const produtoIds = new Set([...inicialMap.keys(), ...finalRealMap.keys(), ...comprasMap.keys(), ...vendasMap.keys()]);
+  const produtoIds = new Set([...inicialMap.keys(), ...finalRealMap.keys(), ...comprasMap.keys(), ...devCompraMap.keys(), ...vendasMap.keys(), ...devVendaMap.keys()]);
   const produtos = [...produtoIds].map(id => {
     const inicial = inicialMap.get(id) || 0;
     const compras = comprasMap.get(id) || 0;
+    const devolucaoCompra = devCompraMap.get(id) || 0;
     const vendas = vendasMap.get(id) || 0;
-    const finalCalculado = inicial + compras - vendas;
+    const devolucaoVenda = devVendaMap.get(id) || 0;
+    const finalCalculado = inicial + (compras - devolucaoCompra) - (vendas - devolucaoVenda);
     const temFinalReal = finalRealMap.has(id);
     const finalReal = temFinalReal ? finalRealMap.get(id) : null;
     const cat = catalogoMap.get(id);
+    // Sinal invertido a pedido do Rafael (2026-11-25): diferença = real − calculado
+    // (positivo quando falta no calculado, negativo quando sobra).
+    const diferenca = temFinalReal ? finalReal - finalCalculado : null;
+    const custoUnitario = custoDoMes(id);
     return {
       produto_id: id, sku: cat?.sku || null, nome: cat?.nome || `Produto ${id}`,
-      inicial, temInicial: inicialMap.has(id), compras, vendas, finalCalculado,
-      // Sinal invertido a pedido do Rafael (2026-11-25): diferença = real − calculado
-      // (positivo quando falta no calculado, negativo quando sobra).
-      finalReal, temFinalReal, diferenca: temFinalReal ? finalReal - finalCalculado : null,
+      inicial, temInicial: inicialMap.has(id), compras, devolucaoCompra, vendas, devolucaoVenda, finalCalculado,
+      finalReal, temFinalReal, diferenca,
+      custoUnitario, custoDiferenca: diferenca != null ? diferenca * custoUnitario : null,
     };
   });
-  produtos.sort((a, b) => Math.abs(b.diferenca || 0) - Math.abs(a.diferenca || 0));
+  // Ordenado por descrição do produto (pedido do Rafael, 2026-11-25) — antes
+  // era por |diferença| decrescente, difícil de acompanhar na tela.
+  produtos.sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
+  const totalCustoDiferenca = produtos.reduce((s, p) => s + (p.custoDiferenca || 0), 0);
 
   return {
-    ano, mes, anterior,
+    ano, mes, anterior, totalCustoDiferenca,
     temSaldoInicial: inicialMap.size > 0, temSaldoFinal: finalRealMap.size > 0,
     produtos,
   };
