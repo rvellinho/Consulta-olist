@@ -1391,7 +1391,9 @@ async function montarCmvParalelo(empresa, ano, mes) {
     return {
       produto_id: id, sku: cat?.sku || null, nome: cat?.nome || `Produto ${id}`,
       inicial, temInicial: inicialMap.has(id), compras, vendas, finalCalculado,
-      finalReal, temFinalReal, diferenca: temFinalReal ? finalCalculado - finalReal : null,
+      // Sinal invertido a pedido do Rafael (2026-11-25): diferença = real − calculado
+      // (positivo quando falta no calculado, negativo quando sobra).
+      finalReal, temFinalReal, diferenca: temFinalReal ? finalReal - finalCalculado : null,
     };
   });
   produtos.sort((a, b) => Math.abs(b.diferenca || 0) - Math.abs(a.diferenca || 0));
