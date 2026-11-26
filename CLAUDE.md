@@ -1443,6 +1443,41 @@ conta no cálculo quanto pra eventuais auditorias futuras:
   corrigir manualmente na Tiny quando fizer diferença de mês — nunca tentar adivinhar/corrigir
   sozinho qual é a data "certa".
 
+### Impostos (5.01/5.02) — catalogação manual (implementada 2026-11-25, publicada 2026-11-26)
+
+Tela nova (menu Financeiro → Impostos, admin-only) que substitui a classificação automática de
+imposto por categoria/histórico, que não era confiável pra esse grupo — motivo do Rafael:
+"hoje pegamos por competência, porém esses dados não estão certos no sistema" (`dataCompetencia`
+da Tiny não é boa referência pra imposto).
+
+- Todo título de contas a pagar classificado como imposto (categoria real, ou — só pro grupo
+  5.01 — fallback por texto do histórico, mesma heurística de sempre) entra num catálogo próprio
+  (`financeiro_impostos_titulos`), filtrado só por **vencimento** — nunca por `dataCompetencia`,
+  nunca por estar pago ou não, até o mês atual (nada de parcela futura ainda não vencida).
+- Cada título entra com `mes_competencia` pré-preenchido (= mês **anterior** ao vencimento), mas
+  livremente editável — é esse campo, não o vencimento, que decide em que mês do DRE o imposto
+  conta. `pago_manual` é uma marcação nossa só pra controle visual, nunca entra em cálculo.
+- **Só título `confirmado=true` entra no DRE.** Os pendentes aparecem como aviso na tela
+  principal do DRE (`pendenciasImpostos`, quantidade + total) e no menu (badge), sem precisar
+  abrir a tela de catalogação pra descobrir que existe pendência.
+- Roda num cron próprio (`?acao=impostos-sync`, 1x/dia por empresa, depois do sync financeiro
+  normal — ver `vercel.json`) e também por um botão "Sincronizar agora" na própria tela.
+- **Bug achado e corrigido antes de publicar (2026-11-26)**: o caminho automático antigo de
+  contas a pagar (`filaPagar`, mesmo loop do sync-diário financeiro) continuava classificando
+  título em grupo `5.01` e gravando em `financeiro_mensal` normalmente — a implementação do
+  catálogo só *adicionava* a leitura nova (`linhasImpostos`) ao DRE, sem *remover* a escrita
+  antiga. Resultado: um título confirmado na tela nova entraria **duplicado** no DRE — uma vez
+  via `titulo_tipo=pagar` (caminho antigo), outra via `titulo_tipo=imposto` (catálogo). Mesma
+  categoria de bug já documentada várias vezes neste arquivo ("upsert não apaga" — aqui o
+  problema irmão é "um caminho novo não excluiu o caminho antigo que ele substitui"). Corrigido
+  excluindo `5.01`/`5.02` do caminho automático (chama `excluirMensal` em vez de empilhar em
+  `lote`) e limpando manualmente as 10 linhas órfãs que já existiam em produção (8 Rampa + 2 TF,
+  ~R$86 mil) antes de publicar. **Essa é provavelmente a razão de o recurso ter ficado pronto no
+  código por dias sem nunca ter sido publicado** — não era seguro publicar como estava.
+- **Efeito esperado ao vivo, não é bug**: como nenhum título foi confirmado ainda na tela nova,
+  os grupos 5.01/5.02 vão aparecer **zerados** no DRE até alguém abrir a tela de Impostos e
+  confirmar cada título (o aviso de pendência mostra quantos e quanto estão esperando).
+
 ---
 
 ## RLS (Row Level Security) nas 16 tabelas do projeto — ligado (2026-11-24)
@@ -1499,6 +1534,7 @@ era exposição teórica.
 | `financeiro_intercompany_alocacoes` | `empresa_origem` + `titulo_tipo` + `titulo_id` | Alocação manual de despesa intercompany (valor parcial + categoria de destino, nível 3 via `leaf_destino` — `codigo_grupo_destino` é derivado dele) — ver "Alocação intercompany manual" e "Categoria de destino do intercompany agora é do nível 3" |
 | `financeiro_lancamentos_manuais` | `id` | Lançamentos que nunca vêm da Olist (provisões, ajustes) — `codigo_grupo` + `subitem` livre opcional |
 | `financeiro_sync_status` | `empresa` (uma linha por empresa) | Progresso/estado da rotina diária financeira, mesmo padrão de `estoque_sync_status` |
+| `financeiro_impostos_titulos` | `empresa` + `titulo_id` | Catalogação manual de imposto (5.01/5.02): mês de competência, confirmado, pago_manual — ver "Impostos" |
 | `estoque_saldo_mensal` | `empresa` + `ano` + `mes` + `produto_id` | Saldo de FECHAMENTO de cada mês, importado manualmente do relatório "Saldos em Estoque" exportado da Tiny (sem endpoint de saldo histórico na API) — ver "CMV paralelo" |
 | `estoque_movimentos_mensal` | `empresa` + `tipo` + `origem_id` + `produto_id` | Compras (via OC) e vendas (via nota) do mês, por produto — alimenta o relatório de reconciliação do "CMV paralelo", nunca o DRE |
 
@@ -1541,6 +1577,12 @@ era exposição teórica.
    novo no mesmo ritmo de sempre em vez de pausar — a Olist pede explicitamente "aguarde alguns
    minutos" nesse erro. Ver "Rate limit Olist" acima pro que foi corrigido (`PACE_MS` e
    `pausaSeBloqueio`/`PADRAO_BLOQUEIO_OLIST`)
+9. **Criar um caminho novo que lê de um lugar novo, sem desligar o caminho antigo que escrevia
+   no lugar velho** → duplica o valor (ver "Impostos" no Módulo Financeiro: o catálogo manual de
+   5.01/5.02 foi somado ao DRE antes de o sync automático parar de escrever 5.01 em
+   `financeiro_mensal` — quase foi publicado assim). Toda vez que uma fonte de dado é substituída,
+   o caminho antigo tem que ser explicitamente desligado (e os dados órfãos que ele já gravou,
+   limpos), não só deixado "existir em paralelo" com o novo
 
 ---
 
