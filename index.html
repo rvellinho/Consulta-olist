@@ -451,6 +451,31 @@
         </table>
       </div>
     </div>
+    <div id="tabela-amortizacao-wrap" class="hidden" style="margin-top:28px;">
+      <h3 style="font-size:14px;margin:0 0 4px;">Resultado com Amortizações</h3>
+      <p style="font-size:12px;color:var(--mt);margin:0 0 8px;">
+        6.02.03 (parcelas de empréstimo pagas) mistura principal + juros — o juros já está em
+        "Despesas Financeiras" no DRE acima. Separa o principal pago (Valor Amortizado) e mostra o
+        resultado também descontando essa saída de caixa, que não é despesa de competência.
+      </p>
+      <div class="table-wrap">
+        <table style="width:100%;border-collapse:collapse;">
+          <tbody id="tbody-amortizacao"></tbody>
+        </table>
+      </div>
+    </div>
+    <div id="tabela-fora-dre-wrap" class="hidden" style="margin-top:28px;">
+      <h3 style="font-size:14px;margin:0 0 4px;">Lançamentos fora do DRE (conferência)</h3>
+      <p style="font-size:12px;color:var(--mt);margin:0 0 8px;">
+        Grupos 6.01/6.02 — nunca entram no resultado acima. Só pra revisar se não tem algo aqui que
+        devia estar reclassificado numa categoria real do DRE.
+      </p>
+      <div class="table-wrap">
+        <table style="width:100%;border-collapse:collapse;">
+          <tbody id="tbody-fora-dre"></tbody>
+        </table>
+      </div>
+    </div>
   </div>
 
   <!-- ABA CMV PARALELO (Estoque Inicial + Compras − Estoque Final, pra comparar com o CMV do DRE) -->
@@ -2670,6 +2695,82 @@ function renderDRE(dre){
   });
   el("tbody-financeiro").innerHTML = linhasHtml.join("");
   el("tabela-financeiro-wrap").classList.remove("hidden");
+  renderAmortizacao(dre);
+  renderForaDre(dre);
+}
+
+function linhaDreSimples(label, v){
+  return `<tr>
+    <td style="padding:5px 12px;color:var(--mt);">${label}</td>
+    <td style="padding:5px 12px;text-align:right;">${formatarMoeda(v.operacional)}</td>
+    <td style="padding:5px 12px;text-align:right;${v.intercompany<0?"color:var(--red);":v.intercompany>0?"color:var(--g);":"color:var(--mt);"}">${formatarMoeda(v.intercompany)}</td>
+    <td style="padding:5px 12px;text-align:right;">${formatarMoeda(v.valor)}</td>
+  </tr>`;
+}
+
+function renderAmortizacao(dre){
+  const a = dre.amortizacao;
+  if(!a){ el("tabela-amortizacao-wrap").classList.add("hidden"); return; }
+  const linhas = [];
+  linhas.push(`<tr>
+    <th style="padding:5px 12px;text-align:left;"></th>
+    <th style="padding:5px 12px;text-align:right;color:var(--mt);font-size:12px;">Real</th>
+    <th style="padding:5px 12px;text-align:right;color:var(--mt);font-size:12px;">Intercompany Rampa↔TF</th>
+    <th style="padding:5px 12px;text-align:right;">Ajustado</th>
+  </tr>`);
+  linhas.push(linhaDreSimples("6.02.03 Parcelas de Empréstimos e Parcelamentos", a.linha6023));
+  linhas.push(linhaDreSimples("Valor Amortizado", a.valorAmortizado));
+  linhas.push(linhaDreSimples("Juros (3.01.02)", a.juros));
+  const r = a.resultadoComAmortizacoes;
+  linhas.push(`<tr style="border-top:2px solid var(--br);border-bottom:2px solid var(--br);">
+    <td style="padding:8px 12px;font-weight:700;">Resultado com Amortizações</td>
+    <td style="padding:8px 12px;text-align:right;font-weight:700;${r.operacional<0?"color:var(--red);":""}">${formatarMoeda(r.operacional)}</td>
+    <td style="padding:8px 12px;text-align:right;font-weight:700;${r.intercompany<0?"color:var(--red);":""}">${formatarMoeda(r.intercompany)}</td>
+    <td style="padding:8px 12px;text-align:right;font-weight:700;${r.valor<0?"color:var(--red);":""}">${formatarMoeda(r.valor)}</td>
+  </tr>`);
+  el("tbody-amortizacao").innerHTML = linhas.join("");
+  el("tabela-amortizacao-wrap").classList.remove("hidden");
+}
+
+function renderForaDre(dre){
+  const grupos = dre.gruposForaDre || [];
+  if(!grupos.length){ el("tabela-fora-dre-wrap").classList.add("hidden"); return; }
+  const linhas = [];
+  linhas.push(`<tr>
+    <th style="padding:5px 12px;text-align:left;"></th>
+    <th style="padding:5px 12px;text-align:right;color:var(--mt);font-size:12px;">Real</th>
+    <th style="padding:5px 12px;text-align:right;color:var(--mt);font-size:12px;">Intercompany Rampa↔TF</th>
+    <th style="padding:5px 12px;text-align:right;">Ajustado</th>
+  </tr>`);
+  grupos.forEach((g,gi)=>{
+    const gid = `fora-dre-leafs-${gi}`;
+    const temLeafs = g.leafs && g.leafs.length > 0;
+    linhas.push(`<tr>
+      <td style="padding:5px 12px;font-weight:600;">
+        ${temLeafs ? `<span style="cursor:pointer;display:inline-block;width:14px;" onclick="toggleDreLeafs('${gid}',this)" title="Ver composição (nível 3)">▸</span>` : `<span style="display:inline-block;width:14px;"></span>`}
+        ${g.codigo_grupo} ${g.descricao_grupo}
+        <button class="btn-sec" style="padding:1px 7px;font-size:11px;margin-left:6px;" title="Ver lançamentos" onclick="abrirModalTitulos('${g.codigo_grupo}','${g.descricao_grupo.replace(/'/g,"\\'")}')">🔍</button>
+      </td>
+      <td style="padding:5px 12px;text-align:right;font-weight:600;">${formatarMoeda(g.valorOperacional)}</td>
+      <td style="padding:5px 12px;text-align:right;font-weight:600;${g.valorIntercompany<0?"color:var(--red);":g.valorIntercompany>0?"color:var(--g);":"color:var(--mt);"}">${formatarMoeda(g.valorIntercompany)}</td>
+      <td style="padding:5px 12px;text-align:right;font-weight:600;">${formatarMoeda(g.valor)}</td>
+    </tr>`);
+    if(temLeafs){
+      g.leafs.forEach(lf=>{
+        linhas.push(`<tr class="${gid}" style="display:none;">
+          <td style="padding:3px 12px 3px 28px;color:var(--mt);font-size:12.5px;">
+            ${lf.descricao}
+            <button class="btn-sec" style="padding:0px 6px;font-size:10.5px;margin-left:6px;" title="Ver lançamentos dessa subcategoria" onclick="abrirModalTitulos('${g.codigo_grupo}','${g.descricao_grupo.replace(/'/g,"\\'")} — ${lf.descricao.replace(/'/g,"\\'")}','${lf.descricao.replace(/'/g,"\\'")}')">🔍</button>
+          </td>
+          <td style="padding:3px 12px;text-align:right;font-size:12.5px;color:var(--mt);">${formatarMoeda(lf.valorOperacional)}</td>
+          <td style="padding:3px 12px;text-align:right;font-size:12.5px;${lf.valorIntercompany<0?"color:var(--red);":lf.valorIntercompany>0?"color:var(--g);":"color:var(--mt);"}">${formatarMoeda(lf.valorIntercompany)}</td>
+          <td style="padding:3px 12px;text-align:right;font-size:12.5px;color:var(--mt);">${formatarMoeda(lf.valor)}</td>
+        </tr>`);
+      });
+    }
+  });
+  el("tbody-fora-dre").innerHTML = linhas.join("");
+  el("tabela-fora-dre-wrap").classList.remove("hidden");
 }
 
 function abrirModalNaoClassificado(){
@@ -2799,16 +2900,12 @@ function renderImpostos(linhas, empresa, categorias){
   }
   // Nome da categoria da Tiny (nível 3) a partir do categoria_id gravado no
   // título — mesma fonte que já alimenta a árvore do DRE e o select do modal
-  // de intercompany (carregarCategoriasDestino). Título classificado por
-  // histórico (sem categoria real na Tiny — ver "Impostos" no CLAUDE.md) não
-  // tem categoria_id: mostra o motivo em vez de deixar em branco sem explicação.
+  // de intercompany (carregarCategoriasDestino).
   const nomeCategoriaMap = {};
   (categorias || []).forEach(c => { nomeCategoriaMap[c.categoria_id] = c.descricao_raw; });
   el("tbody-impostos").innerHTML = linhas.map(l=>{
     const venc = l.data_vencimento ? l.data_vencimento.split("-").reverse().join("/") : "—";
-    const categoriaTxt = l.categoria_id!=null
-      ? (nomeCategoriaMap[l.categoria_id] || `#${l.categoria_id}`)
-      : (l.origem==="tiny_historico" ? "— (por histórico)" : "—");
+    const categoriaTxt = l.categoria_id!=null ? (nomeCategoriaMap[l.categoria_id] || `#${l.categoria_id}`) : "—";
     return `<tr data-titulo-id="${l.titulo_id}">
       <td style="padding:6px 10px;">${venc}</td>
       <td style="padding:6px 10px;">${l.codigo_grupo}</td>

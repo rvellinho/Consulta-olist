@@ -1671,6 +1671,69 @@ classificado automático.
   vale sempre excluir explicitamente os contextos "parecidos mas diferentes" conhecidos, não só
   confiar na presença da palavra-chave.
 
+**Superado pela remoção completa abaixo** ("Classificação por histórico REMOVIDA por completo") —
+a correção do PARCELAMENTO foi só um band-aid de poucas horas; no mesmo dia o Rafael pediu pra
+tirar o mecanismo inteiro, não só esse caso.
+
+#### Classificação por histórico REMOVIDA por completo (decisão do Rafael, 2026-11-26)
+Mesmo dia da correção do PARCELAMENTO acima, o Rafael pediu pra ir além: "vamos remover a regra de
+tentar classificar pelo histórico" — não só excluir o caso do parcelamento, mas tirar o mecanismo
+inteiro (`classificarPorHistorico`/`PADROES_HISTORICO_5_01`) de vez.
+
+- **`classificarImposto` e o ramo de contas a pagar do sync principal (`filaPagar`) não têm mais
+  nenhum fallback por texto** — título de contas a pagar sem categoria real na Tiny (`categoria=null`
+  no momento do lançamento) fica só como "não classificado" (fora do DRE), nunca mais vira 5.01 por
+  conta própria. `classificarImposto` perdeu o parâmetro `historico` e o retorno `viaHistorico`
+  (agora só devolve o `codigo_grupo` ou `null`); `origem` em `financeiro_impostos_titulos` só grava
+  `'tiny_categoria'` daqui pra frente (`'tiny_historico'` nunca mais é gravado — confirmado por
+  query que não sobrava nenhuma linha com esse `origem` em produção antes desta mudança).
+- **Nenhuma linha órfã pra limpar** — o fix do PARCELAMENTO já tinha zerado as 4 linhas que
+  existiam com `origem='tiny_historico'` em `financeiro_impostos_titulos`; confirmado por query
+  que não sobrou nenhuma outra antes de remover o mecanismo.
+- Se um título de guia de imposto genuíno ficar sem categoria na Tiny no futuro (mesmo cenário
+  original de 2026-11-20, categoria criada depois do lançamento), a única forma de ele entrar no
+  DRE agora é retaguear a categoria real na Tiny — não existe mais fallback automático.
+
+#### Duas tabelas novas abaixo do DRE: Resultado com Amortizações + Fora do DRE (2026-11-26)
+Mesmo pedido do Rafael acima (junto com a remoção da classificação por histórico): confirmou que o
+desenho atual já está certo pro resto (5.01 catalogado manual → DRE por competência; despesa de
+categoria mapeada vai pra linha certa) e pediu duas telas novas, abaixo do DRE principal, **mesmas
+3 colunas** (Real / Intercompany Rampa↔TF / Ajustado) — `montarDRE` (`api/financeiro.js`) devolve
+os campos novos `amortizacao` e `gruposForaDre`, que já existiam calculados internamente (`porGrupo`/
+`porGrupoLeaf` somam TODO grupo, inclusive os com `entra_dre=false` — só o loop que monta os blocos
+do DRE que filtrava por `entra_dre`) — não precisou de nenhuma chamada nova à Olist nem ao Supabase.
+
+- **"Resultado com Amortizações"**: 6.02.03 (Parcelas de Empréstimos e Parcelamentos, fora do DRE)
+  mistura principal + juros da parcela — o juros já está corretamente em 3.01.02 (Despesas
+  Financeiras, dentro do DRE). 4 linhas: (1) 6.02.03 cheio, (2) **Valor Amortizado** = 6.02.03 −
+  3.01.02 (o principal), (3) **Juros** = valor de 3.01.02, (4) **Resultado com Amortizações**
+  (destacada, mesmo estilo de "Resultado do Período") = Resultado do Período − Valor Amortizado —
+  desconta do resultado uma saída de caixa real (pagamento de dívida) que não é despesa de
+  competência e por isso nunca aparece no DRE normal.
+- **"Lançamentos fora do DRE (conferência)"**: lista os grupos `entra_dre=false` (hoje só 6.01
+  Entradas / 6.02 Saídas) com a mesma árvore de nível 3 (toggle ▸/▾) e a mesma lupa de drill-down
+  do DRE principal (`abrirModalTitulos` já é genérico por `codigo_grupo`/`leaf`, funcionou sem
+  nenhuma mudança) — só pra conferência visual, nunca entra em nenhum total. Objetivo do Rafael:
+  revisar se não tem lançamento de contas a pagar classificado aí por engano que devia estar numa
+  categoria real do DRE.
+- **Achado buscando os valores de 6.02.03/3.01.02**: a TF numera essas categorias na própria Tiny
+  diferente da Rampa — o mesmo item "Parcelas de Empréstimos e Parcelamentos" (`grupo_raw` "6.02
+  Saídas" nas duas empresas) tem `codigo_leaf`/prefixo "6.02.03" na Rampa mas "5.02.03" na TF
+  (confirmado ao vivo via SQL). Buscar pelo prefixo numérico "6.02.03"/"3.01.02" bateria certo só
+  pra Rampa e ficaria mudo pra TF (e pro consolidado, que precisa somar as duas variantes de
+  texto). **Corrigido na origem**: `somarLeafsPorTexto` busca por TEXTO (`/Parcelas de Empr[eé]stimos
+  e Parcelamentos/i`, `/Despesas de empr[eé]stimos e financiamentos/i`), somando toda leaf que bater
+  o regex dentro do grupo, não só a primeira — cobre a Rampa, a TF (com seu próprio prefixo) e o
+  consolidado (que teria as duas variantes como leafs diferentes) com o mesmo código.
+- **Testado ao vivo via `vercel dev`** (Rampa, outubro/2026): 6.02.03 R$20.862,91, 3.01.02 R$0,00
+  (nenhum título caiu em "Despesas Financeiras" ainda em produção — grupo existe, só não tem
+  lançamento), Valor Amortizado = R$20.862,91 (= todo o 6.02.03, já que juros está zerado agora),
+  Resultado com Amortizações = Resultado do Período (R$−24.648,28 Real) − R$20.862,91. Fora do DRE:
+  6.01 zerado, 6.02 R$20.862,91 com 3 subcategorias (inclui "6.02.03 Parcelas..."), lupa abriu o
+  drill-down normal mostrando os títulos reais (BMP, Secretaria da Fazenda do RS — parcelamento de
+  ICMS, Itaú). TF também testado: `gruposForaDre` mostra corretamente "5.02.03 Parcelas..." (texto
+  próprio da TF) dentro do mesmo `codigo_grupo` "6.02".
+
 ---
 
 ## RLS (Row Level Security) nas 16 tabelas do projeto — ligado (2026-11-24)

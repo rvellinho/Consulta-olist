@@ -142,15 +142,14 @@ async function buscarCategoriasPorEmpresa(empresas) {
 }
 // Rótulo da subcategoria (nível 3) de uma linha de financeiro_mensal/manuais.
 // Nem toda linha tem categoria_id (CMV vem do item da nota, não de uma
-// categoria financeira; histórico é um fallback sem categoria na Tiny) —
-// essas ganham um rótulo sintético em vez de ficarem sem nível 3.
+// categoria financeira) — essas ganham um rótulo sintético em vez de ficarem
+// sem nível 3.
 function resolverLeaf(l, categoriasPorEmpresa) {
   if (l.categoria_id != null) {
     const descricao = categoriasPorEmpresa[l.empresa]?.[l.categoria_id];
     if (descricao) return descricao;
   }
   if (l.titulo_tipo === "cmv") return "Custo calculado pela nota (sem categoria)";
-  if (l.origem === "tiny_historico") return "Classificado por histórico (sem categoria na Tiny)";
   if (l.subitem) return l.subitem; // lançamento manual
   return "Sem subcategoria";
 }
@@ -263,15 +262,11 @@ function montarDRE(planoContas, linhasMensal, linhasManuais, categoriasPorEmpres
     somar(l.codigo_grupo, Number(l.valor) || 0, false, l.subitem || "Lançamento manual");
   }
 
-  const porLinhaDre = {}; // { [linha_dre]: {operacional, intercompany} }
-  const gruposPorLinhaDre = {};
-  for (const grupo of planoContas) {
-    if (!grupo.entra_dre) continue;
-    const valores = porGrupo[grupo.codigo_grupo] || { operacional: 0, intercompany: 0 };
-    if (!porLinhaDre[grupo.linha_dre]) porLinhaDre[grupo.linha_dre] = { operacional: 0, intercompany: 0 };
-    porLinhaDre[grupo.linha_dre].operacional += valores.operacional;
-    porLinhaDre[grupo.linha_dre].intercompany += valores.intercompany;
-    const leafs = Object.entries(porGrupoLeaf[grupo.codigo_grupo] || {})
+  // Nível 3 (leafs) de um grupo, em ordem numérica da conta (1.01.01,
+  // 1.01.02... — ver nota de ordenação abaixo) — usado tanto pros grupos que
+  // entram no DRE quanto pros que ficam de fora dele (6.01/6.02).
+  function montarLeafsOrdenados(codigoGrupo) {
+    return Object.entries(porGrupoLeaf[codigoGrupo] || {})
       .map(([descricao, v]) => ({
         descricao, valor: v.operacional + v.intercompany,
         valorOperacional: v.operacional, valorIntercompany: v.intercompany,
@@ -281,9 +276,9 @@ function montarDRE(planoContas, linhasMensal, linhasManuais, categoriasPorEmpres
         // antes ordenava por valor absoluto, o que colocava "1.01.04 (-)
         // Devoluções" antes de "1.01.03 Serviços prestados" sempre que a
         // devolução fosse maior em módulo do que o serviço. Leaf sem código
-        // numérico na descrição (CMV, histórico, lançamento manual, "sem
-        // subcategoria") não tem como ordenar por conta — fica depois das
-        // que têm, por valor absoluto entre si (comportamento antigo).
+        // numérico na descrição (CMV, lançamento manual, "sem subcategoria")
+        // não tem como ordenar por conta — fica depois das que têm, por
+        // valor absoluto entre si (comportamento antigo).
         const codigoA = /^(\d+(?:\.\d+)*)/.exec(a.descricao)?.[1];
         const codigoB = /^(\d+(?:\.\d+)*)/.exec(b.descricao)?.[1];
         if (codigoA && codigoB) {
@@ -293,6 +288,30 @@ function montarDRE(planoContas, linhasMensal, linhasManuais, categoriasPorEmpres
         if (codigoB) return 1;
         return Math.abs(b.valor) - Math.abs(a.valor);
       });
+  }
+
+  const porLinhaDre = {}; // { [linha_dre]: {operacional, intercompany} }
+  const gruposPorLinhaDre = {};
+  // "Fora do DRE" (grupos com entra_dre=false, hoje só 6.01/6.02) — pedido do
+  // Rafael, 2026-11-26: mostrar numa tabela separada, só pra conferência (ver
+  // se não tem lançamento de contas a pagar que devia estar numa categoria
+  // real do DRE em vez de cair aqui). Nunca entram em porLinhaDre/blocos.
+  const gruposForaDre = [];
+  for (const grupo of planoContas) {
+    const valores = porGrupo[grupo.codigo_grupo] || { operacional: 0, intercompany: 0 };
+    const leafs = montarLeafsOrdenados(grupo.codigo_grupo);
+    if (!grupo.entra_dre) {
+      gruposForaDre.push({
+        codigo_grupo: grupo.codigo_grupo, descricao_grupo: grupo.descricao_grupo,
+        valor: valores.operacional + valores.intercompany,
+        valorOperacional: valores.operacional, valorIntercompany: valores.intercompany,
+        leafs,
+      });
+      continue;
+    }
+    if (!porLinhaDre[grupo.linha_dre]) porLinhaDre[grupo.linha_dre] = { operacional: 0, intercompany: 0 };
+    porLinhaDre[grupo.linha_dre].operacional += valores.operacional;
+    porLinhaDre[grupo.linha_dre].intercompany += valores.intercompany;
     (gruposPorLinhaDre[grupo.linha_dre] = gruposPorLinhaDre[grupo.linha_dre] || []).push({
       codigo_grupo: grupo.codigo_grupo, descricao_grupo: grupo.descricao_grupo,
       valor: valores.operacional + valores.intercompany,
@@ -319,10 +338,50 @@ function montarDRE(planoContas, linhasMensal, linhasManuais, categoriasPorEmpres
     };
   });
 
+  // "Resultado com Amortizações" — pedido do Rafael, 2026-11-26: 6.02.03
+  // (parcelas de empréstimo pagas, fora do DRE) mistura principal + juros;
+  // o juros já está corretamente em 3.01.02 (Despesas Financeiras, dentro do
+  // DRE). Separa o principal (Valor Amortizado = 6.02.03 − 3.01.02) e mostra
+  // um resultado ajustado que também desconta esse principal do Resultado do
+  // Período — ele é saída de caixa real (pagamento de dívida), mas não é uma
+  // despesa do regime de competência do DRE normal.
+  // Busca por TEXTO (não por codigo_leaf/prefixo numérico): achado ao vivo
+  // que a TF numera essas mesmas contas na própria Tiny como "5.02.03"/
+  // "5.02.01"/"5.02.02" (mesmo grupo_raw "6.02 Saídas", prefixo diferente do
+  // da Rampa) — um prefixo fixo "6.02.03"/"3.01.02" bateria certo só pra
+  // Rampa e ficaria mudo pra TF (e pro consolidado, que soma as duas). Soma
+  // (em vez de achar só a 1ª ocorrência) porque o consolidado tem as duas
+  // variantes de texto como leafs DIFERENTES no mesmo grupo.
+  function somarLeafsPorTexto(codigoGrupo, regex) {
+    const leafsGrupo = porGrupoLeaf[codigoGrupo] || {};
+    let operacional = 0, intercompany = 0;
+    for (const [descricao, v] of Object.entries(leafsGrupo)) {
+      if (regex.test(descricao)) { operacional += v.operacional; intercompany += v.intercompany; }
+    }
+    return { operacional, intercompany, valor: operacional + intercompany };
+  }
+  const amortLinha6023 = somarLeafsPorTexto("6.02", /Parcelas de Empr[eé]stimos e Parcelamentos/i);
+  const amortJuros = somarLeafsPorTexto("3.01", /Despesas de empr[eé]stimos e financiamentos/i);
+  const amortValorAmortizado = {
+    operacional: amortLinha6023.operacional - amortJuros.operacional,
+    intercompany: amortLinha6023.intercompany - amortJuros.intercompany,
+    valor: amortLinha6023.valor - amortJuros.valor,
+  };
+  const amortizacao = {
+    linha6023: amortLinha6023,
+    valorAmortizado: amortValorAmortizado,
+    juros: amortJuros,
+    resultadoComAmortizacoes: {
+      operacional: acumuladoOperacional - amortValorAmortizado.operacional,
+      intercompany: acumuladoIntercompany - amortValorAmortizado.intercompany,
+      valor: acumulado - amortValorAmortizado.valor,
+    },
+  };
+
   return {
     blocos, resultadoFinal: acumulado,
     resultadoFinalOperacional: acumuladoOperacional, resultadoFinalIntercompany: acumuladoIntercompany,
-    naoClassificado,
+    naoClassificado, gruposForaDre, amortizacao,
   };
 }
 
@@ -583,27 +642,6 @@ async function calcularCmvNota(tokenV2, idNota, obterCusto) {
   }
   const intercompanyTF = limparCnpj(nota?.cliente?.cpf_cnpj) === CNPJ_TF;
   return { valor, semCusto, totalItens, intercompanyTF, clienteNome: nota?.cliente?.nome || null };
-}
-
-// --- classificação por histórico (fallback pra título sem categoria na Tiny) ---
-// Só cobre o grupo 5.01 (impostos sobre a venda) — caso real visto em
-// 2026-11-20: categorias de imposto criadas na Tiny só nessa data, títulos
-// pagos antes continuam com categoria=null. NUNCA usar isso pro grupo 5.02
-// (impostos sobre o resultado) — esse é manual de propósito (ver plano).
-const PADROES_HISTORICO_5_01 = [
-  /\bPIS\b/i, /\bCOFINS\b/i, /\bICMS\b/i, /\bISSQN\b/i, /\bISS\b/i, /SIMPLES\s*NACIONAL/i,
-];
-// "PARCELAMENTO X" (ex: "RAMPA - PARCELAMENTO PIS E CONFINS") casa com o nome
-// do imposto só por conter a palavra, mas NÃO é a guia do imposto em si —
-// achado ao vivo pelo Rafael, 2026-11-26: "esses itens não marcados em
-// Conferido não estão corretos, não são do grupo 5.01, não deveriam estar
-// aí" (4 títulos da Rampa, nenhum confirmado — removidos manualmente do
-// catálogo na mesma correção). Decisão dele: não classificar automático,
-// deixar pendente/manual, igual qualquer outro título sem categoria real.
-function classificarPorHistorico(historico) {
-  const texto = String(historico || "");
-  if (/PARCELAMENTO/i.test(texto)) return null;
-  return PADROES_HISTORICO_5_01.some(re => re.test(texto)) ? "5.01" : null;
 }
 
 // --- status / checkpoint (mesmo padrão de estoque_sync_status) ---
@@ -1064,18 +1102,14 @@ async function executarSyncDiario(req, res) {
         const catId = d.categoria?.id;
         const cat = catId != null ? categorias[catId] : null;
         if (!(cat && cat.forca_manual)) {
-          let codigoGrupo = cat?.codigo_grupo || null;
-          let viaHistorico = false;
-          if (!codigoGrupo) {
-            // Categoria não existia na Tiny no momento do lançamento (ex: as
-            // categorias de imposto 5.01 só foram criadas em 2026-11-20 —
-            // títulos pagos antes disso ficam com categoria=null pra sempre,
-            // a menos que alguém volte e retagueie manualmente na Tiny).
-            // Enquanto isso não acontece, usamos o texto do histórico como
-            // pista — ver "Classificação por histórico" no plano.
-            const grupoHeuristico = classificarPorHistorico(d.historico);
-            if (grupoHeuristico) { codigoGrupo = grupoHeuristico; viaHistorico = true; }
-          }
+          // Categoria=null (ex: categoria criada na Tiny depois do título já
+          // ter sido lançado) fica como "não classificado" — decisão do
+          // Rafael, 2026-11-26: removida a classificação por texto do
+          // histórico que existia aqui (cobria só o grupo 5.01, e casava
+          // falso-positivo com parcelamento de dívida — ver CLAUDE.md
+          // "Impostos"). Título sem categoria real nunca mais vira 5.01 por
+          // conta própria.
+          const codigoGrupo = cat?.codigo_grupo || null;
           const linha = codigoGrupo ? planoContas[codigoGrupo] : null;
 
           // descricao é só informativo (pra tela de apontamento manual — ver
@@ -1099,8 +1133,8 @@ async function executarSyncDiario(req, res) {
             const competenciaReal = d.dataCompetencia || String(d.dataVencimento || "").slice(0, 7);
             if (competenciaReal === formatarYYYYMM(item.ano, item.mes)) {
               lote.push({
-                ano: item.ano, mes: item.mes, codigo_grupo: codigoGrupo, categoria_id: viaHistorico ? null : catId,
-                origem: viaHistorico ? "tiny_historico" : "tiny_competencia", regime: "competencia",
+                ano: item.ano, mes: item.mes, codigo_grupo: codigoGrupo, categoria_id: catId,
+                origem: "tiny_competencia", regime: "competencia",
                 titulo_tipo: "pagar", titulo_id: item.id, valor: Number(d.valor) || 0,
                 data_emissao: d.data || null, data_pagamento: d.dataLiquidacao || null,
                 descricao, historico: d.historico || null,
@@ -1598,16 +1632,22 @@ async function montarCmvParalelo(empresa, ano, mes) {
 // ============================================================================
 // Impostos (5.01/5.02) — catalogação manual (2026-11-25, decisão do Rafael)
 //
-// Antes, 5.01 vinha automático (categoria, com fallback por histórico pra
-// título lançado antes da categoria existir na Tiny — ver
-// classificarPorHistorico) e 5.02 era 100% manual via
-// financeiro_lancamentos_manuais. Problema do Rafael: "hoje pegamos por
-// competência, porém esses dados não estão certos no sistema" — a
-// dataCompetencia da Tiny não é confiável pra imposto. Desenho novo:
-//   - Todo título de contas a pagar cuja categoria (ou, na falta dela, o
-//     texto do histórico — só pro grupo 5.01) seja de imposto entra num
-//     catálogo próprio (financeiro_impostos_titulos), filtrado só por
-//     VENCIMENTO — nunca por dataCompetencia, nunca por estar pago ou não.
+// Antes, 5.01 vinha automático (categoria, com fallback por texto do
+// histórico pra título lançado antes da categoria existir na Tiny) e 5.02
+// era 100% manual via financeiro_lancamentos_manuais. Problema do Rafael:
+// "hoje pegamos por competência, porém esses dados não estão certos no
+// sistema" — a dataCompetencia da Tiny não é confiável pra imposto. Desenho
+// novo:
+//   - Todo título de contas a pagar cuja categoria REAL na Tiny seja de
+//     imposto (5.01/5.02) entra num catálogo próprio
+//     (financeiro_impostos_titulos), filtrado só por VENCIMENTO — nunca por
+//     dataCompetencia, nunca por estar pago ou não. O fallback por texto do
+//     histórico (pra título sem categoria) foi REMOVIDO em 2026-11-26 —
+//     decisão do Rafael, depois de achar "PARCELAMENTO PIS/COFINS/ICMS"
+//     (acordo de dívida, não a guia do imposto) classificado como 5.01 só
+//     por conter o nome do imposto no texto. Título sem categoria real agora
+//     fica só como "não classificado" (fora do DRE), nunca mais 5.01/5.02
+//     por heurística — ver "Impostos" no CLAUDE.md.
 //   - Cada título entra com mes_competencia PRÉ-preenchido (= mês ANTERIOR
 //     ao do vencimento — pedido do Rafael, 2026-11-25), mas livremente
 //     editável pelo operador — é esse campo, não o vencimento, que decide em
@@ -1668,13 +1708,13 @@ const FRESCOR_IMPOSTOS_MS = 3 * 24 * 60 * 60 * 1000;
 
 // categoria aqui é a linha de financeiro_categorias (categorias[catId]), não
 // o objeto bruto da Tiny — mesmo shape que lerCategoriasMapeadas devolve.
-function classificarImposto(categoria, historico) {
+// Só categoria REAL (5.01/5.02 na própria Tiny) — sem fallback por texto do
+// histórico, removido em 2026-11-26 (ver nota no topo desta seção).
+function classificarImposto(categoria) {
   if (categoria?.codigo_grupo === "5.01" || categoria?.codigo_grupo === "5.02") {
-    return { codigoGrupo: categoria.codigo_grupo, viaHistorico: false };
+    return categoria.codigo_grupo;
   }
-  const grupoHeuristico = classificarPorHistorico(historico);
-  if (grupoHeuristico) return { codigoGrupo: grupoHeuristico, viaHistorico: true };
-  return { codigoGrupo: null, viaHistorico: false };
+  return null;
 }
 
 async function buscarImpostosExistentes(empresa, ids) {
@@ -1771,7 +1811,7 @@ async function sincronizarImpostosTitulos(empresa, accessToken, categorias, data
     }
     const catId = d.categoria?.id;
     const cat = catId != null ? categorias[catId] : null;
-    const { codigoGrupo, viaHistorico } = classificarImposto(cat, d.historico);
+    const codigoGrupo = classificarImposto(cat);
     const existente = existentes.get(id);
     revisadosNestaChamada.push(id);
     if (!codigoGrupo) {
@@ -1793,8 +1833,8 @@ async function sincronizarImpostosTitulos(empresa, accessToken, categorias, data
       : String(d.dataVencimento || "").slice(0, 7);
     linhas.push({
       titulo_id: id, codigo_grupo: codigoGrupo,
-      categoria_id: viaHistorico ? null : catId,
-      origem: viaHistorico ? "tiny_historico" : "tiny_categoria",
+      categoria_id: catId,
+      origem: "tiny_categoria",
       descricao: d.contato?.nome || d.historico || null,
       historico: d.historico || null,
       valor: Number(d.valor) || 0,
