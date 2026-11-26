@@ -708,22 +708,40 @@ async function excluirMensal(empresa, tituloTipo, tituloId) {
 
 // --- receita (contas-receber, por emissão = competência de uma venda) ---
 
+// Busca uma página de listagem com retentativa — uma listagem grande (várias
+// centenas de títulos, não só os que importam pro chamador) pagina várias
+// vezes, e uma ÚNICA página batendo em bloqueio da Olist não pode derrubar a
+// listagem inteira sem nenhuma tentativa de novo (achado ao vivo, 2026-11-26:
+// a tela de Impostos quebrava com "HTTP 429" na 3ª página, mesmo sem nenhum
+// outro sync rodando ao mesmo tempo — o limite é compartilhado com
+// Mercos/Nuvemshop, ver "Integrações externas..." no CLAUDE.md, então mesmo
+// uma listagem sozinha pode esbarrar nele). Mesmo padrão de retentativa já
+// usado pra título individual (filaPagar/filaCmv), só que aqui por página.
+async function buscarPaginaComRetentativa(url, accessToken, contexto) {
+  for (let tentativa = 1; ; tentativa++) {
+    const r = await httpsRequest("GET", "api.tiny.com.br", url, null, { Authorization: "Bearer " + accessToken });
+    const data = parseJSON(r.text);
+    const itens = Array.isArray(data) ? data : data.itens;
+    if (r.status === 200 && Array.isArray(itens)) return { data, itens };
+    const erro = new Error(`${contexto}: HTTP ${r.status} - ${r.text.slice(0, 200)}`);
+    if (tentativa > MAX_TENTATIVAS_POR_TITULO) throw erro;
+    console.error(`[financeiro-sync] erro na ${contexto} (tentativa ${tentativa}/${MAX_TENTATIVAS_POR_TITULO}): ${erro.message}`);
+    await pausaSeBloqueio(erro, contexto);
+    await sleep(PACE_MS);
+  }
+}
+
 async function listarIdsContasReceber(accessToken, dataIni, dataFim) {
   const ids = [];
   const limit = 100;
   let offset = 0;
   while (true) {
-    const r = await httpsRequest("GET", "api.tiny.com.br",
-      `/public-api/v3/contas-receber?dataInicialEmissao=${dataIni}&dataFinalEmissao=${dataFim}&limit=${limit}&offset=${offset}`,
-      null, { Authorization: "Bearer " + accessToken });
-    const data = parseJSON(r.text);
     // Mesmo bug já visto em api/estoque.js ("página perdida por rate-limit virava
     // lista vazia, tratada como fim da paginação") — aqui fazia o título simplesmente
     // nunca entrar na fila (nem processado, nem "não classificado"), sem erro nenhum.
-    if (r.status !== 200 || !Array.isArray(data.itens)) {
-      throw new Error(`contas-receber (listagem offset=${offset}): HTTP ${r.status} - ${r.text.slice(0, 200)}`);
-    }
-    const itens = data.itens;
+    const { data, itens } = await buscarPaginaComRetentativa(
+      `/public-api/v3/contas-receber?dataInicialEmissao=${dataIni}&dataFinalEmissao=${dataFim}&limit=${limit}&offset=${offset}`,
+      accessToken, `contas-receber (listagem offset=${offset})`);
     itens.forEach(it => ids.push(it.id));
     const total = data.paginacao?.total ?? itens.length;
     offset += limit;
@@ -740,16 +758,11 @@ async function listarIdsContasPagar(accessToken, dataIni, dataFim) {
   const limit = 100;
   let offset = 0;
   while (true) {
-    const r = await httpsRequest("GET", "api.tiny.com.br",
-      `/public-api/v3/contas-pagar?dataInicialVencimento=${dataIni}&dataFinalVencimento=${dataFim}&limit=${limit}&offset=${offset}`,
-      null, { Authorization: "Bearer " + accessToken });
-    const data = parseJSON(r.text);
-    const itens = Array.isArray(data) ? data : data.itens;
     // Mesmo bug de "página perdida por rate-limit virava lista vazia" de
     // listarIdsContasReceber acima — ver comentário lá.
-    if (r.status !== 200 || !Array.isArray(itens)) {
-      throw new Error(`contas-pagar (listagem offset=${offset}): HTTP ${r.status} - ${r.text.slice(0, 200)}`);
-    }
+    const { data, itens } = await buscarPaginaComRetentativa(
+      `/public-api/v3/contas-pagar?dataInicialVencimento=${dataIni}&dataFinalVencimento=${dataFim}&limit=${limit}&offset=${offset}`,
+      accessToken, `contas-pagar (listagem offset=${offset})`);
     itens.forEach(it => ids.push(it.id));
     const total = data.paginacao?.total ?? itens.length;
     offset += limit;
@@ -1579,13 +1592,21 @@ async function montarCmvParalelo(empresa, ano, mes) {
 //     já catalogado — lê o que já existe antes de montar o upsert (mesmo
 //     cuidado do "Bug de acumulação" do CLAUDE.md, aqui invertido: o risco
 //     não é perder dado novo, é apagar a decisão manual do operador).
-//   - Sem checkpoint em banco (diferente do sync-diario principal) — volume
-//     real é baixo (a MAIORIA dos títulos de contas a pagar não é imposto,
-//     mas cada um precisa do detalhe pra saber a categoria), cabe numa
-//     chamada só pra janela normal de 2 meses. Se estourar o orçamento (ex:
-//     um backfill manual de vários meses de uma vez), devolve
-//     `concluido:false` e quem chamou (cron ou botão) tenta de novo — o
-//     upsert é idempotente, só reprocessa mais devagar que o ideal.
+//   - Checkpoint por FRESCOR, não por cursor salvo (achado ao vivo,
+//     2026-11-26: a suposição original de "cabe numa chamada só" era errada —
+//     testado com a Rampa, 290 títulos na janela × 2s de pausa entre eles
+//     passa de 9 minutos, bem mais que o orçamento de 260s). Sem nenhum
+//     checkpoint, uma chamada que estoura o orçamento sempre reconstruía a
+//     fila com a lista INTEIRA de ids e começava do zero — a próxima
+//     chamada (clique manual ou cron do dia seguinte) reprocessava os
+//     mesmos primeiros títulos pra sempre, nunca alcançando o fim da lista.
+//     Corrigido sem precisar de tabela/coluna nova: título já catalogado há
+//     menos de FRESCOR_IMPOSTOS_MS é pulado sem bater na Tiny (usa o próprio
+//     `atualizado_em` que o upsert já grava) — uma chamada seguinte, minutos
+//     depois, passa voando pelo que já foi feito e gasta o orçamento no
+//     resto; o cron do dia seguinte também pula o que foi feito há poucos
+//     dias, avançando pela lista em vez de reiniciar. Pulado não entra em
+//     `linhas` (nada pra sobrescrever) nem conta como falha.
 //   - Roda num cron PRÓPRIO (`acao=impostos-sync`, ver vercel.json), não
 //     dentro do sync-diario principal — mesma decisão de isolamento já usada
 //     no CMV Paralelo, pra não arriscar o orçamento de tempo do sync que já
@@ -1593,6 +1614,10 @@ async function montarCmvParalelo(empresa, ano, mes) {
 // ============================================================================
 
 const ORCAMENTO_IMPOSTOS_MS = 260000;
+// 3 dias: dá folga pra uma lista grande ser coberta em várias chamadas/crons
+// sucessivos sem nunca "esfriar" antes de ser alcançada, mas ainda revisita
+// cada título periodicamente (categoria pode mudar na Tiny depois).
+const FRESCOR_IMPOSTOS_MS = 3 * 24 * 60 * 60 * 1000;
 
 // categoria aqui é a linha de financeiro_categorias (categorias[catId]), não
 // o objeto bruto da Tiny — mesmo shape que lerCategoriasMapeadas devolve.
@@ -1608,7 +1633,7 @@ function classificarImposto(categoria, historico) {
 async function buscarImpostosExistentes(empresa, ids) {
   if (!ids.length) return new Map();
   const r = await httpsRequest("GET", supaHost(),
-    `/rest/v1/financeiro_impostos_titulos?empresa=eq.${empresa}&titulo_id=in.(${ids.join(",")})&select=titulo_id,mes_competencia,confirmado,pago_manual`,
+    `/rest/v1/financeiro_impostos_titulos?empresa=eq.${empresa}&titulo_id=in.(${ids.join(",")})&select=titulo_id,mes_competencia,confirmado,pago_manual,atualizado_em`,
     null, supaHeaders);
   const linhas = parseJSON(r.text);
   const mapa = new Map();
@@ -1637,21 +1662,47 @@ async function sincronizarImpostosTitulos(empresa, accessToken, categorias, data
   const ids = await listarIdsContasPagar(accessToken, dataIniVenc, fimMesAtual);
   const existentes = await buscarImpostosExistentes(empresa, ids);
   const inicio = Date.now();
-  let processados = 0;
+  let processados = 0, falhas = 0;
   const linhas = [];
-  for (const id of ids) {
+  // Fila com retentativa por título (mesmo padrão de filaPagar/filaCmv no
+  // sync principal) — achado ao vivo, 2026-11-26: antes era um `for` simples
+  // sem nenhum catch, então um único 429 no meio de centenas de títulos
+  // jogava fora TODO o progresso já feito (nem salvava o que já tinha
+  // classificado). Título que esgota as tentativas é só pulado (conta como
+  // falha) — nunca entra em `existentes` com `atualizado_em` recente, então
+  // a próxima chamada tenta ele de novo naturalmente (ver skip por
+  // FRESCOR_IMPOSTOS_MS abaixo).
+  const fila = ids.map(id => ({ id, tentativas: 0 }));
+  while (fila.length > 0) {
     if (Date.now() - inicio > ORCAMENTO_IMPOSTOS_MS) {
       await upsertImpostos(empresa, linhas);
-      return { ok: true, concluido: false, processados, totalIds: ids.length };
+      return { ok: true, concluido: false, processados, totalIds: ids.length, falhas };
+    }
+    const { id, tentativas } = fila.shift();
+    const existente = existentes.get(id);
+    if (existente?.atualizado_em && (Date.now() - new Date(existente.atualizado_em).getTime()) < FRESCOR_IMPOSTOS_MS) {
+      // Já catalogado há pouco tempo (por esta mesma chamada, uma anterior,
+      // ou o cron) — pula sem bater na Tiny, pra sobrar orçamento pros
+      // títulos que ainda faltam. Ver nota de "Checkpoint por FRESCOR" acima.
+      processados++;
+      continue;
     }
     await sleep(PACE_MS);
-    const rd = await httpsRequest("GET", "api.tiny.com.br", `/public-api/v3/contas-pagar/${id}`, null, { Authorization: "Bearer " + accessToken });
-    if (rd.status !== 200) throw new Error(`contas-pagar/${id}: HTTP ${rd.status} - ${rd.text.slice(0, 200)}`);
-    const d = parseJSON(rd.text);
+    let d;
+    try {
+      const rd = await httpsRequest("GET", "api.tiny.com.br", `/public-api/v3/contas-pagar/${id}`, null, { Authorization: "Bearer " + accessToken });
+      if (rd.status !== 200) throw new Error(`contas-pagar/${id}: HTTP ${rd.status} - ${rd.text.slice(0, 200)}`);
+      d = parseJSON(rd.text);
+    } catch (erroRede) {
+      console.error(`[impostos-sync:${empresa}] erro no título ${id} (tentativa ${tentativas + 1}/${MAX_TENTATIVAS_POR_TITULO}): ${erroRede.message}`);
+      await pausaSeBloqueio(erroRede, `contas-pagar ${id}`);
+      if (tentativas + 1 <= MAX_TENTATIVAS_POR_TITULO) fila.push({ id, tentativas: tentativas + 1 });
+      else falhas++;
+      continue;
+    }
     const catId = d.categoria?.id;
     const cat = catId != null ? categorias[catId] : null;
     const { codigoGrupo, viaHistorico } = classificarImposto(cat, d.historico);
-    const existente = existentes.get(id);
     if (!codigoGrupo) {
       // Não é (ou não é mais) imposto — se já tinha sido catalogado antes
       // (categoria mudou na Tiny), tira do catálogo (upsert nunca apaga).
@@ -1684,7 +1735,7 @@ async function sincronizarImpostosTitulos(empresa, accessToken, categorias, data
     processados++;
   }
   await upsertImpostos(empresa, linhas);
-  return { ok: true, concluido: true, processados, totalIds: ids.length, impostos: linhas.length };
+  return { ok: true, concluido: true, processados, totalIds: ids.length, impostos: linhas.length, falhas };
 }
 
 async function buscarImpostosConfirmados(empresas, ano, mes) {

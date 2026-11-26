@@ -2686,7 +2686,8 @@ async function sincronizarImpostos(){
     const resp = await r.json();
     if(!r.ok) throw new Error(resp.erro || `Erro ${r.status}`);
     if(resp.concluido){
-      impStatus(`Sincronizado: ${resp.processados} título(s) revisados, ${resp.impostos ?? 0} de imposto.`, "ok");
+      const aviso = resp.falhas ? ` ${resp.falhas} título(s) falharam (bloqueio momentâneo da Olist) — clique de novo pra tentar esses.` : "";
+      impStatus(`Sincronizado: ${resp.processados} título(s) revisados, ${resp.impostos ?? 0} de imposto.${aviso}`, resp.falhas ? "erro" : "ok");
     }else{
       impStatus(`Parcial (acabou o tempo) — clique de novo pra continuar de onde parou.`, "erro");
     }
