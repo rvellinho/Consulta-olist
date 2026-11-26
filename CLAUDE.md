@@ -1519,6 +1519,16 @@ da Tiny não é boa referência pra imposto).
 - **Só título `confirmado=true` entra no DRE.** Os pendentes aparecem como aviso na tela
   principal do DRE (`pendenciasImpostos`, quantidade + total) e no menu (badge), sem precisar
   abrir a tela de catalogação pra descobrir que existe pendência.
+- **Tabela da tela** (pedido do Rafael, 2026-11-26 — conferindo os títulos recém-sincronizados):
+  colunas Vencimento, Grupo, **Fornecedor** (renomeada de "Descrição" — o campo sempre mostrou
+  `d.contato?.nome`, nunca uma descrição livre), **Categoria** (nome da categoria da Tiny,
+  resolvido do `categoria_id` via o mesmo cache de `carregarCategoriasDestino` que já alimenta o
+  select do modal de intercompany — mostra "— (por histórico)" quando o título foi classificado
+  pelo fallback de texto, sem categoria real na Tiny), **Histórico** (campo cru `historico` do
+  título, já vinha gravado desde a v1, só não aparecia na tela), Valor, Mês de competência,
+  **Conferido** (renomeado de "Confirmado", mesmo campo `confirmado` — reordenada pra antes de
+  Pago). Nenhuma coluna nova exigiu mudança de backend — `categoria_id`/`historico` já eram
+  gravados e devolvidos por `acao=impostos-titulos` (`select=*`), só não eram exibidos.
 - Roda num cron próprio (`?acao=impostos-sync`, 1x/dia por empresa, depois do sync financeiro
   normal — ver `vercel.json`) e também por um botão na própria tela.
 - **Botão "Sincronizar tudo" (pedido do Rafael, 2026-11-26) chama as duas empresas e continua

@@ -585,11 +585,13 @@
             <tr style="border-bottom:1px solid var(--br);">
               <th style="text-align:left;padding:6px 10px;">Vencimento</th>
               <th style="text-align:left;padding:6px 10px;">Grupo</th>
-              <th style="text-align:left;padding:6px 10px;">Descrição</th>
+              <th style="text-align:left;padding:6px 10px;">Fornecedor</th>
+              <th style="text-align:left;padding:6px 10px;">Categoria</th>
+              <th style="text-align:left;padding:6px 10px;">Histórico</th>
               <th style="text-align:right;padding:6px 10px;">Valor</th>
               <th style="text-align:left;padding:6px 10px;">Mês de competência</th>
+              <th style="text-align:center;padding:6px 10px;">Conferido</th>
               <th style="text-align:center;padding:6px 10px;">Pago</th>
-              <th style="text-align:center;padding:6px 10px;">Confirmado</th>
             </tr>
           </thead>
           <tbody id="tbody-impostos"></tbody>
@@ -2774,34 +2776,49 @@ async function carregarImpostos(){
   el("estado-impostos").classList.remove("hidden");
   el("tabela-impostos-wrap").classList.add("hidden");
   try{
-    const r = await fetch(`/api/financeiro?acao=impostos-titulos&empresa=${empresa}&status=${status}`);
+    const [r, categorias] = await Promise.all([
+      fetch(`/api/financeiro?acao=impostos-titulos&empresa=${empresa}&status=${status}`),
+      carregarCategoriasDestino(empresa),
+    ]);
     if(!r.ok) throw new Error((await r.json()).erro || `Erro ${r.status}`);
     const linhas = await r.json();
-    renderImpostos(linhas, empresa);
+    renderImpostos(linhas, empresa, categorias);
   }catch(e){
-    el("tbody-impostos").innerHTML = `<tr><td colspan="7" style="text-align:center;color:var(--red);padding:16px;">Erro: ${e.message}</td></tr>`;
+    el("tbody-impostos").innerHTML = `<tr><td colspan="9" style="text-align:center;color:var(--red);padding:16px;">Erro: ${e.message}</td></tr>`;
     el("tabela-impostos-wrap").classList.remove("hidden");
   }finally{
     el("estado-impostos").classList.add("hidden");
   }
 }
 
-function renderImpostos(linhas, empresa){
+function renderImpostos(linhas, empresa, categorias){
   el("tabela-impostos-wrap").classList.remove("hidden");
   if(!linhas.length){
-    el("tbody-impostos").innerHTML = `<tr><td colspan="7" style="text-align:center;color:var(--mt);padding:16px;">Nenhum título nessa lista.</td></tr>`;
+    el("tbody-impostos").innerHTML = `<tr><td colspan="9" style="text-align:center;color:var(--mt);padding:16px;">Nenhum título nessa lista.</td></tr>`;
     return;
   }
+  // Nome da categoria da Tiny (nível 3) a partir do categoria_id gravado no
+  // título — mesma fonte que já alimenta a árvore do DRE e o select do modal
+  // de intercompany (carregarCategoriasDestino). Título classificado por
+  // histórico (sem categoria real na Tiny — ver "Impostos" no CLAUDE.md) não
+  // tem categoria_id: mostra o motivo em vez de deixar em branco sem explicação.
+  const nomeCategoriaMap = {};
+  (categorias || []).forEach(c => { nomeCategoriaMap[c.categoria_id] = c.descricao_raw; });
   el("tbody-impostos").innerHTML = linhas.map(l=>{
     const venc = l.data_vencimento ? l.data_vencimento.split("-").reverse().join("/") : "—";
+    const categoriaTxt = l.categoria_id!=null
+      ? (nomeCategoriaMap[l.categoria_id] || `#${l.categoria_id}`)
+      : (l.origem==="tiny_historico" ? "— (por histórico)" : "—");
     return `<tr data-titulo-id="${l.titulo_id}">
       <td style="padding:6px 10px;">${venc}</td>
       <td style="padding:6px 10px;">${l.codigo_grupo}</td>
-      <td style="padding:6px 10px;">${l.descricao || l.historico || "—"}</td>
+      <td style="padding:6px 10px;">${l.descricao || "—"}</td>
+      <td style="padding:6px 10px;">${categoriaTxt}</td>
+      <td style="padding:6px 10px;">${l.historico || "—"}</td>
       <td style="padding:6px 10px;text-align:right;">${formatarMoeda(l.valor)}</td>
       <td style="padding:6px 10px;"><input type="month" value="${l.mes_competencia}" style="width:140px;" onchange="salvarCampoImposto('${l.empresa}',${l.titulo_id},'mes_competencia',this.value)"></td>
-      <td style="padding:6px 10px;text-align:center;"><input type="checkbox" ${l.pago_manual?"checked":""} onchange="salvarCampoImposto('${l.empresa}',${l.titulo_id},'pago_manual',this.checked)"></td>
       <td style="padding:6px 10px;text-align:center;"><input type="checkbox" ${l.confirmado?"checked":""} onchange="salvarCampoImposto('${l.empresa}',${l.titulo_id},'confirmado',this.checked)"></td>
+      <td style="padding:6px 10px;text-align:center;"><input type="checkbox" ${l.pago_manual?"checked":""} onchange="salvarCampoImposto('${l.empresa}',${l.titulo_id},'pago_manual',this.checked)"></td>
     </tr>`;
   }).join("");
 }
