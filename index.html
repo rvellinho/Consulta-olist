@@ -2678,12 +2678,14 @@ function toggleDreLeafs(gid, arrowEl){
 
 // --- Impostos (catalogação manual — 5.01/5.02) ---
 
-function impStatus(msg, tipo){
+function impStatus(msg, tipo, rodando){
   const el2 = el("imp-status-sync");
   el2.classList.remove("hidden");
   el2.style.background = tipo === "erro" ? "var(--redl)" : "var(--gl)";
   el2.style.color = tipo === "erro" ? "var(--red)" : "var(--g)";
-  el2.textContent = msg;
+  // innerHTML (não textContent) só pra caber o spinner — msg é sempre texto
+  // nosso (números + strings fixas), nunca dado de usuário, então é seguro.
+  el2.innerHTML = (rodando ? '<span class="spinner-sm"></span>' : "") + msg;
 }
 
 function impProgresso(pct){
@@ -2712,20 +2714,36 @@ async function sincronizarImpostos(){
       // skip por frescor incluído, ver "Checkpoint por FRESCOR" no CLAUDE.md).
       const base = (i / empresas.length) * 100;
       const faixa = 100 / empresas.length;
-      impStatus(`Sincronizando ${EMPRESAS[empresa].label} (${i+1}/${empresas.length})... iniciando — o app continua sozinho até terminar, pode levar vários minutos.`, "ok");
       let resp = null, chamadas = 0;
       do{
         chamadas++;
         if(chamadas > 30){
           throw new Error(`${EMPRESAS[empresa].label}: passou de 30 chamadas sem terminar — pare e peça pra alguém olhar antes de continuar.`);
         }
-        const r = await fetch(`/api/financeiro?acao=impostos-sync&empresa=${empresa}`, { method:"POST" });
-        resp = await r.json();
-        if(!r.ok || !resp.ok) throw new Error(`${EMPRESAS[empresa].label}: ${resp.erro || `Erro ${r.status}`}`);
+        // Cada chamada em si demora até ~5min (pausa de 2s por título +
+        // bloqueios ocasionais da Olist, ver "Rate limit Olist" no
+        // CLAUDE.md) — sem isso, o número na tela ficava parado o tempo
+        // todo da chamada e parecia travado (achado ao vivo, 2026-11-26,
+        // reportado pelo Rafael). Ticker mostra segundos rodando pra provar
+        // que está vivo, mesmo sem % novo pra mostrar ainda.
+        const ultimaLeva = resp ? ` (última leva: ${Math.round((resp.processados/resp.totalIds)*100)}%, ${resp.processados}/${resp.totalIds})` : "";
+        const inicioChamada = Date.now();
+        const ticker = setInterval(() => {
+          const seg = Math.round((Date.now() - inicioChamada) / 1000);
+          impStatus(`Sincronizando ${EMPRESAS[empresa].label} (${i+1}/${empresas.length})${ultimaLeva} — chamada em andamento há ${seg}s (cada uma pode levar até ~5min)...`, "ok", true);
+        }, 2000);
+        impStatus(`Sincronizando ${EMPRESAS[empresa].label} (${i+1}/${empresas.length})${ultimaLeva} — chamada em andamento...`, "ok", true);
+        try{
+          const r = await fetch(`/api/financeiro?acao=impostos-sync&empresa=${empresa}`, { method:"POST" });
+          resp = await r.json();
+          if(!r.ok || !resp.ok) throw new Error(`${EMPRESAS[empresa].label}: ${resp.erro || `Erro ${r.status}`}`);
+        } finally {
+          clearInterval(ticker);
+        }
         const fracaoEmpresa = resp.totalIds ? resp.processados / resp.totalIds : 1;
         impProgresso(base + fracaoEmpresa * faixa);
         if(!resp.concluido){
-          impStatus(`Sincronizando ${EMPRESAS[empresa].label} (${i+1}/${empresas.length}) — ${Math.round(fracaoEmpresa*100)}% (${resp.processados}/${resp.totalIds} títulos) — continuando sozinho...`, "ok");
+          impStatus(`Sincronizando ${EMPRESAS[empresa].label} (${i+1}/${empresas.length}) — ${Math.round(fracaoEmpresa*100)}% (${resp.processados}/${resp.totalIds} títulos) — continuando sozinho...`, "ok", true);
         }
       }while(!resp.concluido);
       impProgresso(base + faixa);
