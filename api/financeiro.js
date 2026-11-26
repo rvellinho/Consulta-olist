@@ -1445,15 +1445,28 @@ async function executarMovimentosSync(empresa, ano, mes) {
 // estoque final REAL (saldo importado do mês pedido). Produto sem saldo
 // importado nos dois extremos ainda aparece se tiver movimento no mês (com
 // `inicial=0` e `temSaldoInicial=false` pro front avisar que falta importar).
+// Soma o CMV "real" do DRE (nota de venda × custo do produto — ver "CMV
+// real" no CLAUDE.md) pro mesmo ano/mês, pra comparar com o calculado pela
+// fórmula clássica (Estoque Inicial + Compras − Estoque Final) do CMV
+// Paralelo. Mesma tabela/filtro que o DRE usa pro bloco de Estoques (4.01).
+async function buscarCmvRealDoMes(empresa, ano, mes) {
+  const r = await httpsRequest("GET", supaHost(),
+    `/rest/v1/financeiro_mensal?empresa=eq.${empresa}&ano=eq.${ano}&mes=eq.${mes}&titulo_tipo=eq.cmv&select=valor`,
+    null, supaHeaders);
+  const linhas = parseJSON(r.text) || [];
+  return linhas.reduce((s, l) => s + (Number(l.valor) || 0), 0);
+}
+
 async function montarCmvParalelo(empresa, ano, mes) {
   const anterior = mesAlvoAnterior(ano, mes);
-  const [rInicial, rFinal, rMov, rCatalogo, custoAtualMap, custoCongeladoMap] = await Promise.all([
+  const [rInicial, rFinal, rMov, rCatalogo, custoAtualMap, custoCongeladoMap, cmvReal] = await Promise.all([
     httpsRequest("GET", supaHost(), `/rest/v1/estoque_saldo_mensal?empresa=eq.${empresa}&ano=eq.${anterior.ano}&mes=eq.${anterior.mes}&select=produto_id,quantidade`, null, supaHeaders),
     httpsRequest("GET", supaHost(), `/rest/v1/estoque_saldo_mensal?empresa=eq.${empresa}&ano=eq.${ano}&mes=eq.${mes}&select=produto_id,quantidade`, null, supaHeaders),
-    httpsRequest("GET", supaHost(), `/rest/v1/estoque_movimentos_mensal?empresa=eq.${empresa}&ano=eq.${ano}&mes=eq.${mes}&select=produto_id,tipo,quantidade`, null, supaHeaders),
+    httpsRequest("GET", supaHost(), `/rest/v1/estoque_movimentos_mensal?empresa=eq.${empresa}&ano=eq.${ano}&mes=eq.${mes}&select=produto_id,tipo,quantidade,custo_total`, null, supaHeaders),
     httpsRequest("GET", supaHost(), `/rest/v1/estoque_catalogo?empresa=eq.${empresa}&select=produto_id,sku,nome`, null, supaHeaders),
     lerCustoAtualCatalogo(empresa),
     lerCustoCongeladoMes(empresa, ano, mes),
+    buscarCmvRealDoMes(empresa, ano, mes),
   ]);
   const inicialMap = new Map((parseJSON(rInicial.text) || []).map(l => [Number(l.produto_id), Number(l.quantidade) || 0]));
   const finalRealMap = new Map((parseJSON(rFinal.text) || []).map(l => [Number(l.produto_id), Number(l.quantidade) || 0]));
@@ -1471,11 +1484,16 @@ async function montarCmvParalelo(empresa, ano, mes) {
   // sua coluna-mãe.
   const comprasMap = new Map(), devCompraMap = new Map(), vendasMap = new Map(), devVendaMap = new Map();
   const mapaPorTipo = { compra: comprasMap, devolucao_compra: devCompraMap, venda: vendasMap, devolucao_venda: devVendaMap };
+  // Compras em R$ já vêm com o rateio de frete da própria OC aplicado (ver
+  // "CMV paralelo" no CLAUDE.md) — só tipo "compra" tem custo_total gravado;
+  // venda/devolução são só quantidade, nunca entraram em R$ nesse relatório.
+  let comprasReais = 0;
   for (const m of (parseJSON(rMov.text) || [])) {
     const mapa = mapaPorTipo[m.tipo];
     if (!mapa) continue;
     const id = Number(m.produto_id);
     mapa.set(id, (mapa.get(id) || 0) + (Number(m.quantidade) || 0));
+    if (m.tipo === "compra") comprasReais += Number(m.custo_total) || 0;
   }
 
   const produtoIds = new Set([...inicialMap.keys(), ...finalRealMap.keys(), ...comprasMap.keys(), ...devCompraMap.keys(), ...vendasMap.keys(), ...devVendaMap.keys()]);
@@ -1505,8 +1523,27 @@ async function montarCmvParalelo(empresa, ano, mes) {
   produtos.sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
   const totalCustoDiferenca = produtos.reduce((s, p) => s + (p.custoDiferenca || 0), 0);
 
+  // CMV em R$ pela fórmula clássica (Estoque Inicial + Compras − Estoque
+  // Final), valorizado pelo mesmo custo "do mês" usado em todo o resto deste
+  // relatório — comparável ao CMV real do DRE (nota de venda × custo), que é
+  // calculado de um jeito totalmente independente (não usa saldo de estoque
+  // nem compra, só nota fiscal). A diferença entre os dois é, por desenho,
+  // tudo que esse cálculo por saldo capta e a via de notas não — devolução,
+  // perda, quebra, timing de lançamento — nunca um erro de cálculo em si.
+  // Só é possível calcular quando os dois extremos (saldo inicial E final)
+  // já foram importados — ver temSaldoInicial/temSaldoFinal.
+  let estoqueInicialReais = 0, estoqueFinalReais = 0;
+  for (const id of inicialMap.keys()) estoqueInicialReais += inicialMap.get(id) * custoDoMes(id);
+  for (const id of finalRealMap.keys()) estoqueFinalReais += finalRealMap.get(id) * custoDoMes(id);
+  const cmvCalculadoReais = estoqueInicialReais + comprasReais - estoqueFinalReais;
+  const resumoReais = {
+    estoqueInicialReais, comprasReais, estoqueFinalReais, cmvCalculadoReais,
+    cmvRealReais: cmvReal, diferencaReais: cmvCalculadoReais - cmvReal,
+    calculavel: inicialMap.size > 0 && finalRealMap.size > 0,
+  };
+
   return {
-    ano, mes, anterior, totalCustoDiferenca,
+    ano, mes, anterior, totalCustoDiferenca, resumoReais,
     temSaldoInicial: inicialMap.size > 0, temSaldoFinal: finalRealMap.size > 0,
     produtos,
   };

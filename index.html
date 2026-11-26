@@ -486,6 +486,21 @@
     <div id="cmvp-status" class="hidden" style="border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px;"></div>
     <div id="estado-cmv-paralelo" class="hidden"><div class="state-center"><div class="spinner"></div><p>Carregando...</p></div></div>
     <div id="cmvp-avisos" class="hidden" style="background:var(--redl);color:var(--red);border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px;"></div>
+    <div id="cmvp-resumo-reais" class="hidden" style="border:1px solid var(--br);border-radius:var(--r);padding:12px 16px;margin-bottom:14px;background:var(--s2);">
+      <p style="font-size:12px;color:var(--mt);margin:0 0 8px;">
+        CMV em R$ pela fórmula Estoque Inicial + Compras − Estoque Final, comparado ao CMV real do DRE
+        (nota de venda × custo) — calculados de jeitos totalmente independentes. A diferença é esperada
+        e mostra o que uma via capta e a outra não (devolução, perda, quebra, timing), não é erro de conta.
+      </p>
+      <div style="display:flex;flex-wrap:wrap;gap:18px;font-size:13px;">
+        <div><span style="color:var(--mt);">Estoque inicial</span><br><strong id="cmvp-r-inicial"></strong></div>
+        <div><span style="color:var(--mt);">(+) Compras</span><br><strong id="cmvp-r-compras"></strong></div>
+        <div><span style="color:var(--mt);">(−) Estoque final</span><br><strong id="cmvp-r-final"></strong></div>
+        <div><span style="color:var(--mt);">(=) CMV calculado</span><br><strong id="cmvp-r-calculado"></strong></div>
+        <div><span style="color:var(--mt);">CMV real (DRE)</span><br><strong id="cmvp-r-real"></strong></div>
+        <div><span style="color:var(--mt);">Diferença</span><br><strong id="cmvp-r-diferenca"></strong></div>
+      </div>
+    </div>
     <div id="tabela-cmv-paralelo-wrap" class="hidden">
       <div style="border:1px solid var(--br);border-radius:var(--r);overflow:hidden;box-shadow:var(--sh);">
         <div style="overflow:auto;max-height:65vh;">
@@ -2506,6 +2521,7 @@ async function carregarCmvParalelo(){
   el("estado-cmv-paralelo").classList.remove("hidden");
   el("tabela-cmv-paralelo-wrap").classList.add("hidden");
   el("cmvp-avisos").classList.add("hidden");
+  el("cmvp-resumo-reais").classList.add("hidden");
   try{
     const r = await fetch(`/api/financeiro?acao=estoque-cmv-paralelo&empresa=${empresa}&ano=${ano}&mes=${mes}`);
     if(!r.ok) throw new Error((await r.json()).erro || `Erro ${r.status}`);
@@ -2529,6 +2545,20 @@ function renderCmvParalelo(dados){
   if(avisos.length){
     el("cmvp-avisos").classList.remove("hidden");
     el("cmvp-avisos").innerHTML = avisos.join("<br>");
+  }
+  const resumo = dados.resumoReais;
+  if(resumo?.calculavel){
+    el("cmvp-resumo-reais").classList.remove("hidden");
+    el("cmvp-r-inicial").textContent = formatarMoeda(resumo.estoqueInicialReais);
+    el("cmvp-r-compras").textContent = formatarMoeda(resumo.comprasReais);
+    el("cmvp-r-final").textContent = formatarMoeda(resumo.estoqueFinalReais);
+    el("cmvp-r-calculado").textContent = formatarMoeda(resumo.cmvCalculadoReais);
+    el("cmvp-r-real").textContent = formatarMoeda(resumo.cmvRealReais);
+    const elDif = el("cmvp-r-diferenca");
+    elDif.textContent = formatarMoeda(resumo.diferencaReais);
+    elDif.style.color = Math.abs(resumo.diferencaReais) < 1 ? "" : "var(--red)";
+  }else{
+    el("cmvp-resumo-reais").classList.add("hidden");
   }
   const fmt = n => (n==null ? "—" : Number(n).toLocaleString("pt-BR",{maximumFractionDigits:2}));
   const fmtDevol = n => (!n ? "—" : "-"+fmt(n)); // devolução sempre com sinal contrário à sua coluna-mãe (pedido do Rafael)
