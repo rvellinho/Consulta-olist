@@ -1501,12 +1501,17 @@ async function montarCmvParalelo(empresa, ano, mes) {
   // "CMV paralelo" no CLAUDE.md) — só tipo "compra" tem custo_total gravado;
   // venda/devolução são só quantidade, nunca entraram em R$ nesse relatório.
   let comprasReais = 0;
+  const comprasReaisPorProdutoMap = new Map();
   for (const m of (parseJSON(rMov.text) || [])) {
     const mapa = mapaPorTipo[m.tipo];
     if (!mapa) continue;
     const id = Number(m.produto_id);
     mapa.set(id, (mapa.get(id) || 0) + (Number(m.quantidade) || 0));
-    if (m.tipo === "compra") comprasReais += Number(m.custo_total) || 0;
+    if (m.tipo === "compra") {
+      const custo = Number(m.custo_total) || 0;
+      comprasReais += custo;
+      comprasReaisPorProdutoMap.set(id, (comprasReaisPorProdutoMap.get(id) || 0) + custo);
+    }
   }
 
   const produtoIds = new Set([...inicialMap.keys(), ...finalRealMap.keys(), ...comprasMap.keys(), ...devCompraMap.keys(), ...vendasMap.keys(), ...devVendaMap.keys()]);
@@ -1524,17 +1529,37 @@ async function montarCmvParalelo(empresa, ano, mes) {
     // (positivo quando falta no calculado, negativo quando sobra).
     const diferenca = temFinalReal ? finalReal - finalCalculado : null;
     const custoUnitario = custoDoMes(id);
+    // Detalhamento em R$ por produto (pedido do Rafael, 2026-11-26: "quero
+    // isso detalhado... preciso ter a visão por produto", respondendo ao
+    // resumo agregado de CMV em R$ — ver resumoReais abaixo). `comprasReais`
+    // é o custo de compra REAL do produto (rateio de frete da própria OC já
+    // aplicado, pode diferir do custoUnitario corrente se o preço mudou
+    // desde a compra). `inicialReais`/`finalReais` usam o mesmo custoUnitario
+    // "do mês" (congelado ou atual) que o resto deste relatório, pra ficar
+    // na mesma base da fórmula agregada. Só calculável quando o produto tem
+    // saldo final real importado (mesma condição de `calculavel` do resumo).
+    const inicialReais = inicial * custoUnitario;
+    const comprasReaisProduto = comprasReaisPorProdutoMap.get(id) || 0;
+    const finalReaisProduto = temFinalReal ? finalReal * custoUnitario : null;
+    const cmvCalculadoReaisProduto = temFinalReal ? inicialReais + comprasReaisProduto - finalReaisProduto : null;
     return {
       produto_id: id, sku: cat?.sku || null, nome: cat?.nome || `Produto ${id}`,
       inicial, temInicial: inicialMap.has(id), compras, devolucaoCompra, vendas, devolucaoVenda, finalCalculado,
       finalReal, temFinalReal, diferenca,
       custoUnitario, custoDiferenca: diferenca != null ? diferenca * custoUnitario : null,
+      inicialReais, comprasReaisProduto, finalReaisProduto, cmvCalculadoReaisProduto,
     };
   });
   // Ordenado por descrição do produto (pedido do Rafael, 2026-11-25) — antes
   // era por |diferença| decrescente, difícil de acompanhar na tela.
   produtos.sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
   const totalCustoDiferenca = produtos.reduce((s, p) => s + (p.custoDiferenca || 0), 0);
+  // Soma dos CMV calculados por produto — serve de conferência contra
+  // resumoReais.cmvCalculadoReais abaixo. Pode divergir num centavo quando um
+  // produto tem inicial importado mas não final (ou vice-versa): o resumo
+  // soma inicial/final de conjuntos de produtos independentes, enquanto aqui
+  // só entra quem tem os dois — caso raro, de propósito (ver cálculo acima).
+  const totalCmvCalculadoReaisProdutos = produtos.reduce((s, p) => s + (p.cmvCalculadoReaisProduto || 0), 0);
 
   // CMV em R$ pela fórmula clássica (Estoque Inicial + Compras − Estoque
   // Final), valorizado pelo mesmo custo "do mês" usado em todo o resto deste
@@ -1556,7 +1581,7 @@ async function montarCmvParalelo(empresa, ano, mes) {
   };
 
   return {
-    ano, mes, anterior, totalCustoDiferenca, resumoReais,
+    ano, mes, anterior, totalCustoDiferenca, totalCmvCalculadoReaisProdutos, resumoReais,
     temSaldoInicial: inicialMap.size > 0, temSaldoFinal: finalRealMap.size > 0,
     produtos,
   };

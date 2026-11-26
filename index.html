@@ -491,6 +491,8 @@
         CMV em R$ pela fórmula Estoque Inicial + Compras − Estoque Final, comparado ao CMV real do DRE
         (nota de venda × custo) — calculados de jeitos totalmente independentes. A diferença é esperada
         e mostra o que uma via capta e a outra não (devolução, perda, quebra, timing), não é erro de conta.
+        A coluna "CMV calculado (produto)" na tabela abaixo detalha essa mesma conta produto a produto —
+        soma na linha "Total" do rodapé, pra conferir contra o número acima.
       </p>
       <div style="display:flex;flex-wrap:wrap;gap:18px;font-size:13px;">
         <div><span style="color:var(--mt);">Estoque inicial</span><br><strong id="cmvp-r-inicial"></strong></div>
@@ -516,6 +518,8 @@
                 <th rowspan="2" style="text-align:right;padding:6px 10px;vertical-align:bottom;background:var(--s2);">Final real (Tiny)</th>
                 <th rowspan="2" style="text-align:right;padding:6px 10px;vertical-align:bottom;background:var(--s2);">Diferença</th>
                 <th rowspan="2" style="text-align:right;padding:6px 10px;vertical-align:bottom;background:var(--s2);">Custo da diferença</th>
+                <th rowspan="2" style="text-align:right;padding:6px 10px;vertical-align:bottom;background:var(--s2);">Custo unit.</th>
+                <th rowspan="2" style="text-align:right;padding:6px 10px;vertical-align:bottom;background:var(--s2);">CMV calculado (produto)</th>
               </tr>
               <tr style="border-bottom:1px solid var(--br);">
                 <th style="text-align:right;padding:4px 10px;font-weight:400;color:var(--mt);background:var(--s2);">C</th>
@@ -529,6 +533,8 @@
               <tr style="border-top:2px solid var(--br);font-weight:600;">
                 <td colspan="10" style="padding:6px 10px;text-align:right;">Total custo da diferença</td>
                 <td id="cmvp-total-custo-diferenca" style="padding:6px 10px;text-align:right;"></td>
+                <td></td>
+                <td id="cmvp-total-cmv-calculado-produtos" style="padding:6px 10px;text-align:right;" title="Soma do CMV calculado por produto — confere com o resumo acima quando todo produto tem saldo inicial E final importados"></td>
               </tr>
             </tfoot>
           </table>
@@ -2538,7 +2544,7 @@ async function carregarCmvParalelo(){
     renderCmvParalelo(dados);
   }catch(e){
     cmvpDadosAtual = null;
-    el("tbody-cmv-paralelo").innerHTML = `<tr><td colspan="11" style="text-align:center;color:var(--red);padding:16px;">Erro: ${e.message}</td></tr>`;
+    el("tbody-cmv-paralelo").innerHTML = `<tr><td colspan="13" style="text-align:center;color:var(--red);padding:16px;">Erro: ${e.message}</td></tr>`;
     el("tabela-cmv-paralelo-wrap").classList.remove("hidden");
   }finally{
     el("estado-cmv-paralelo").classList.add("hidden");
@@ -2587,9 +2593,12 @@ function renderCmvParalelo(dados){
       <td style="padding:6px 10px;text-align:right;">${p.temFinalReal ? fmt(p.finalReal) : "—"}</td>
       <td style="padding:6px 10px;text-align:right;${corDif}">${fmt(p.diferenca)}</td>
       <td style="padding:6px 10px;text-align:right;${corDif}">${p.custoDiferenca==null ? "—" : formatarMoeda(p.custoDiferenca)}</td>
+      <td style="padding:6px 10px;text-align:right;color:var(--mt);">${formatarMoeda(p.custoUnitario)}</td>
+      <td style="padding:6px 10px;text-align:right;">${p.cmvCalculadoReaisProduto==null ? "—" : formatarMoeda(p.cmvCalculadoReaisProduto)}</td>
     </tr>`;
-  }).join("") || `<tr><td colspan="11" style="text-align:center;color:var(--mt);padding:16px;">${soComDiferenca ? "Nenhum produto com diferença neste mês." : "Nenhum produto com saldo ou movimento neste mês."}</td></tr>`;
+  }).join("") || `<tr><td colspan="13" style="text-align:center;color:var(--mt);padding:16px;">${soComDiferenca ? "Nenhum produto com diferença neste mês." : "Nenhum produto com saldo ou movimento neste mês."}</td></tr>`;
   el("cmvp-total-custo-diferenca").textContent = formatarMoeda(dados.totalCustoDiferenca || 0);
+  el("cmvp-total-cmv-calculado-produtos").textContent = formatarMoeda(dados.totalCmvCalculadoReaisProdutos || 0);
   el("tabela-cmv-paralelo-wrap").classList.remove("hidden");
 }
 

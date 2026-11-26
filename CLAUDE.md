@@ -1475,6 +1475,33 @@ no DRE — nunca tinha sido construída (achado revisando o pedido original nest
 - **Tela**: resumo em R$ no topo da aba CMV Paralelo (acima da tabela produto a produto),
   escondido quando `calculavel=false`.
 
+#### CMV calculado detalhado por produto, não só o agregado (pedido do Rafael, 2026-11-26)
+Depois de ver o resumo em R$ acima, pedido do Rafael: "já temos na tela o total, porém eu quero
+isso detalhado, justamente pra poder ver onde está a diferença — preciso ter a visão por produto."
+
+- **2 colunas novas na tabela produto a produto** (mesma função `montarCmvParalelo`, sem chamada
+  nova à Olist — só reaproveita dado já coletado): **Custo unit.** (`custoUnitario`, já calculado
+  pra v1, só não era exibido) e **CMV calculado (produto)** = `inicialReais + comprasReaisProduto
+  − finalReaisProduto`, onde `inicialReais`/`finalReaisProduto` usam o mesmo `custoDoMes` do
+  resumo agregado, e `comprasReaisProduto` é o custo de compra REAL do produto naquele mês (soma
+  de `estoque_movimentos_mensal.custo_total` só daquele produto — já com rateio de frete da OC,
+  pode diferir do `custoUnitario` corrente se o preço mudou desde a compra). Só calculável
+  (`!= null`) quando o produto tem saldo final real importado, mesma condição do resumo.
+- **Rodapé soma a coluna nova** (`totalCmvCalculadoReaisProdutos`, retornado pela função) — serve
+  de conferência contra `resumoReais.cmvCalculadoReais` do resumo agregado. Pode divergir num
+  centavo se algum produto tiver só um dos dois extremos importado (inicial sem final, ou
+  vice-versa) — o resumo soma dois conjuntos de produtos independentes (quem tem inicial, quem
+  tem final), enquanto a coluna por produto só entra quando o produto tem os dois.
+- **Testado ao vivo** (Rampa, outubro/2026, via `vercel dev` lendo o mesmo Supabase de produção,
+  sem bater na Olist — esse endpoint só lê dado já sincronizado): total da coluna nova
+  (R$326.150,05) bateu **exatamente** com o CMV calculado do resumo agregado.
+- **Não existe (e não foi construído) um "CMV real (DRE) por produto"** — o CMV real vem de
+  `financeiro_mensal.titulo_tipo='cmv'`, uma linha por NOTA (soma de todos os itens daquela nota),
+  nunca por produto; quebrar isso por produto exigiria reestruturar como o CMV real é persistido
+  (fora de escopo aqui). Por isso a comparação fica só do lado "calculado" — o Rafael usa a coluna
+  "CMV calculado (produto)" pra achar visualmente produtos com custo zerado/inesperado ou volume
+  fora do padrão, não pra bater produto a produto contra o DRE.
+
 ### Impostos (5.01/5.02) — catalogação manual (implementada 2026-11-25, publicada 2026-11-26)
 
 Tela nova (menu Financeiro → Impostos, admin-only) que substitui a classificação automática de
