@@ -11,7 +11,7 @@ const {
   DESCRICOES_SERVICO_EXCLUIDAS, FINALIDADES_DEVOLUCAO,
   MARCADOR_REPRESENTACAO, MARGEM_DIAS_REPRESENTACAO,
   MARCADOR_AGUIA, MARGEM_DIAS_AGUIA, MARCADOR_VENDA_FUTURA_EXCLUIR,
-  httpsRequest, sleep, parseJSON, normalizarNumero, formatarDataBR, parseDataBR, somarDiasBR, hojeBR, paraIso,
+  httpsRequest, sleep, PACE_MS, parseJSON, normalizarNumero, formatarDataBR, parseDataBR, somarDiasBR, hojeBR, paraIso,
   buscarAlteracoes, buscarClientePorCnpj, temMarcador,
   buscarMapeamentoResponsavel, resolverResponsavel,
   buscarTodasNotas, buscarTodasNotasServico, buscarDetalheNotaServico, buscarDetalheNotaFiscal,
@@ -41,13 +41,13 @@ const DIAS_JANELA_REVALIDACAO = 45;
 async function revalidarCacheSync(tokenV2, empresa, dataInicial, dataFinal) {
   const removidos = {};
   removidos.produto = await revalidarNotas(tokenV2, empresa, "produto", "S", dataInicial, dataFinal);
-  await sleep(600);
+  await sleep(PACE_MS);
   removidos.devolucao = await revalidarNotas(tokenV2, empresa, "devolucao", "E", dataInicial, dataFinal);
-  await sleep(600);
+  await sleep(PACE_MS);
   removidos.servico = await revalidarNotasServico(tokenV2, empresa, dataInicial, dataFinal);
-  await sleep(600);
+  await sleep(PACE_MS);
   removidos.representacao = await revalidarPedidos(tokenV2, empresa, "representacao", MARCADOR_REPRESENTACAO, MARGEM_DIAS_REPRESENTACAO, dataInicial, dataFinal);
-  await sleep(600);
+  await sleep(PACE_MS);
   removidos.aguia = await revalidarPedidos(tokenV2, empresa, "aguia", MARCADOR_AGUIA, MARGEM_DIAS_AGUIA, dataInicial, dataFinal);
   return removidos;
 }
@@ -57,7 +57,7 @@ async function coletarProdutosSync(tokenV2, dataInicial, dataFinal) {
   const alteracoes = await buscarAlteracoes("produto");
   const resultado = [];
   for (const n of notas) {
-    await sleep(600);
+    await sleep(PACE_MS);
     const detalhe = await buscarDetalheNotaFiscal(tokenV2, n.id);
     if (temMarcador(detalhe, MARCADOR_VENDA_FUTURA_EXCLUIR)) continue;
     const alt = alteracoes[normalizarNumero(n.numero)];
@@ -78,7 +78,7 @@ async function coletarDevolucoesSync(tokenV2, dataInicial, dataFinal) {
   const alteracoes = await buscarAlteracoes("devolucao");
   const resultado = [];
   for (const entrada of entradas) {
-    await sleep(600);
+    await sleep(PACE_MS);
     const resp = await httpsRequest("POST", "api.tiny.com.br", "/api2/nota.fiscal.obter.php",
       new URLSearchParams({ token: tokenV2, id: String(entrada.id), formato: "JSON" }).toString(),
       { "Content-Type": "application/x-www-form-urlencoded" });
@@ -113,7 +113,7 @@ async function coletarServicosSync(tokenV2, dataInicial, dataFinal) {
   const alteracoes = await buscarAlteracoes("servico");
   const resultado = [];
   for (const n of notas) {
-    await sleep(600);
+    await sleep(PACE_MS);
     const detalhe = await buscarDetalheNotaServico(tokenV2, n.id);
     const descricao = detalhe?.servico?.descricao || "";
     const excluido = DESCRICOES_SERVICO_EXCLUIDAS.some(d => descricao.toLowerCase().includes(d));
@@ -146,7 +146,7 @@ async function coletarPedidosMarcadosSync(tokenV2, marcador, margemDias, dataIni
   const alteracoes = await buscarAlteracoes(tipoAlteracao);
   const resultado = [];
   for (const p of noPeriodo) {
-    await sleep(600);
+    await sleep(PACE_MS);
     const detalhe = await buscarDetalhePedido(tokenV2, p.id);
     const temNotaFiscal = !!(detalhe && Number(detalhe.id_nota_fiscal) > 0);
     if (temNotaFiscal) continue;

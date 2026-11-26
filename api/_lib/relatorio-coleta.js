@@ -69,6 +69,10 @@ function httpsRequest(method, hostname, path, body, headers) {
 }
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+// Limite real da conta Olist é 60/min (header x-limit-api, confirmado ao
+// vivo 2026-11-26), não os 120/min assumidos — ver mesmo comentário em
+// api/financeiro.js e api/estoque-sync-diario.js.
+const PACE_MS = 1050;
 function parseJSON(text) { try { return JSON.parse(text); } catch { return {}; } }
 
 // A Olist usa códigos de erro diferentes pra "nenhum resultado" dependendo do
@@ -195,7 +199,7 @@ async function buscarTodasNotas(tokenV2, tipoNota, dataInicial, dataFinal) {
     lista.forEach(n => { if (n.nota_fiscal) todas.push(n.nota_fiscal); });
     if (lista.length < 100) break;
     pagina++;
-    await sleep(600);
+    await sleep(PACE_MS);
   }
   return todas.filter(n => !SITUACOES_INVALIDAS.includes(String(n.situacao)));
 }
@@ -237,7 +241,7 @@ async function buscarTodasNotasServico(tokenV2, dataInicial, dataFinal) {
     lista.forEach(n => { if (n.nota_servico) todas.push(n.nota_servico); });
     if (lista.length < 100) break;
     pagina++;
-    await sleep(600);
+    await sleep(PACE_MS);
   }
   return todas.filter(n => !SITUACOES_INVALIDAS_SERVICO.includes(String(n.situacao)));
 }
@@ -274,7 +278,7 @@ async function buscarTodosPedidos(tokenV2, situacao, marcador, dataInicial, data
     lista.forEach(p => { if (p.pedido) todos.push(p.pedido); });
     if (lista.length < 100) break;
     pagina++;
-    await sleep(600);
+    await sleep(PACE_MS);
   }
   return todos;
 }
@@ -431,7 +435,7 @@ module.exports = {
   DESCRICOES_SERVICO_EXCLUIDAS, FINALIDADES_DEVOLUCAO,
   MARCADOR_REPRESENTACAO, MARGEM_DIAS_REPRESENTACAO,
   MARCADOR_AGUIA, MARGEM_DIAS_AGUIA, MARCADOR_VENDA_FUTURA_EXCLUIR,
-  httpsRequest, sleep, parseJSON, normalizarNumero,
+  httpsRequest, sleep, PACE_MS, parseJSON, normalizarNumero,
   formatarDataBR, paraIso, parseDataBR, somarDiasBR, formatarDataBRDate, hojeBR,
   buscarAlteracoes, buscarClientePorCnpj, temMarcador,
   buscarMapeamentoResponsavel, resolverResponsavel,

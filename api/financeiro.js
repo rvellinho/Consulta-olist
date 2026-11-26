@@ -37,6 +37,12 @@ function httpsRequest(method, hostname, path, body, headers) {
   });
 }
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+// O ritmo entre chamadas era 600ms (~100/min), calibrado pro limite assumido
+// de 120/min — só que o limite REAL da conta (header `x-limit-api` na V2,
+// confirmado ao vivo em 2026-11-26 pras duas empresas) é 60/min. 600ms
+// rodava ~70% mais rápido do que a conta permite, todo santo dia,
+// independente de qualquer bloqueio pontual — ver PACE_MS abaixo.
+const PACE_MS = 1050; // 60/min = 1000ms exatos; folga de 50ms de margem
 // Olist diz "aguarde alguns minutos" nesse erro (429 na V3, ou "API Bloqueada"
 // no corpo da V2) — mas o loop tentava de novo em só 600ms, o que mantinha o
 // bloqueio ativo pelo resto do orçamento inteiro, em vez de dar o tempo que a
@@ -489,7 +495,7 @@ async function listarNotasFiscaisV2(tokenV2, tipoNota, dataInicialBR, dataFinalB
     todas.push(...lista);
     if (lista.length < 100) break;
     pagina++;
-    await sleep(600);
+    await sleep(PACE_MS);
   }
   return todas.filter(n => !SITUACOES_INVALIDAS_NOTA_VENDA_V2.includes(String(n.situacao)));
 }
@@ -661,7 +667,7 @@ async function syncCategorias(empresa, accessToken) {
     total = data.paginacao?.total ?? itens.length;
     offset += limit;
     if (itens.length < limit || offset >= total) break;
-    await sleep(600);
+    await sleep(PACE_MS);
   }
   if (linhas.length) {
     const payload = JSON.stringify(linhas.map(l => ({ ...l, empresa })));
@@ -716,7 +722,7 @@ async function listarIdsContasReceber(accessToken, dataIni, dataFim) {
     const total = data.paginacao?.total ?? itens.length;
     offset += limit;
     if (itens.length < limit || offset >= total) break;
-    await sleep(600);
+    await sleep(PACE_MS);
   }
   return ids;
 }
@@ -742,7 +748,7 @@ async function listarIdsContasPagar(accessToken, dataIni, dataFim) {
     const total = data.paginacao?.total ?? itens.length;
     offset += limit;
     if (itens.length < limit || offset >= total) break;
-    await sleep(600);
+    await sleep(PACE_MS);
   }
   return ids;
 }
@@ -932,7 +938,7 @@ async function executarSyncDiario(req, res) {
         const fimEmissao = formatarData(p.ano, p.mes, ultimoDiaDoMes(p.ano, p.mes));
         const idsReceber = await listarIdsContasReceber(accessToken, iniEmissao, fimEmissao);
         idsReceber.forEach(id => filaReceita.push({ id, ano: p.ano, mes: p.mes }));
-        await sleep(600);
+        await sleep(PACE_MS);
 
         // Janela larga por vencimento (mês alvo ±1) pra pegar título cuja
         // competência/liquidação real cai no mês alvo mesmo com vencimento
@@ -941,14 +947,14 @@ async function executarSyncDiario(req, res) {
         const jFim = addMeses(p.ano, p.mes, 1);
         const idsPagar = await listarIdsContasPagar(accessToken, formatarData(jIni.ano, jIni.mes, 1), formatarData(jFim.ano, jFim.mes, ultimoDiaDoMes(jFim.ano, jFim.mes)));
         idsPagar.forEach(id => filaPagar.push({ id, ano: p.ano, mes: p.mes }));
-        await sleep(600);
+        await sleep(PACE_MS);
 
         if (grupoCmv) {
           const iniBR = formatarDataBR(p.ano, p.mes, 1);
           const fimBR = formatarDataBR(p.ano, p.mes, ultimoDiaDoMes(p.ano, p.mes));
           const notasVenda = await listarNotasFiscaisV2(tokenV2, "S", iniBR, fimBR);
           notasVenda.forEach(n => filaCmv.push({ id: n.id, ano: p.ano, mes: p.mes, dataEmissaoBR: n.data_emissao }));
-          await sleep(600);
+          await sleep(PACE_MS);
         }
       }
       // Dedup simples por id+ano+mes (a janela de meses vizinhos pode repetir título em dois períodos-alvo)
@@ -1023,7 +1029,7 @@ async function executarSyncDiario(req, res) {
 
     while (filaPagar.length > 0 && (Date.now() - inicioExecucao) < ORCAMENTO_TOTAL_MS) {
       const item = filaPagar.shift();
-      await sleep(600);
+      await sleep(PACE_MS);
       try {
         const rd = await httpsRequest("GET", "api.tiny.com.br", `/public-api/v3/contas-pagar/${item.id}`, null, { Authorization: "Bearer " + accessToken });
         if (rd.status !== 200) throw new Error(`contas-pagar/${item.id}: HTTP ${rd.status} - ${rd.text.slice(0, 200)}`);
@@ -1105,7 +1111,7 @@ async function executarSyncDiario(req, res) {
     let semCustoNoLote = 0, itensNoLote = 0;
     while (grupoCmv && filaCmv.length > 0 && (Date.now() - inicioExecucao) < ORCAMENTO_TOTAL_MS) {
       const item = filaCmv.shift();
-      await sleep(600);
+      await sleep(PACE_MS);
       try {
         const obterCusto = (idProduto) => obterCustoProduto(idProduto, item.ano, item.mes);
         const { valor, semCusto, totalItens, intercompanyTF, clienteNome } = await calcularCmvNota(tokenV2, item.id, obterCusto);
@@ -1317,7 +1323,7 @@ async function buscarOrdensCompraAtendidasDoMes(accessToken, ano, mes) {
     const total = data.paginacao?.total ?? data.itens.length;
     offset += limit;
     if (data.itens.length < limit || offset >= total) break;
-    await sleep(600);
+    await sleep(PACE_MS);
   }
   return linhas;
 }
@@ -1346,7 +1352,7 @@ async function buscarNotasComDetalhe(tokenV2, tipoNota, ano, mes) {
   const fila = notas.map(n => ({ n, tentativas: 0 }));
   while (fila.length > 0) {
     const { n, tentativas } = fila.shift();
-    await sleep(600);
+    await sleep(PACE_MS);
     try {
       const detalhe = await buscarDetalheNotaVendaV2(tokenV2, n.id);
       resultado.push({ nota: n, detalhe });
@@ -1387,7 +1393,7 @@ async function buscarVendasDoMes(tokenV2, ano, mes) {
     linhas.push(...movimentosPorProduto(ano, mes, nota.id, tipo, nota.data_emissao, detalhe?.itens));
   }
 
-  await sleep(600);
+  await sleep(PACE_MS);
   const notasEntrada = await buscarNotasComDetalhe(tokenV2, "E", ano, mes);
   for (const { nota, detalhe } of notasEntrada) {
     const ehDevolucaoVenda = FINALIDADES_DEVOLUCAO.includes(String(detalhe?.finalidade));

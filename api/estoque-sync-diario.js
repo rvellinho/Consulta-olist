@@ -54,7 +54,11 @@ function httpsRequest(method, hostname, path, body, headers) {
   });
 }
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-// Mesmo padrão usado em api/financeiro.js — ver comentário lá pro motivo.
+// Mesmo padrão usado em api/financeiro.js — ver comentário lá pro motivo. O
+// limite real da conta (header x-limit-api, confirmado ao vivo 2026-11-26)
+// é 60/min, não os 120/min assumidos — 600ms rodava ~70% mais rápido do que
+// a conta permite.
+const PACE_MS = 1050;
 const PADRAO_BLOQUEIO_OLIST = /HTTP 429|API Bloqueada|Excedido o n.mero de acessos/i;
 function parseJSON(text) { try { return JSON.parse(text); } catch { return {}; } }
 
@@ -83,14 +87,14 @@ async function buscarProdutosPorSituacao(tokenV2, situacao) {
     lista.forEach(p => { if (p.produto) produtos.push({ id: p.produto.id, nome: p.produto.nome, ativo: situacao === "A" }); });
     if (lista.length < 100) break;
     pagina++;
-    await sleep(600);
+    await sleep(PACE_MS);
   }
   return produtos;
 }
 async function buscarTodosProdutos(empresa) {
   const { tokenV2 } = getConfigEmpresa(empresa);
   const ativos = await buscarProdutosPorSituacao(tokenV2, "A");
-  await sleep(600);
+  await sleep(PACE_MS);
   const inativos = await buscarProdutosPorSituacao(tokenV2, "I");
   return [...ativos, ...inativos];
 }
@@ -219,7 +223,7 @@ module.exports = async (req, res) => {
 
     while (fila.length > 0 && (Date.now() - inicioExecucao) < ORCAMENTO_TOTAL_MS) {
       const prod = fila.shift();
-      await sleep(600);
+      await sleep(PACE_MS);
       let p = null;
       let erroProduto = null;
       try {

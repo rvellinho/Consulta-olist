@@ -33,6 +33,10 @@ function parseBody(reqBody) {
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
+// Limite real da conta Olist é 60/min (header x-limit-api, confirmado ao
+// vivo 2026-11-26), não os 120/min assumidos — ver mesmo comentário em
+// api/financeiro.js e api/estoque-sync-diario.js.
+const PACE_MS = 1050;
 
 const supaHeaders = {
   apikey: SUPABASE_KEY,
@@ -144,7 +148,7 @@ module.exports = async (req, res) => {
         if (!cliente) {
           resultados.push({ cnpj, status: "erro", msg: "Cliente não encontrado no Olist" });
           erros++;
-          await sleep(600);
+          await sleep(PACE_MS);
           continue;
         }
 
@@ -168,7 +172,7 @@ module.exports = async (req, res) => {
       }
 
       // Pausa entre requisições para respeitar rate limit do Olist (120 req/min)
-      await sleep(600);
+      await sleep(PACE_MS);
     }
 
     return res.status(200).json({ ok: true, sucesso, erros, resultados });
