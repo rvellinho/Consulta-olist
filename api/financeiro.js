@@ -593,8 +593,16 @@ async function calcularCmvNota(tokenV2, idNota, obterCusto) {
 const PADROES_HISTORICO_5_01 = [
   /\bPIS\b/i, /\bCOFINS\b/i, /\bICMS\b/i, /\bISSQN\b/i, /\bISS\b/i, /SIMPLES\s*NACIONAL/i,
 ];
+// "PARCELAMENTO X" (ex: "RAMPA - PARCELAMENTO PIS E CONFINS") casa com o nome
+// do imposto só por conter a palavra, mas NÃO é a guia do imposto em si —
+// achado ao vivo pelo Rafael, 2026-11-26: "esses itens não marcados em
+// Conferido não estão corretos, não são do grupo 5.01, não deveriam estar
+// aí" (4 títulos da Rampa, nenhum confirmado — removidos manualmente do
+// catálogo na mesma correção). Decisão dele: não classificar automático,
+// deixar pendente/manual, igual qualquer outro título sem categoria real.
 function classificarPorHistorico(historico) {
   const texto = String(historico || "");
+  if (/PARCELAMENTO/i.test(texto)) return null;
   return PADROES_HISTORICO_5_01.some(re => re.test(texto)) ? "5.01" : null;
 }
 

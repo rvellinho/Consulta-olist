@@ -1642,6 +1642,35 @@ cobriu por acaso (a Rampa daquele teste tinha impostos espalhados logo nos prime
   roteia pro código mais recente publicado (confirmado em sessões anteriores); a próxima chamada
   automática do ticker já usa o checkpoint novo e passa a avançar de verdade além do 122/290.
 
+#### "PARCELAMENTO X" classificado como 5.01 pelo histórico, mas não é a guia do imposto (achado e corrigido, 2026-11-26)
+Com a tela de Impostos já mostrando dado real, o Rafael apontou 4 títulos da Rampa não marcados em
+Conferido: "esses itens não marcados em CONFERIDO não estão corretos. não são do grupo 5.01, não
+deveriam estar aí" — todos com histórico "RAMPA - PARCELAMENTO PIS E CONFINS" (2) ou "RAMPA -
+PARCELAMENTO ICMS" (2), sem categoria real na Tiny, classificados só pelo fallback de texto
+(`classificarPorHistorico`/`origem='tiny_historico'`).
+
+Causa: `PADROES_HISTORICO_5_01` só checa se o nome do imposto aparece no texto (`/\bPIS\b/i`,
+`/\bICMS\b/i`, etc.) — essa heurística foi pensada pra título que É a guia do imposto mas só não
+tem `categoria_id` preenchido ainda na Tiny (ver seção "Classificação por histórico" acima). Um
+**parcelamento** (acordo de pagamento de dívida tributária em prestações) contém o nome do imposto
+no texto mas não é a mesma coisa que pagar a guia do mês — Rafael confirmou que não deve ser
+classificado automático.
+
+- **Corrigido**: `classificarPorHistorico` agora retorna `null` de cara se o texto contém
+  "PARCELAMENTO" (`/PARCELAMENTO/i`), antes de testar os padrões de imposto — nunca mais vira 5.01
+  por esse caminho, pra nenhuma empresa (heurística é compartilhada). O título cai como "não
+  classificado" comum, igual qualquer outro título sem categoria — fica disponível pra lançamento
+  manual (`financeiro_lancamentos_manuais`) se algum dia precisar entrar no DRE.
+- **As 4 linhas já catalogadas foram removidas manualmente** (`DELETE` direto em
+  `financeiro_impostos_titulos`, titulo_ids 364707063/364707181/364707060/364707178) — nenhuma
+  estava `confirmado=true`, então não afetava o DRE ainda, mas ficariam presas na tela até o sync
+  revisitar esses títulos (até 3 dias, pelo checkpoint de frescor corrigido acima) sem o fix de
+  código. Escopo só Rampa até agora (TF não tinha nenhum título "PARCELAMENTO" na mesma busca).
+- **Lição**: uma heurística de texto que detecta o NOME de uma coisa (aqui, o nome do imposto)
+  pode casar com um contexto totalmente diferente (um parcelamento da dívida, não a guia em si) —
+  vale sempre excluir explicitamente os contextos "parecidos mas diferentes" conhecidos, não só
+  confiar na presença da palavra-chave.
+
 ---
 
 ## RLS (Row Level Security) nas 16 tabelas do projeto — ligado (2026-11-24)
