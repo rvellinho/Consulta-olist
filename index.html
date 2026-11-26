@@ -227,6 +227,7 @@
       <button class="nav-tab" type="button" onclick="toggleDropFinanceiro(event)">💰 Financeiro ▾</button>
       <div class="drop-menu hidden" id="drop-financeiro-menu">
         <button class="drop-item" type="button" onclick="acaoDreMenu()">📊 DRE</button>
+        <button class="drop-item" type="button" onclick="acaoImpostosMenu()">🧾 Impostos<span id="badge-impostos-menu" class="hidden"></span></button>
         <button class="drop-item" type="button" onclick="acaoCmvParaleloMenu()">📦 CMV Paralelo</button>
       </div>
     </div>
@@ -439,6 +440,7 @@
       <button class="btn-primary" id="fin-btn-lancamento" onclick="abrirModalFinanceiro()">+ Lançamento Manual</button>
     </div>
     <div id="fin-nao-classificado" class="hidden" style="background:var(--redl);color:var(--red);border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px;"></div>
+    <div id="fin-impostos-pendentes" class="hidden" style="background:#fff3cd;color:#8a6500;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px;cursor:pointer;" onclick="acaoImpostosMenu()"></div>
     <div id="estado-financeiro" class="hidden">
       <div class="state-center"><div class="spinner"></div><p>Carregando DRE...</p></div>
     </div>
@@ -516,6 +518,53 @@
             </tfoot>
           </table>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ABA IMPOSTOS (catalogação manual — 5.01/5.02) -->
+  <div id="aba-impostos" class="hidden">
+    <p style="font-size:13px;color:var(--mt);margin-bottom:14px;">
+      Todo título de contas a pagar classificado como imposto (5.01 Impostos sobre a Venda / 5.02 Impostos sobre o
+      Resultado) aparece aqui, por vencimento — pago ou não. Confirme o mês de competência (já vem pré-preenchido
+      com o mês ANTERIOR ao vencimento) pra ele entrar no DRE; sem confirmar, fica como pendência.
+    </p>
+    <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:12px;align-items:flex-end;">
+      <div class="fg-sm" style="min-width:150px;">
+        <label>Empresa</label>
+        <select id="imp-empresa" onchange="carregarImpostos()">
+          <option value="rampa">Rampa</option>
+          <option value="tf">TF</option>
+        </select>
+      </div>
+      <div class="fg-sm" style="width:170px;">
+        <label>Status</label>
+        <select id="imp-status" onchange="carregarImpostos()">
+          <option value="pendentes">Pendentes</option>
+          <option value="confirmados">Confirmados</option>
+          <option value="todos">Todos</option>
+        </select>
+      </div>
+      <button class="btn-sec" onclick="sincronizarImpostos()">🔄 Sincronizar agora</button>
+    </div>
+    <div id="imp-status-sync" class="hidden" style="border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px;"></div>
+    <div id="estado-impostos" class="hidden"><div class="state-center"><div class="spinner"></div><p>Carregando...</p></div></div>
+    <div id="tabela-impostos-wrap" class="hidden">
+      <div class="table-wrap">
+        <table style="width:100%;border-collapse:collapse;font-size:13px;">
+          <thead>
+            <tr style="border-bottom:1px solid var(--br);">
+              <th style="text-align:left;padding:6px 10px;">Vencimento</th>
+              <th style="text-align:left;padding:6px 10px;">Grupo</th>
+              <th style="text-align:left;padding:6px 10px;">Descrição</th>
+              <th style="text-align:right;padding:6px 10px;">Valor</th>
+              <th style="text-align:left;padding:6px 10px;">Mês de competência</th>
+              <th style="text-align:center;padding:6px 10px;">Pago</th>
+              <th style="text-align:center;padding:6px 10px;">Confirmado</th>
+            </tr>
+          </thead>
+          <tbody id="tbody-impostos"></tbody>
+        </table>
       </div>
     </div>
   </div>
@@ -1021,17 +1070,19 @@ function mudarAba(aba){
   el("aba-relatorios").classList.toggle("hidden",aba!=="relatorios");
   el("aba-financeiro-dre").classList.toggle("hidden",aba!=="financeiro-dre");
   el("aba-cmv-paralelo").classList.toggle("hidden",aba!=="cmv-paralelo");
+  el("aba-impostos").classList.toggle("hidden",aba!=="impostos");
   el("tab-clientes").classList.toggle("active",aba==="clientes");
   el("tab-configuracoes").classList.toggle("active",aba==="usuarios"||aba==="importar");
   el("tab-estoque").classList.toggle("active",aba==="estoque");
   el("tab-relatorios").classList.toggle("active",aba==="relatorios");
-  el("tab-financeiro").classList.toggle("active",aba==="financeiro-dre"||aba==="cmv-paralelo");
+  el("tab-financeiro").classList.toggle("active",aba==="financeiro-dre"||aba==="cmv-paralelo"||aba==="impostos");
   el("tela-app").classList.toggle("app-wide",aba==="relatorios");
   if(aba==="usuarios")carregarUsuarios();
   if(aba==="relatorios")inicializarDatasRelatorio();
   if(aba==="estoque")carregarInfoCatalogoEstoque();
   if(aba==="financeiro-dre"){ inicializarFiltrosFinanceiro(); carregarDRE(); }
   if(aba==="cmv-paralelo"){ inicializarFiltrosCmvParalelo(); carregarCmvParalelo(); }
+  if(aba==="impostos")carregarImpostos();
 }
 
 // MENUS SUSPENSOS ("RELATÓRIOS", "CONFIGURAÇÕES" e "FINANCEIRO")
@@ -1071,6 +1122,7 @@ function toggleDropFinanceiro(e){
 }
 function acaoDreMenu(){ fecharTodosDropdowns(); mudarAba("financeiro-dre"); }
 function acaoCmvParaleloMenu(){ fecharTodosDropdowns(); mudarAba("cmv-paralelo"); }
+function acaoImpostosMenu(){ fecharTodosDropdowns(); mudarAba("impostos"); }
 document.addEventListener("click",e=>{
   const dentroRelatorios=el("tab-relatorios")?.contains(e.target);
   const dentroConfig=el("tab-configuracoes")?.contains(e.target);
@@ -2325,6 +2377,7 @@ async function carregarDRE(){
   el("estado-financeiro").classList.remove("hidden");
   el("tabela-financeiro-wrap").classList.add("hidden");
   el("fin-nao-classificado").classList.add("hidden");
+  el("fin-impostos-pendentes").classList.add("hidden");
   try{
     const qs = empresaSel === "consolidado"
       ? `consolidado=true&ano=${ano}&mes=${mes}`
@@ -2333,6 +2386,14 @@ async function carregarDRE(){
     if(!r.ok) throw new Error((await r.json()).erro || `Erro ${r.status}`);
     const dre = await r.json();
     renderDRE(dre);
+    if(dre.pendenciasImpostos?.qtd){
+      el("fin-impostos-pendentes").classList.remove("hidden");
+      el("fin-impostos-pendentes").innerHTML = `🧾 ${dre.pendenciasImpostos.qtd} imposto(s) pendente(s) de confirmação, somando ${formatarMoeda(dre.pendenciasImpostos.total)} — ainda não entram no DRE. Clique pra catalogar.`;
+      el("badge-impostos-menu").classList.remove("hidden");
+      el("badge-impostos-menu").textContent = ` (${dre.pendenciasImpostos.qtd})`;
+    }else{
+      el("badge-impostos-menu").classList.add("hidden");
+    }
   }catch(e){
     el("tbody-financeiro").innerHTML = `<tr><td style="text-align:center;color:var(--red);padding:16px;">Erro ao carregar DRE: ${e.message}</td></tr>`;
     el("tabela-financeiro-wrap").classList.remove("hidden");
@@ -2575,6 +2636,90 @@ function toggleDreLeafs(gid, arrowEl){
   const aberto = linhas[0].style.display !== "none";
   linhas.forEach(tr=> tr.style.display = aberto ? "none" : "");
   arrowEl.textContent = aberto ? "▸" : "▾";
+}
+
+// --- Impostos (catalogação manual — 5.01/5.02) ---
+
+function impStatus(msg, tipo){
+  const el2 = el("imp-status-sync");
+  el2.classList.remove("hidden");
+  el2.style.background = tipo === "erro" ? "var(--redl)" : "var(--gl)";
+  el2.style.color = tipo === "erro" ? "var(--red)" : "var(--g)";
+  el2.textContent = msg;
+}
+
+async function sincronizarImpostos(){
+  const empresa = el("imp-empresa").value;
+  impStatus("Sincronizando títulos de imposto (pode levar alguns minutos)...", "ok");
+  try{
+    const r = await fetch(`/api/financeiro?acao=impostos-sync&empresa=${empresa}`, { method:"POST" });
+    const resp = await r.json();
+    if(!r.ok) throw new Error(resp.erro || `Erro ${r.status}`);
+    if(resp.concluido){
+      impStatus(`Sincronizado: ${resp.processados} título(s) revisados, ${resp.impostos ?? 0} de imposto.`, "ok");
+    }else{
+      impStatus(`Parcial (acabou o tempo) — clique de novo pra continuar de onde parou.`, "erro");
+    }
+    carregarImpostos();
+  }catch(err){
+    impStatus("Erro ao sincronizar: " + err.message, "erro");
+  }
+}
+
+async function carregarImpostos(){
+  const empresa = el("imp-empresa").value;
+  const status = el("imp-status").value;
+  el("estado-impostos").classList.remove("hidden");
+  el("tabela-impostos-wrap").classList.add("hidden");
+  try{
+    const r = await fetch(`/api/financeiro?acao=impostos-titulos&empresa=${empresa}&status=${status}`);
+    if(!r.ok) throw new Error((await r.json()).erro || `Erro ${r.status}`);
+    const linhas = await r.json();
+    renderImpostos(linhas, empresa);
+  }catch(e){
+    el("tbody-impostos").innerHTML = `<tr><td colspan="7" style="text-align:center;color:var(--red);padding:16px;">Erro: ${e.message}</td></tr>`;
+    el("tabela-impostos-wrap").classList.remove("hidden");
+  }finally{
+    el("estado-impostos").classList.add("hidden");
+  }
+}
+
+function renderImpostos(linhas, empresa){
+  el("tabela-impostos-wrap").classList.remove("hidden");
+  if(!linhas.length){
+    el("tbody-impostos").innerHTML = `<tr><td colspan="7" style="text-align:center;color:var(--mt);padding:16px;">Nenhum título nessa lista.</td></tr>`;
+    return;
+  }
+  el("tbody-impostos").innerHTML = linhas.map(l=>{
+    const venc = l.data_vencimento ? l.data_vencimento.split("-").reverse().join("/") : "—";
+    return `<tr data-titulo-id="${l.titulo_id}">
+      <td style="padding:6px 10px;">${venc}</td>
+      <td style="padding:6px 10px;">${l.codigo_grupo}</td>
+      <td style="padding:6px 10px;">${l.descricao || l.historico || "—"}</td>
+      <td style="padding:6px 10px;text-align:right;">${formatarMoeda(l.valor)}</td>
+      <td style="padding:6px 10px;"><input type="month" value="${l.mes_competencia}" style="width:140px;" onchange="salvarCampoImposto('${l.empresa}',${l.titulo_id},'mes_competencia',this.value)"></td>
+      <td style="padding:6px 10px;text-align:center;"><input type="checkbox" ${l.pago_manual?"checked":""} onchange="salvarCampoImposto('${l.empresa}',${l.titulo_id},'pago_manual',this.checked)"></td>
+      <td style="padding:6px 10px;text-align:center;"><input type="checkbox" ${l.confirmado?"checked":""} onchange="salvarCampoImposto('${l.empresa}',${l.titulo_id},'confirmado',this.checked)"></td>
+    </tr>`;
+  }).join("");
+}
+
+async function salvarCampoImposto(empresa, tituloId, campo, valor){
+  try{
+    const body = {empresa, titulo_id: tituloId};
+    body[campo] = valor;
+    const r = await fetch("/api/financeiro?acao=imposto-titulo", {
+      method:"PATCH", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify(body),
+    });
+    if(!r.ok) throw new Error((await r.json()).erro || `Erro ${r.status}`);
+    if(campo==="confirmado"){
+      carregarImpostos();
+    }
+  }catch(err){
+    alert("Erro ao salvar: " + err.message);
+    carregarImpostos();
+  }
 }
 
 // --- modal de títulos / alocação intercompany ---

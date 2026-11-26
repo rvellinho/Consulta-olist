@@ -56,6 +56,14 @@
     {
       "path": "/api/financeiro?acao=sync-diario&empresa=tf",
       "schedule": "0 8 * * *"
+    },
+    {
+      "path": "/api/financeiro?acao=impostos-sync",
+      "schedule": "20 8 * * *"
+    },
+    {
+      "path": "/api/financeiro?acao=impostos-sync&empresa=tf",
+      "schedule": "40 8 * * *"
     }
   ]
 }

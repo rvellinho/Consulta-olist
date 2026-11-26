@@ -1061,15 +1061,20 @@ async function executarSyncDiario(req, res) {
           // acao=titulos) — sempre recalculado no sync, nunca preservado como o
           // intercompany, que fica de fora do payload nos dois ramos abaixo.
           const descricao = d.contato?.nome || d.historico || null;
-          if (linha && linha.regime === "competencia" && linha.fonte_tiny === "contas_pagar") {
-            // Imposto sobre venda (5.01): conta no mês da dataCompetencia real, não do vencimento usado pra listar.
-            // Quando a classificação veio do histórico (categoria não existe na Tiny — ver acima), a Tiny
-            // também nunca preencheu dataCompetencia pra esse título (achado ao vivo, TF, 2026-11-24: títulos
-            // "DAS - SIMPLES NACIONAL" pagos sem categoria E sem dataCompetencia) — exigir o match exato fazia
-            // o título nunca bater em nenhum período testado e desaparecer sem erro nenhum, nem como "não
-            // classificado" (nunca chegava a entrar em `lote`). Nesse caso usamos dataVencimento (campo real,
-            // já usado pra decidir em qual janela/período esse título foi buscado) como aproximação de
-            // competência, só pra esse caminho de stopgap.
+          if (codigoGrupo === "5.01" || codigoGrupo === "5.02") {
+            // Impostos (5.01/5.02) saíram do caminho automático — agora vêm só
+            // da catalogação manual (financeiro_impostos_titulos, ver seção
+            // "Impostos" abaixo). Nunca escrever aqui, senão duplica no DRE:
+            // uma vez como titulo_tipo=pagar (este caminho) e outra como
+            // titulo_tipo=imposto (catálogo, quando confirmado). Se o título
+            // já tinha sido gravado por uma execução anterior ao catálogo
+            // existir, limpa (mesmo cuidado de sempre: upsert nunca apaga).
+            await excluirMensal(empresa, "pagar", item.id);
+          } else if (linha && linha.regime === "competencia" && linha.fonte_tiny === "contas_pagar") {
+            // Despesa por competência (grupos fora de imposto, ex: nenhum hoje
+            // além de 5.01/5.02, mas o desenho fica genérico pro plano de
+            // contas). Conta no mês da dataCompetencia real, não do
+            // vencimento usado pra listar.
             const competenciaReal = d.dataCompetencia || String(d.dataVencimento || "").slice(0, 7);
             if (competenciaReal === formatarYYYYMM(item.ano, item.mes)) {
               lote.push({
@@ -1508,6 +1513,197 @@ async function montarCmvParalelo(empresa, ano, mes) {
 }
 
 // ============================================================================
+// Impostos (5.01/5.02) — catalogação manual (2026-11-25, decisão do Rafael)
+//
+// Antes, 5.01 vinha automático (categoria, com fallback por histórico pra
+// título lançado antes da categoria existir na Tiny — ver
+// classificarPorHistorico) e 5.02 era 100% manual via
+// financeiro_lancamentos_manuais. Problema do Rafael: "hoje pegamos por
+// competência, porém esses dados não estão certos no sistema" — a
+// dataCompetencia da Tiny não é confiável pra imposto. Desenho novo:
+//   - Todo título de contas a pagar cuja categoria (ou, na falta dela, o
+//     texto do histórico — só pro grupo 5.01) seja de imposto entra num
+//     catálogo próprio (financeiro_impostos_titulos), filtrado só por
+//     VENCIMENTO — nunca por dataCompetencia, nunca por estar pago ou não.
+//   - Cada título entra com mes_competencia PRÉ-preenchido (= mês ANTERIOR
+//     ao do vencimento — pedido do Rafael, 2026-11-25), mas livremente
+//     editável pelo operador — é esse campo, não o vencimento, que decide em
+//     que mês do DRE o imposto conta.
+//   - Só título CONFIRMADO entra no DRE. Não confirmado conta como pendência
+//     (ver contarImpostosPendentes, surfaced em acao=dre) — aparece na tela
+//     principal do DRE como aviso, sem precisar abrir a tela de catalogação
+//     pra descobrir que existe pendência.
+//   - `pago_manual` é uma marcação NOSSA, independente do `situacao` da Tiny
+//     — só pra controle visual na tela de catalogação, nunca entra em
+//     cálculo nenhum.
+//   - Vencimento além do mês atual nunca é buscado (decisão do Rafael — nada
+//     de mostrar parcela futura que ainda nem venceu).
+//   - Nunca sobrescreve mes_competencia/confirmado/pago_manual de um título
+//     já catalogado — lê o que já existe antes de montar o upsert (mesmo
+//     cuidado do "Bug de acumulação" do CLAUDE.md, aqui invertido: o risco
+//     não é perder dado novo, é apagar a decisão manual do operador).
+//   - Sem checkpoint em banco (diferente do sync-diario principal) — volume
+//     real é baixo (a MAIORIA dos títulos de contas a pagar não é imposto,
+//     mas cada um precisa do detalhe pra saber a categoria), cabe numa
+//     chamada só pra janela normal de 2 meses. Se estourar o orçamento (ex:
+//     um backfill manual de vários meses de uma vez), devolve
+//     `concluido:false` e quem chamou (cron ou botão) tenta de novo — o
+//     upsert é idempotente, só reprocessa mais devagar que o ideal.
+//   - Roda num cron PRÓPRIO (`acao=impostos-sync`, ver vercel.json), não
+//     dentro do sync-diario principal — mesma decisão de isolamento já usada
+//     no CMV Paralelo, pra não arriscar o orçamento de tempo do sync que já
+//     está em produção.
+// ============================================================================
+
+const ORCAMENTO_IMPOSTOS_MS = 260000;
+
+// categoria aqui é a linha de financeiro_categorias (categorias[catId]), não
+// o objeto bruto da Tiny — mesmo shape que lerCategoriasMapeadas devolve.
+function classificarImposto(categoria, historico) {
+  if (categoria?.codigo_grupo === "5.01" || categoria?.codigo_grupo === "5.02") {
+    return { codigoGrupo: categoria.codigo_grupo, viaHistorico: false };
+  }
+  const grupoHeuristico = classificarPorHistorico(historico);
+  if (grupoHeuristico) return { codigoGrupo: grupoHeuristico, viaHistorico: true };
+  return { codigoGrupo: null, viaHistorico: false };
+}
+
+async function buscarImpostosExistentes(empresa, ids) {
+  if (!ids.length) return new Map();
+  const r = await httpsRequest("GET", supaHost(),
+    `/rest/v1/financeiro_impostos_titulos?empresa=eq.${empresa}&titulo_id=in.(${ids.join(",")})&select=titulo_id,mes_competencia,confirmado,pago_manual`,
+    null, supaHeaders);
+  const linhas = parseJSON(r.text);
+  const mapa = new Map();
+  (Array.isArray(linhas) ? linhas : []).forEach(l => mapa.set(Number(l.titulo_id), l));
+  return mapa;
+}
+
+async function upsertImpostos(empresa, linhas) {
+  if (!linhas.length) return;
+  const payload = JSON.stringify(linhas.map(l => ({ ...l, empresa, atualizado_em: new Date().toISOString() })));
+  const r = await httpsRequest("POST", supaHost(), "/rest/v1/financeiro_impostos_titulos?on_conflict=empresa,titulo_id", payload,
+    { ...supaHeaders, "Content-Length": Buffer.byteLength(payload), Prefer: "resolution=merge-duplicates,return=minimal" });
+  if (r.status >= 300) throw new Error(`upsert financeiro_impostos_titulos: HTTP ${r.status} - ${r.text.slice(0, 500)}`);
+}
+
+async function excluirImposto(empresa, tituloId) {
+  await httpsRequest("DELETE", supaHost(),
+    `/rest/v1/financeiro_impostos_titulos?empresa=eq.${empresa}&titulo_id=eq.${tituloId}`,
+    null, { ...supaHeaders, Prefer: "return=minimal" });
+}
+
+async function sincronizarImpostosTitulos(empresa, accessToken, categorias, dataIniVenc) {
+  const hoje = new Date();
+  const anoAtual = hoje.getFullYear(), mesAtualNum = hoje.getMonth() + 1;
+  const fimMesAtual = formatarData(anoAtual, mesAtualNum, ultimoDiaDoMes(anoAtual, mesAtualNum));
+  const ids = await listarIdsContasPagar(accessToken, dataIniVenc, fimMesAtual);
+  const existentes = await buscarImpostosExistentes(empresa, ids);
+  const inicio = Date.now();
+  let processados = 0;
+  const linhas = [];
+  for (const id of ids) {
+    if (Date.now() - inicio > ORCAMENTO_IMPOSTOS_MS) {
+      await upsertImpostos(empresa, linhas);
+      return { ok: true, concluido: false, processados, totalIds: ids.length };
+    }
+    await sleep(PACE_MS);
+    const rd = await httpsRequest("GET", "api.tiny.com.br", `/public-api/v3/contas-pagar/${id}`, null, { Authorization: "Bearer " + accessToken });
+    if (rd.status !== 200) throw new Error(`contas-pagar/${id}: HTTP ${rd.status} - ${rd.text.slice(0, 200)}`);
+    const d = parseJSON(rd.text);
+    const catId = d.categoria?.id;
+    const cat = catId != null ? categorias[catId] : null;
+    const { codigoGrupo, viaHistorico } = classificarImposto(cat, d.historico);
+    const existente = existentes.get(id);
+    if (!codigoGrupo) {
+      // Não é (ou não é mais) imposto — se já tinha sido catalogado antes
+      // (categoria mudou na Tiny), tira do catálogo (upsert nunca apaga).
+      if (existente) await excluirImposto(empresa, id);
+      processados++;
+      continue;
+    }
+    // Competência pré-preenchida = mês ANTERIOR ao vencimento (pedido do
+    // Rafael, 2026-11-25 — a informação original, "mês do vencimento", estava
+    // errada). Continua livremente editável — isso aqui é só o valor padrão
+    // na primeira vez que o título é catalogado.
+    const vencAno = parseInt(String(d.dataVencimento || "").slice(0, 4), 10);
+    const vencMes = parseInt(String(d.dataVencimento || "").slice(5, 7), 10);
+    const mesAnteriorVenc = (vencAno && vencMes) ? mesAlvoAnterior(vencAno, vencMes) : null;
+    const competenciaPadrao = mesAnteriorVenc
+      ? formatarYYYYMM(mesAnteriorVenc.ano, mesAnteriorVenc.mes)
+      : String(d.dataVencimento || "").slice(0, 7);
+    linhas.push({
+      titulo_id: id, codigo_grupo: codigoGrupo,
+      categoria_id: viaHistorico ? null : catId,
+      origem: viaHistorico ? "tiny_historico" : "tiny_categoria",
+      descricao: d.contato?.nome || d.historico || null,
+      historico: d.historico || null,
+      valor: Number(d.valor) || 0,
+      data_vencimento: d.dataVencimento || null,
+      mes_competencia: existente?.mes_competencia || competenciaPadrao,
+      confirmado: existente?.confirmado ?? false,
+      pago_manual: existente?.pago_manual ?? false,
+    });
+    processados++;
+  }
+  await upsertImpostos(empresa, linhas);
+  return { ok: true, concluido: true, processados, totalIds: ids.length, impostos: linhas.length };
+}
+
+async function buscarImpostosConfirmados(empresas, ano, mes) {
+  const filtroEmpresa = empresas.length === 1 ? `empresa=eq.${empresas[0]}` : `empresa=in.(${empresas.join(",")})`;
+  const mesStr = formatarYYYYMM(ano, mes);
+  const r = await httpsRequest("GET", supaHost(),
+    `/rest/v1/financeiro_impostos_titulos?${filtroEmpresa}&mes_competencia=eq.${mesStr}&confirmado=eq.true` +
+    `&select=empresa,titulo_id,codigo_grupo,categoria_id,origem,descricao,historico,valor`,
+    null, supaHeaders);
+  const linhas = parseJSON(r.text);
+  return (Array.isArray(linhas) ? linhas : []).map(l => ({
+    empresa: l.empresa, codigo_grupo: l.codigo_grupo, categoria_id: l.categoria_id,
+    origem: l.origem, titulo_tipo: "imposto", titulo_id: l.titulo_id, valor: Number(l.valor) || 0,
+    intercompany: false, descricao: l.descricao, historico: l.historico,
+    data_emissao: null, data_pagamento: null,
+  }));
+}
+
+async function contarImpostosPendentes(empresas) {
+  const filtroEmpresa = empresas.length === 1 ? `empresa=eq.${empresas[0]}` : `empresa=in.(${empresas.join(",")})`;
+  const r = await httpsRequest("GET", supaHost(),
+    `/rest/v1/financeiro_impostos_titulos?${filtroEmpresa}&confirmado=eq.false&select=valor`, null, supaHeaders);
+  const linhas = parseJSON(r.text);
+  const arr = Array.isArray(linhas) ? linhas : [];
+  return { qtd: arr.length, total: arr.reduce((s, l) => s + (Number(l.valor) || 0), 0) };
+}
+
+async function executarImpostosSync(req, res) {
+  const empresa = String(req.query.empresa || "rampa").toLowerCase();
+  const vercelCron = req.headers["x-vercel-cron-schedule"];
+  if (!vercelCron && req.method === "GET") {
+    return res.status(200).json({ ok: true });
+  }
+  if (CRON_SECRET && req.headers.authorization !== `Bearer ${CRON_SECRET}` && !vercelCron) {
+    return res.status(401).json({ erro: "não autorizado" });
+  }
+  try {
+    const accessToken = await getAccessToken(empresa);
+    await syncCategorias(empresa, accessToken);
+    const categorias = await lerCategoriasMapeadas(empresa);
+    const body = parseBody(req.body);
+    const hoje = new Date();
+    const mesAnterior = mesAlvoAnterior(hoje.getFullYear(), hoje.getMonth() + 1);
+    // Janela padrão: igual o resto do financeiro, só os 2 últimos meses (por
+    // vencimento). `dataIni` no corpo/query permite um backfill manual mais
+    // largo (ex: o catch-up único desde agosto/2026 — ver CLAUDE.md).
+    const dataIniPadrao = formatarData(mesAnterior.ano, mesAnterior.mes, 1);
+    const dataIniVenc = body.dataIni || req.query.dataIni || dataIniPadrao;
+    const resultado = await sincronizarImpostosTitulos(empresa, accessToken, categorias, dataIniVenc);
+    return res.status(200).json(resultado);
+  } catch (e) {
+    return res.status(500).json({ erro: e.message });
+  }
+}
+
+// ============================================================================
 // Handler principal
 // ============================================================================
 
@@ -1522,7 +1718,30 @@ module.exports = async (req, res) => {
     return executarSyncDiario(req, res);
   }
 
+  // Sync de impostos (cron próprio + botão "Sincronizar agora" na tela de
+  // catalogação) — isolado do sync-diário de propósito, ver seção "Impostos".
+  if (req.query.acao === "impostos-sync") {
+    return executarImpostosSync(req, res);
+  }
+
   try {
+    if (req.method === "PATCH" && req.query.acao === "imposto-titulo") {
+      const corpo = parseBody(req.body);
+      const empresaImp = String(corpo.empresa || "").toLowerCase();
+      const tituloIdImp = corpo.titulo_id;
+      if (!empresaImp || !tituloIdImp) return res.status(400).json({ erro: "empresa e titulo_id são obrigatórios" });
+      const updates = { atualizado_em: new Date().toISOString() };
+      if (corpo.mes_competencia !== undefined) updates.mes_competencia = corpo.mes_competencia;
+      if (corpo.confirmado !== undefined) updates.confirmado = !!corpo.confirmado;
+      if (corpo.pago_manual !== undefined) updates.pago_manual = !!corpo.pago_manual;
+      const payload = JSON.stringify(updates);
+      const r = await httpsRequest("PATCH", supaHost(),
+        `/rest/v1/financeiro_impostos_titulos?empresa=eq.${empresaImp}&titulo_id=eq.${tituloIdImp}`,
+        payload, { ...supaHeaders, "Content-Length": Buffer.byteLength(payload), Prefer: "return=minimal" });
+      if (r.status >= 300) return res.status(400).json({ erro: `HTTP ${r.status} - ${r.text}` });
+      return res.status(200).json({ ok: true });
+    }
+
     if (req.method === "GET") {
       const acao = req.query.acao;
 
@@ -1533,11 +1752,13 @@ module.exports = async (req, res) => {
         const consolidado = req.query.consolidado === "true";
         const empresas = consolidado ? ["rampa", "tf"] : [String(req.query.empresa || "rampa").toLowerCase()];
 
-        const [planoContas, linhasMensal, linhasManuais, categoriasPorEmpresa] = await Promise.all([
+        const [planoContas, linhasMensal, linhasManuais, categoriasPorEmpresa, linhasImpostos, pendenciasImpostos] = await Promise.all([
           buscarPlanoContas(),
           buscarMensal(empresas, ano, mes),
           buscarManuais(empresas, ano, mes),
           buscarCategoriasPorEmpresa(empresas),
+          buscarImpostosConfirmados(empresas, ano, mes),
+          contarImpostosPendentes(empresas),
         ]);
         // Alocação intercompany manual só se aplica visualizando UMA empresa
         // por vez — no consolidado o título real já soma o valor cheio uma
@@ -1550,8 +1771,21 @@ module.exports = async (req, res) => {
             buscarAlocacoesParaDestino(empresas[0], ano, mes),
           ]);
         }
-        const dre = montarDRE(planoContas, linhasMensal, linhasManuais, categoriasPorEmpresa, alocacoesOrigem, alocacoesDestino);
-        return res.status(200).json({ ano, mes, empresa: consolidado ? "consolidado" : empresas[0], ...dre });
+        const dre = montarDRE(planoContas, [...linhasMensal, ...linhasImpostos], linhasManuais, categoriasPorEmpresa, alocacoesOrigem, alocacoesDestino);
+        return res.status(200).json({ ano, mes, empresa: consolidado ? "consolidado" : empresas[0], ...dre, pendenciasImpostos });
+      }
+
+      if (acao === "impostos-titulos") {
+        // Tela de catalogação — lista os títulos de imposto (5.01/5.02) já
+        // catalogados pro operador confirmar/editar mês de competência.
+        const empresaImp = String(req.query.empresa || "rampa").toLowerCase();
+        const statusImp = req.query.status || "pendentes"; // pendentes | confirmados | todos
+        let path = `/rest/v1/financeiro_impostos_titulos?empresa=eq.${empresaImp}&select=*&order=data_vencimento.desc`;
+        if (statusImp === "pendentes") path += "&confirmado=eq.false";
+        if (statusImp === "confirmados") path += "&confirmado=eq.true";
+        const r = await httpsRequest("GET", supaHost(), path, null, supaHeaders);
+        const linhas = parseJSON(r.text);
+        return res.status(200).json(Array.isArray(linhas) ? linhas : []);
       }
 
       if (acao === "titulos") {
@@ -1614,6 +1848,13 @@ module.exports = async (req, res) => {
             nota: a.nota,
             valor_total_titulo: a.valorTitulo,
           });
+        }
+        // Impostos (5.01/5.02) não vêm mais de financeiro_mensal — se o grupo
+        // pedido for um desses, une os confirmados do catálogo próprio pra
+        // lupa não aparecer vazia enquanto o total do DRE mostra valor.
+        if (grupos.includes("5.01") || grupos.includes("5.02")) {
+          const impostosTit = await buscarImpostosConfirmados([empresaTit], anoTit, mesTit);
+          data.push(...impostosTit.filter(l => grupos.includes(l.codigo_grupo)));
         }
         if (leafFiltro != null) {
           const categoriasPorEmpresa = await buscarCategoriasPorEmpresa([empresaTit]);
