@@ -1493,7 +1493,15 @@ da Tiny não é boa referência pra imposto).
   principal do DRE (`pendenciasImpostos`, quantidade + total) e no menu (badge), sem precisar
   abrir a tela de catalogação pra descobrir que existe pendência.
 - Roda num cron próprio (`?acao=impostos-sync`, 1x/dia por empresa, depois do sync financeiro
-  normal — ver `vercel.json`) e também por um botão "Sincronizar agora" na própria tela.
+  normal — ver `vercel.json`) e também por um botão na própria tela.
+- **Botão "Sincronizar tudo" (pedido do Rafael, 2026-11-26) chama as duas empresas e continua
+  sozinho até terminar** — o loop fica inteiramente no frontend (`sincronizarImpostos` em
+  `index.html`): pra cada empresa, chama `?acao=impostos-sync` repetidamente enquanto a resposta
+  vier com `concluido:false`, só passa pra próxima empresa depois que a atual terminar, e nunca
+  delega isso ao backend (ver "Vercel serverless — limitações" — função não pode se auto-chamar
+  via HTTP). O seletor "Empresa" da tela virou só filtro de visualização da tabela, não escopo do
+  botão. Trava de segurança: 30 chamadas por empresa sem terminar aborta com erro, em vez de rodar
+  pra sempre.
 - **Bug achado e corrigido antes de publicar (2026-11-26)**: o caminho automático antigo de
   contas a pagar (`filaPagar`, mesmo loop do sync-diário financeiro) continuava classificando
   título em grupo `5.01` e gravando em `financeiro_mensal` normalmente — a implementação do

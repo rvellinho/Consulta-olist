@@ -543,10 +543,13 @@
       Todo título de contas a pagar classificado como imposto (5.01 Impostos sobre a Venda / 5.02 Impostos sobre o
       Resultado) aparece aqui, por vencimento — pago ou não. Confirme o mês de competência (já vem pré-preenchido
       com o mês ANTERIOR ao vencimento) pra ele entrar no DRE; sem confirmar, fica como pendência.
+      "Sincronizar tudo" busca Rampa e TF automaticamente (são contas separadas na Olist) e continua
+      sozinho até terminar, mesmo que precise de várias chamadas — não precisa clicar de novo. O
+      seletor "Empresa" abaixo é só pra escolher qual lista olhar na tabela, não afeta a sincronização.
     </p>
     <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:12px;align-items:flex-end;">
       <div class="fg-sm" style="min-width:150px;">
-        <label>Empresa</label>
+        <label>Empresa (visualização)</label>
         <select id="imp-empresa" onchange="carregarImpostos()">
           <option value="rampa">Rampa</option>
           <option value="tf">TF</option>
@@ -560,7 +563,7 @@
           <option value="todos">Todos</option>
         </select>
       </div>
-      <button class="btn-sec" onclick="sincronizarImpostos()">🔄 Sincronizar agora</button>
+      <button class="btn-sec" onclick="sincronizarImpostos()">🔄 Sincronizar tudo (Rampa + TF)</button>
     </div>
     <div id="imp-status-sync" class="hidden" style="border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px;"></div>
     <div id="estado-impostos" class="hidden"><div class="state-center"><div class="spinner"></div><p>Carregando...</p></div></div>
@@ -2678,22 +2681,40 @@ function impStatus(msg, tipo){
   el2.textContent = msg;
 }
 
+// Sincroniza TODAS as empresas (Rampa e TF são contas separadas na Olist,
+// cada uma com sua própria janela de títulos) numa só ação, e continua
+// chamando o endpoint sozinho enquanto ele devolver concluido:false — nunca
+// delega isso pro backend (Vercel bloqueia função se auto-chamando via HTTP,
+// ver "Vercel serverless — limitações" no CLAUDE.md), o loop fica aqui no
+// navegador, mesmo padrão já usado pros outros processamentos em lote do
+// projeto. Trava de segurança (30 chamadas por empresa, ~2h17 no limite do
+// orçamento de 260s cada) pra nunca rodar pra sempre se algo ficar preso.
 async function sincronizarImpostos(){
-  const empresa = el("imp-empresa").value;
-  impStatus("Sincronizando títulos de imposto (pode levar alguns minutos)...", "ok");
+  const empresas = Object.keys(EMPRESAS);
+  const resumos = [];
   try{
-    const r = await fetch(`/api/financeiro?acao=impostos-sync&empresa=${empresa}`, { method:"POST" });
-    const resp = await r.json();
-    if(!r.ok) throw new Error(resp.erro || `Erro ${r.status}`);
-    if(resp.concluido){
-      const aviso = resp.falhas ? ` ${resp.falhas} título(s) falharam (bloqueio momentâneo da Olist) — clique de novo pra tentar esses.` : "";
-      impStatus(`Sincronizado: ${resp.processados} título(s) revisados, ${resp.impostos ?? 0} de imposto.${aviso}`, resp.falhas ? "erro" : "ok");
-    }else{
-      impStatus(`Parcial (acabou o tempo) — clique de novo pra continuar de onde parou.`, "erro");
+    for(const empresa of empresas){
+      let resp = null, chamadas = 0;
+      do{
+        chamadas++;
+        if(chamadas > 30){
+          throw new Error(`${EMPRESAS[empresa].label}: passou de 30 chamadas sem terminar — pare e peça pra alguém olhar antes de continuar.`);
+        }
+        const progresso = resp ? ` (${resp.processados}/${resp.totalIds} na última passada)` : "";
+        impStatus(`Sincronizando ${EMPRESAS[empresa].label}...${progresso} — o app continua sozinho até terminar, pode levar vários minutos.`, "ok");
+        const r = await fetch(`/api/financeiro?acao=impostos-sync&empresa=${empresa}`, { method:"POST" });
+        resp = await r.json();
+        if(!r.ok || !resp.ok) throw new Error(`${EMPRESAS[empresa].label}: ${resp.erro || `Erro ${r.status}`}`);
+      }while(!resp.concluido);
+      resumos.push(`${EMPRESAS[empresa].label}: ${resp.processados}/${resp.totalIds} título(s), ${resp.impostos ?? 0} de imposto${resp.falhas ? ` (${resp.falhas} falharam)` : ""}`);
     }
-    carregarImpostos();
+    const temFalha = resumos.some(s => s.includes("falharam"));
+    const aviso = temFalha ? " Alguns títulos falharam por bloqueio momentâneo da Olist — sincronize de novo mais tarde pra tentar só esses." : "";
+    impStatus(`Sincronizado — ${resumos.join(" · ")}.${aviso}`, temFalha ? "erro" : "ok");
   }catch(err){
     impStatus("Erro ao sincronizar: " + err.message, "erro");
+  }finally{
+    carregarImpostos();
   }
 }
 
