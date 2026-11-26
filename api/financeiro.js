@@ -1592,21 +1592,35 @@ async function montarCmvParalelo(empresa, ano, mes) {
 //     já catalogado — lê o que já existe antes de montar o upsert (mesmo
 //     cuidado do "Bug de acumulação" do CLAUDE.md, aqui invertido: o risco
 //     não é perder dado novo, é apagar a decisão manual do operador).
-//   - Checkpoint por FRESCOR, não por cursor salvo (achado ao vivo,
-//     2026-11-26: a suposição original de "cabe numa chamada só" era errada —
-//     testado com a Rampa, 290 títulos na janela × 2s de pausa entre eles
-//     passa de 9 minutos, bem mais que o orçamento de 260s). Sem nenhum
-//     checkpoint, uma chamada que estoura o orçamento sempre reconstruía a
-//     fila com a lista INTEIRA de ids e começava do zero — a próxima
-//     chamada (clique manual ou cron do dia seguinte) reprocessava os
-//     mesmos primeiros títulos pra sempre, nunca alcançando o fim da lista.
-//     Corrigido sem precisar de tabela/coluna nova: título já catalogado há
-//     menos de FRESCOR_IMPOSTOS_MS é pulado sem bater na Tiny (usa o próprio
-//     `atualizado_em` que o upsert já grava) — uma chamada seguinte, minutos
-//     depois, passa voando pelo que já foi feito e gasta o orçamento no
-//     resto; o cron do dia seguinte também pula o que foi feito há poucos
-//     dias, avançando pela lista em vez de reiniciar. Pulado não entra em
-//     `linhas` (nada pra sobrescrever) nem conta como falha.
+//   - Checkpoint por FRESCOR, numa tabela PRÓPRIA de "já revisado"
+//     (`financeiro_titulos_revisados`), separada do catálogo de impostos.
+//     Histórico do que foi tentado aqui, 2026-11-26, pra não repetir:
+//     1ª tentativa (achado ao vivo: 290 títulos na janela da Rampa × 2s de
+//     pausa passa de 9min, bem mais que o orçamento de 260s) — sem nenhum
+//     checkpoint, uma chamada que estourava o orçamento reconstruía a fila
+//     com a lista INTEIRA de ids e começava do zero, reprocessando os
+//     mesmos primeiros títulos pra sempre. 2ª tentativa (também errada,
+//     quase foi publicada assim) — pular título já presente em
+//     `financeiro_impostos_titulos` há menos de FRESCOR_IMPOSTOS_MS, usando
+//     o `atualizado_em` que o upsert do catálogo já grava. Essa 2ª versão
+//     só funciona pra título que VIRA imposto (só esse é upsertado) — como a
+//     grande maioria dos títulos de contas a pagar NÃO é imposto (só
+//     avaliados e descartados, nunca escritos em lugar nenhum), eles nunca
+//     ganham um `atualizado_em` e nunca ficam puláveis: reportado ao vivo
+//     pelo Rafael ("a tela segue congelada no 122... faz 11 minutos") — a
+//     Rampa tinha 0 títulos classificados como imposto nos primeiros ~122
+//     da janela, então TODA chamada reprocessava os mesmos ~122 do início,
+//     gastando o orçamento inteiro neles e nunca alcançando o resto —
+//     travamento real, não só lentidão, confirmado comparando os logs da
+//     Vercel (chamada nova a cada ~5min) contra o banco (0 linhas em
+//     `financeiro_impostos_titulos` o tempo todo). **Corrigido de vez**:
+//     `financeiro_titulos_revisados` (empresa, titulo_id, revisado_em)
+//     grava TODO título avaliado nesta janela, seja imposto ou não — é
+//     essa tabela, não o catálogo de impostos, que decide o que pular. Um
+//     título já revisado há menos de FRESCOR_IMPOSTOS_MS nem entra na fila
+//     (filtrado antes de montar `fila`, conta direto em `processados`) —
+//     uma chamada seguinte, minutos depois, passa voando pelo que já foi
+//     visto e gasta o orçamento inteiro no que falta.
 //   - Roda num cron PRÓPRIO (`acao=impostos-sync`, ver vercel.json), não
 //     dentro do sync-diario principal — mesma decisão de isolamento já usada
 //     no CMV Paralelo, pra não arriscar o orçamento de tempo do sync que já
@@ -1655,38 +1669,60 @@ async function excluirImposto(empresa, tituloId) {
     null, { ...supaHeaders, Prefer: "return=minimal" });
 }
 
+// Checkpoint de "já revisado" — independente de ter virado imposto ou não
+// (ver nota "Checkpoint por FRESCOR" acima pro motivo de existir separado
+// do catálogo de impostos).
+async function buscarRevisadosRecentes(empresa, ids) {
+  if (!ids.length) return new Set();
+  const corte = new Date(Date.now() - FRESCOR_IMPOSTOS_MS).toISOString();
+  const r = await httpsRequest("GET", supaHost(),
+    `/rest/v1/financeiro_titulos_revisados?empresa=eq.${empresa}&titulo_id=in.(${ids.join(",")})&revisado_em=gte.${corte}&select=titulo_id`,
+    null, supaHeaders);
+  const linhas = parseJSON(r.text);
+  return new Set((Array.isArray(linhas) ? linhas : []).map(l => Number(l.titulo_id)));
+}
+
+async function upsertRevisados(empresa, ids) {
+  if (!ids.length) return;
+  const agora = new Date().toISOString();
+  const payload = JSON.stringify(ids.map(id => ({ empresa, titulo_id: id, revisado_em: agora })));
+  const r = await httpsRequest("POST", supaHost(), "/rest/v1/financeiro_titulos_revisados?on_conflict=empresa,titulo_id", payload,
+    { ...supaHeaders, "Content-Length": Buffer.byteLength(payload), Prefer: "resolution=merge-duplicates,return=minimal" });
+  if (r.status >= 300) throw new Error(`upsert financeiro_titulos_revisados: HTTP ${r.status} - ${r.text.slice(0, 500)}`);
+}
+
 async function sincronizarImpostosTitulos(empresa, accessToken, categorias, dataIniVenc) {
   const hoje = new Date();
   const anoAtual = hoje.getFullYear(), mesAtualNum = hoje.getMonth() + 1;
   const fimMesAtual = formatarData(anoAtual, mesAtualNum, ultimoDiaDoMes(anoAtual, mesAtualNum));
   const ids = await listarIdsContasPagar(accessToken, dataIniVenc, fimMesAtual);
   const existentes = await buscarImpostosExistentes(empresa, ids);
+  const jaRevisados = await buscarRevisadosRecentes(empresa, ids);
   const inicio = Date.now();
-  let processados = 0, falhas = 0;
+  let falhas = 0;
   const linhas = [];
+  const revisadosNestaChamada = [];
+  // Título já revisado há menos de FRESCOR_IMPOSTOS_MS nem entra na fila —
+  // conta direto em `processados`, sem gastar orçamento nenhum nele. É esse
+  // filtro (na tabela financeiro_titulos_revisados, não no catálogo de
+  // impostos) que faz a chamada seguinte avançar de verdade, mesmo quando
+  // nenhum ou quase nenhum título da janela é imposto de fato.
+  let processados = ids.filter(id => jaRevisados.has(id)).length;
+  const fila = ids.filter(id => !jaRevisados.has(id)).map(id => ({ id, tentativas: 0 }));
   // Fila com retentativa por título (mesmo padrão de filaPagar/filaCmv no
   // sync principal) — achado ao vivo, 2026-11-26: antes era um `for` simples
   // sem nenhum catch, então um único 429 no meio de centenas de títulos
   // jogava fora TODO o progresso já feito (nem salvava o que já tinha
   // classificado). Título que esgota as tentativas é só pulado (conta como
-  // falha) — nunca entra em `existentes` com `atualizado_em` recente, então
-  // a próxima chamada tenta ele de novo naturalmente (ver skip por
-  // FRESCOR_IMPOSTOS_MS abaixo).
-  const fila = ids.map(id => ({ id, tentativas: 0 }));
+  // falha, nunca entra em `revisadosNestaChamada` — a próxima chamada tenta
+  // ele de novo, nunca fica marcado como "visto" sem ter sido de verdade).
   while (fila.length > 0) {
     if (Date.now() - inicio > ORCAMENTO_IMPOSTOS_MS) {
       await upsertImpostos(empresa, linhas);
+      await upsertRevisados(empresa, revisadosNestaChamada);
       return { ok: true, concluido: false, processados, totalIds: ids.length, falhas };
     }
     const { id, tentativas } = fila.shift();
-    const existente = existentes.get(id);
-    if (existente?.atualizado_em && (Date.now() - new Date(existente.atualizado_em).getTime()) < FRESCOR_IMPOSTOS_MS) {
-      // Já catalogado há pouco tempo (por esta mesma chamada, uma anterior,
-      // ou o cron) — pula sem bater na Tiny, pra sobrar orçamento pros
-      // títulos que ainda faltam. Ver nota de "Checkpoint por FRESCOR" acima.
-      processados++;
-      continue;
-    }
     await sleep(PACE_MS);
     let d;
     try {
@@ -1703,6 +1739,8 @@ async function sincronizarImpostosTitulos(empresa, accessToken, categorias, data
     const catId = d.categoria?.id;
     const cat = catId != null ? categorias[catId] : null;
     const { codigoGrupo, viaHistorico } = classificarImposto(cat, d.historico);
+    const existente = existentes.get(id);
+    revisadosNestaChamada.push(id);
     if (!codigoGrupo) {
       // Não é (ou não é mais) imposto — se já tinha sido catalogado antes
       // (categoria mudou na Tiny), tira do catálogo (upsert nunca apaga).
@@ -1735,6 +1773,7 @@ async function sincronizarImpostosTitulos(empresa, accessToken, categorias, data
     processados++;
   }
   await upsertImpostos(empresa, linhas);
+  await upsertRevisados(empresa, revisadosNestaChamada);
   return { ok: true, concluido: true, processados, totalIds: ids.length, impostos: linhas.length, falhas };
 }
 

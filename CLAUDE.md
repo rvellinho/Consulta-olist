@@ -1564,6 +1564,47 @@ chamada à Olist sem nenhuma tentativa de novo):
   suposição que só vale até o volume real crescer — qualquer sync sem checkpoint precisa de um
   plano B (mesmo que simples, como o frescor aqui) pro dia em que não couber mais.
 
+#### Checkpoint por frescor acima estava incompleto — só pulava título que virava imposto, nunca a maioria que não vira (achado e corrigido, 2026-11-26)
+O "Testado ao vivo" do bug anterior (30→106/290) provou que o checkpoint avança **quando há
+títulos virando imposto no meio do caminho** — mas não cobre o caso real da Rampa, reportado pelo
+próprio Rafael poucos minutos depois de publicado: "ok. mas a tela segue congelada no 122. faz 11
+minutos que mandei o outro print" (duas capturas de tela, 11 minutos de intervalo, os dois
+mostrando exatamente "42% (122/290 títulos)" — nenhum avanço, apesar de o ticker confirmar chamadas
+novas acontecendo).
+
+Causa raiz: a 1ª versão do checkpoint só marcava "já visto" um título que **virava imposto**
+(`buscarImpostosExistentes`/`existentes.get(id).atualizado_em` — só grava quando
+`upsertImpostos` escreve em `financeiro_impostos_titulos`). Confirmado ao vivo: a tabela
+`financeiro_impostos_titulos` tinha **0 linhas** pra Rampa o tempo todo, e os logs da Vercel
+mostravam chamada nova a cada ~5min sem nenhum erro — ou seja, a função rodava normal, só que
+**nenhum dos primeiros ~122 títulos da janela da Rampa é imposto de verdade**. Como só título
+classificado como imposto ficava marcável, a lista de "pulável" nunca crescia — toda chamada
+reconstruía a fila inteira, reprocessava os mesmos ~122 primeiros títulos (gastando o orçamento
+todo neles, batendo o `PACE_MS` de 2s por título) e nunca alcançava o restante — travamento real,
+não lentidão, igual ao bug original ("nunca termina uma janela grande"), só que disparado por um
+padrão de dado diferente (janela com poucos/nenhum imposto no início) que o teste anterior não
+cobriu por acaso (a Rampa daquele teste tinha impostos espalhados logo nos primeiros 106).
+
+- **Corrigido com uma tabela própria, dedicada a "já revisado"** — `financeiro_titulos_revisados`
+  (`empresa`, `titulo_id`, `revisado_em`, unique em `empresa+titulo_id`) — desacoplada do catálogo
+  de impostos. `sincronizarImpostosTitulos` agora grava **todo título avaliado nesta janela, seja
+  imposto ou não** (`upsertRevisados`), e é essa tabela — nunca `financeiro_impostos_titulos` —
+  que decide o que pular (`buscarRevisadosRecentes`, mesmo `FRESCOR_IMPOSTOS_MS` de 3 dias). Um
+  título que esgota as tentativas de retentativa (bloqueio persistente) NUNCA é marcado como
+  revisado — só conta como falha — pra não ficar "pulável" sem ter sido de fato avaliado.
+- **Lição, mais geral que o bug em si**: um checkpoint por frescor só é válido se **todo item
+  processado, qualquer que seja o resultado**, deixar um registro de "visto" em algum lugar.
+  Amarrar esse sinal a uma tabela que só recebe ALGUNS resultados (aqui: só quem vira imposto)
+  reintroduz silenciosamente o mesmo bug de travamento que o checkpoint deveria ter resolvido,
+  pra qualquer conjunto de dados em que o resultado "registrado" seja raro ou ausente no trecho
+  processado primeiro. Entra no mesmo catálogo de padrões recorrentes deste arquivo ("upsert nunca
+  apaga", "200 com erro no corpo", "`data.itens||[]` em erro de paginação") — ver item 11 em
+  "Erros conhecidos".
+- **Efeito pra quem já tinha uma sincronização em andamento**: nenhuma ação necessária — a aba
+  aberta do Rafael continua chamando a mesma rota (`?acao=impostos-sync`), e a Vercel sempre
+  roteia pro código mais recente publicado (confirmado em sessões anteriores); a próxima chamada
+  automática do ticker já usa o checkpoint novo e passa a avançar de verdade além do 122/290.
+
 ---
 
 ## RLS (Row Level Security) nas 16 tabelas do projeto — ligado (2026-11-24)
@@ -1621,6 +1662,7 @@ era exposição teórica.
 | `financeiro_lancamentos_manuais` | `id` | Lançamentos que nunca vêm da Olist (provisões, ajustes) — `codigo_grupo` + `subitem` livre opcional |
 | `financeiro_sync_status` | `empresa` (uma linha por empresa) | Progresso/estado da rotina diária financeira, mesmo padrão de `estoque_sync_status` |
 | `financeiro_impostos_titulos` | `empresa` + `titulo_id` | Catalogação manual de imposto (5.01/5.02): mês de competência, confirmado, pago_manual — ver "Impostos" |
+| `financeiro_titulos_revisados` | `empresa` + `titulo_id` | Checkpoint de "já avaliado" do sync de Impostos — todo título revisado, imposto ou não (nunca o catálogo de impostos, que só recebe uma parte) — ver "Checkpoint por frescor acima estava incompleto" |
 | `estoque_saldo_mensal` | `empresa` + `ano` + `mes` + `produto_id` | Saldo de FECHAMENTO de cada mês, importado manualmente do relatório "Saldos em Estoque" exportado da Tiny (sem endpoint de saldo histórico na API) — ver "CMV paralelo" |
 | `estoque_movimentos_mensal` | `empresa` + `tipo` + `origem_id` + `produto_id` | Compras (via OC) e vendas (via nota) do mês, por produto — alimenta o relatório de reconciliação do "CMV paralelo", nunca o DRE |
 
@@ -1677,6 +1719,17 @@ era exposição teórica.
     nunca alcançando o fim da lista. Toda chamada nova à Olist nasce com o mesmo padrão de pausa/
     retentativa do resto do projeto, e todo sync sem garantia de caber numa chamada só precisa de
     algum checkpoint (mesmo que simples, como pular título já catalogado há pouco tempo)
+11. **Checkpoint por frescor amarrado a uma tabela que só recebe ALGUNS resultados do
+    processamento, não todos** → ver "Checkpoint por frescor acima estava incompleto" no Módulo
+    Financeiro. A 1ª versão do checkpoint de Impostos só marcava "visto" um título que virava
+    imposto de fato (só esse era upsertado); como a maioria dos títulos de contas a pagar NÃO é
+    imposto, eles nunca ficavam puláveis, e a sincronização ficou travada reprocessando os mesmos
+    ~122 primeiros títulos pra sempre, pra uma empresa cuja janela não tinha imposto no começo —
+    mesmo bug de "nunca termina uma janela grande" (item 10), só que disparado por um padrão de
+    dado que o teste anterior não cobriu. Corrigido com uma tabela PRÓPRIA só pra isso
+    (`financeiro_titulos_revisados`), que grava todo título avaliado, seja imposto ou não. Um
+    checkpoint por frescor só é válido se TODO item processado — qualquer que seja o resultado —
+    deixar um registro de "visto"; nunca reusar uma tabela de resultado específico pra esse sinal
 
 ---
 
