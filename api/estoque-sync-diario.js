@@ -57,8 +57,12 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 // Mesmo padrão usado em api/financeiro.js — ver comentário lá pro motivo. O
 // limite real da conta (header x-limit-api, confirmado ao vivo 2026-11-26)
 // é 60/min, não os 120/min assumidos — 600ms rodava ~70% mais rápido do que
-// a conta permite.
-const PACE_MS = 1050;
+// a conta permite. E esse limite é da CONTA, não do nosso app — Mercos
+// (só Rampa) e Nuvemshop (Rampa e TF) também consomem dele, sem a gente ter
+// visibilidade de quanto cada um usa. Por pedido do Rafael (2026-11-26),
+// ritmo conservador: ~metade do limite pra nós, deixando a outra metade de
+// margem pra essas integrações.
+const PACE_MS = 2000;
 const PADRAO_BLOQUEIO_OLIST = /HTTP 429|API Bloqueada|Excedido o n.mero de acessos/i;
 function parseJSON(text) { try { return JSON.parse(text); } catch { return {}; } }
 

@@ -42,7 +42,13 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 // confirmado ao vivo em 2026-11-26 pras duas empresas) é 60/min. 600ms
 // rodava ~70% mais rápido do que a conta permite, todo santo dia,
 // independente de qualquer bloqueio pontual — ver PACE_MS abaixo.
-const PACE_MS = 1050; // 60/min = 1000ms exatos; folga de 50ms de margem
+// Esse limite é da CONTA Olist, não do nosso app: Mercos (só Rampa) e
+// Nuvemshop (Rampa e TF) também fazem chamadas contra a mesma conta, sem a
+// gente ter visibilidade de quanto cada um consome num dado minuto. Por
+// pedido do Rafael (2026-11-26, "ser bem conservadores"), o ritmo passou a
+// visar só ~metade do limite pra nós (30/min), deixando a outra metade de
+// margem pra essas integrações — ver "Rate limit Olist" no CLAUDE.md.
+const PACE_MS = 2000; // ~30/min pra nós, deixando margem pra Mercos/Nuvemshop
 // Olist diz "aguarde alguns minutos" nesse erro (429 na V3, ou "API Bloqueada"
 // no corpo da V2) — mas o loop tentava de novo em só 600ms, o que mantinha o
 // bloqueio ativo pelo resto do orçamento inteiro, em vez de dar o tempo que a

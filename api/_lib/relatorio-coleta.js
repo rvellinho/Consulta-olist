@@ -71,8 +71,10 @@ function httpsRequest(method, hostname, path, body, headers) {
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 // Limite real da conta Olist é 60/min (header x-limit-api, confirmado ao
 // vivo 2026-11-26), não os 120/min assumidos — ver mesmo comentário em
-// api/financeiro.js e api/estoque-sync-diario.js.
-const PACE_MS = 1050;
+// api/financeiro.js e api/estoque-sync-diario.js. E é limite da CONTA, não
+// do nosso app — Mercos/Nuvemshop também consomem dele (ver CLAUDE.md,
+// "Rate limit Olist"), por isso o ritmo conservador (~metade do limite).
+const PACE_MS = 2000;
 function parseJSON(text) { try { return JSON.parse(text); } catch { return {}; } }
 
 // A Olist usa códigos de erro diferentes pra "nenhum resultado" dependendo do
