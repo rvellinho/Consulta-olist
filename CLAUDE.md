@@ -218,6 +218,30 @@ Single file containing all CSS and JS inline (~1000 lines). No framework, no mod
   duplicado em `salvar.js`/`importar.js`/`estoque.js`/`ping.js`). Qualquer correção é num
   lugar só agora.
 
+### Integrações externas que também usam a conta Olist (Mercos, Nuvemshop)
+O limite de requisições da Olist (ver "Rate limit Olist" abaixo) é por **CONTA**, não por
+app/integração — qualquer sistema conectado àquela conta Olist consome do mesmo teto, e a
+Olist não distingue de onde veio a chamada na hora de bloquear.
+
+- **Mercos** (CRM/gestão de vendas): conectado só na conta **Rampa**.
+- **Nuvemshop** (e-commerce): conectado nas **duas** contas, Rampa e TF.
+- Esse projeto (Consulta-Olist) é só mais um consumidor do mesmo teto — não o único.
+- **Não temos nenhuma visibilidade de quanto cada uma dessas integrações consome do limite
+  num dado minuto** — a API da Olist não expõe um header de "quanto resta", só o teto fixo
+  (`x-limit-api`). Não há como medir isso em tempo real, só inferir pelo comportamento (se
+  continuarmos batendo em bloqueio mesmo dentro do nosso próprio ritmo, é sinal de que outra
+  integração está consumindo bastante naquele momento).
+- Por isso (decisão explícita do Rafael, 2026-11-26: "ser bem conservadores"), o ritmo das
+  **nossas** chamadas (`PACE_MS`, ver "Rate limit Olist" abaixo) visa só **~metade do limite
+  da conta (~30/min)**, nunca o teto inteiro, mesmo que a conta aguentasse mais — essa
+  metade reservada é margem de propósito pra Mercos/Nuvemshop, não desperdício.
+- **Consequência aceita**: sincronizações grandes deste projeto (catálogo da TF, ~644
+  produtos; janela de 2 meses do financeiro, ~1150 títulos) ficam ~2x mais lentas pra
+  completar do que ficariam se usássemos o teto inteiro — podem precisar de mais de um dia
+  de retomada manual em vez de terminar no mesmo dia.
+- Se no futuro entrar uma nova integração nessa conta, ou Mercos/Nuvemshop forem
+  desligados/reduzidos, vale revisitar esse ~30/min (pra mais ou pra menos).
+
 ### Rate limit Olist
 - **Limite real: 60 requisições/minuto** (não 120 — esse número nunca foi confirmado, só
   estimado; o real foi lido ao vivo em 2026-11-26 no header `x-limit-api` de uma resposta
@@ -237,18 +261,10 @@ Single file containing all CSS and JS inline (~1000 lines). No framework, no mod
   ao detectar esse padrão de erro, pausa 15s antes de continuar, em vez de voltar direto
   pro ritmo normal — ver `PADRAO_BLOQUEIO_OLIST`/`pausaSeBloqueio` nos mesmos arquivos.
 - **O limite de 60/min é da CONTA Olist, não do nosso app** — descoberto no mesmo dia
-  (2026-11-26, informação do Rafael): o sistema **Mercos** está conectado na conta Rampa, e o
-  **e-commerce Nuvemshop** está conectado nas duas contas (Rampa e TF). As duas integrações
-  fazem chamadas contra a mesma conta/token, consumindo do mesmo teto de 60/min — sem a gente
-  ter nenhuma visibilidade de quanto cada uma usa num dado minuto (a API não expõe um header
-  de "restante", só o teto fixo). Rodar a 1050ms (assumindo os 60/min inteiros pra nós) deixa
-  esse risco aberto. **Corrigido (2ª rodada, mesmo dia)**: a pedido explícito do Rafael ("ser
-  bem conservadores"), `PACE_MS` subiu pra 2000ms (~30/min pra nós, ~metade do limite),
-  deixando a outra metade de margem pra Mercos/Nuvemshop. **Trade-off aceito**: sincronizações
-  grandes (ex: catálogo da TF, ~644 produtos; janela de 2 meses do financeiro, ~1150 títulos)
-  ficam ~2x mais lentas pra completar — podem precisar de mais de um dia de retomada manual
-  antes de pegar todo o volume, em vez de terminar no mesmo dia. Se no futuro ficar claro que
-  Mercos/Nuvemshop usam bem menos do que isso na prática, vale revisitar esse valor.
+  (2026-11-26, informação do Rafael: Mercos e Nuvemshop também consomem dele — ver
+  "Integrações externas que também usam a conta Olist" acima). **Corrigido (2ª rodada, mesmo
+  dia)**: `PACE_MS` subiu de 1050ms pra 2000ms (~30/min pra nós, só metade do limite da
+  conta), deixando a outra metade de margem pra essas integrações.
 - O processamento em loop NUNCA deve rodar no serverless Vercel (timeout)
 - Sempre mover loops pesados para o frontend (browser)
 
