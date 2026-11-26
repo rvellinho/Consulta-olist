@@ -1443,6 +1443,38 @@ conta no cálculo quanto pra eventuais auditorias futuras:
   corrigir manualmente na Tiny quando fizer diferença de mês — nunca tentar adivinhar/corrigir
   sozinho qual é a data "certa".
 
+### CMV em R$ comparável ao CMV do DRE — implementado (2026-11-26)
+
+A v1 do CMV Paralelo (acima) só reconciliava **quantidade** por produto. A segunda metade do
+pedido original do Rafael — um CMV em R$ pela fórmula clássica, comparável ao CMV que já entra
+no DRE — nunca tinha sido construída (achado revisando o pedido original nesta data).
+
+- **Cálculo** (`montarCmvParalelo`, mesma função da v1, campo novo `resumoReais` no retorno):
+  `Estoque Inicial (R$) + Compras (R$) − Estoque Final (R$) = CMV calculado`. Estoque inicial/final
+  em R$ = saldo real importado (mesma fonte da v1, `estoque_saldo_mensal`) × custo do produto
+  naquele mês — reaproveita a MESMA função `custoDoMes` (congelado via `financeiro_custo_mensal`
+  se o mês já passou por lá, senão `custo_atual` do catálogo) já usada pra valorizar a coluna
+  "Custo da diferença" da v1, pra ficar na mesma base do CMV do DRE. Compras em R$ vêm de
+  `estoque_movimentos_mensal.custo_total` (só o tipo `compra` tem custo gravado — já inclui o
+  rateio de frete da própria OC, ver v1 acima).
+- **CMV real** (`buscarCmvRealDoMes`): soma `financeiro_mensal.valor` onde `titulo_tipo='cmv'`
+  pro mesmo ano/mês/empresa — a mesma fonte que já alimenta o bloco "Estoques (4.01)" do DRE
+  (nota de venda × custo do produto, ver "CMV real" acima).
+- **A diferença entre os dois é esperada, por desenho** — os dois caminhos são calculados de
+  jeitos totalmente independentes (um por saldo físico de estoque, outro por nota fiscal). O que
+  um capta e o outro não (devolução sem valor registrado, perda/quebra nunca lançada como
+  documento, timing de fechamento) aparece como divergência residual — não é erro de conta, é
+  exatamente o que o relatório deveria mostrar pro Rafael investigar.
+- **Só calculável quando os dois extremos (saldo inicial E final) já foram importados** — mesma
+  condição `temSaldoInicial`/`temSaldoFinal` da v1 (campo `resumoReais.calculavel`); sem os dois,
+  a tela não mostra o resumo em R$ em vez de mostrar um número incompleto.
+- **Validado com dado real** (Rampa, outubro/2026): Estoque Inicial R$534.507,04 + Compras
+  R$397.771,36 − Estoque Final R$606.128,35 = CMV calculado R$326.150,05, contra CMV real (DRE)
+  R$358.163,21 — diferença de R$32.013,16 (~9%), plausível dado que a v1 ainda não valoriza
+  devolução de compra/venda em R$ (só quantidade — ver "Deferido pra uma v2" acima).
+- **Tela**: resumo em R$ no topo da aba CMV Paralelo (acima da tabela produto a produto),
+  escondido quando `calculavel=false`.
+
 ### Impostos (5.01/5.02) — catalogação manual (implementada 2026-11-25, publicada 2026-11-26)
 
 Tela nova (menu Financeiro → Impostos, admin-only) que substitui a classificação automática de
