@@ -1746,6 +1746,73 @@ do DRE que filtrava por `entra_dre`) — não precisou de nenhuma chamada nova �
   ICMS, Itaú). TF também testado: `gruposForaDre` mostra corretamente "5.02.03 Parcelas..." (texto
   próprio da TF) dentro do mesmo `codigo_grupo` "6.02".
 
+### Despesa paga lançada depois na Tiny nunca aparecia + `ultima_tentativa_em` congelado há dias (achado e corrigido, 2026-11-26)
+Rafael reportou: 3 despesas da TF de outubro (OLIST - CONTA DIGITAL "TF - DÉBITO DE TITULOS"
+R$10,66; STONE PAGAMENTOS S.A "TF - TAXAS ADMINISTRATIVAS..." R$71,51 e R$800,99 — grupo `2.02.01`,
+todas pagas e com "Pago em" 31/10/2026 na própria Tiny) não apareciam em lugar nenhum do DRE da TF.
+
+**Causa raiz #1 (a que explica a ausência em si)**: o sync diário (`executarSyncDiario`) só
+reconsulta a LISTAGEM de contas a pagar (`listarIdsContasPagar`) no momento em que um ciclo é
+CRIADO — ciclos grandes (TF, ~1150 títulos) levam mais de uma chamada pra terminar (checkpoint em
+`financeiro_sync_status.pendentes`), e enquanto o ciclo está "retomando" a lista de ids fica
+travada na fotografia do momento em que ele começou. Um título lançado na Tiny DEPOIS dessa
+fotografia (comum pra títulos de conciliação automática como "OLIST CONTA DIGITAL"/Stone, que
+entram na Tiny com atraso em relação à data real do pagamento) nunca era nem avaliado até o ciclo
+inteiro terminar (ou travar por 36h) e um novo começar do zero — o que, pro volume da TF, podia
+levar dias. Confirmado ao vivo: um teste isolado (fora do loop do sync) buscou o id 405468880
+numa listagem fresca de contas a pagar da TF e seu detalhe bateu exatamente com a 1ª despesa
+reportada (OLIST - CONTA DIGITAL, R$10,66, vencimento e "Pago em" 31/10/2026) — confirma que o
+título existe e cai na janela certa, só nunca tinha sido nem buscado de novo.
+
+- **Corrigido**: `executarSyncDiario` agora faz um "catch-up" de contas a pagar — sempre que a
+  fila de pagar já estiver vazia (fase terminada nessa execução, ou já tinha terminado antes e
+  essa chamada só está cuidando do CMV), reconsulta só a LISTAGEM (barata, paginada, sem detalhe
+  por título) na mesma janela usada na criação do ciclo (persistida em
+  `status.pendentes.periodosPagar`, pra não depender de recalcular "hoje" num call que resume
+  dias depois) e compara contra todo id já visto neste ciclo
+  (`status.pendentes.idsVistosPagar`) — só os genuinamente novos entram na fila de pagar de novo.
+  Ciclo que já estava em andamento ANTES desse fix (sem esses dois campos ainda) cai num
+  fallback seguro: reprocessa a fila de pagar inteira uma vez (upsert idempotente, só custa
+  chamadas extra à Tiny) e a partir daí passa a usar o checkpoint normalmente.
+
+**Causa raiz #2 (separada, achada investigando a #1 — mais grave)**: `salvarStatusSync`
+(`financeiro.js`) e `salvarStatus` (`estoque-sync-diario.js`) sempre mandavam o objeto `status`
+INTEIRO (`JSON.stringify(status)`) num PATCH a cada checkpoint — e esse objeto, numa execução que
+RETOMA um ciclo (não cria um novo), vem de `lerStatusSync`/`lerStatus` lido no INÍCIO da execução,
+ANTES de `marcarTentativaSync`/`marcarTentativa` atualizar `ultima_tentativa_em` pra agora (essa
+função grava via PATCH parcial próprio, separado). Resultado: todo checkpoint desse tipo de
+execução reenviava o valor VELHO de `ultima_tentativa_em` (capturado na leitura inicial) e
+sobrescrevia o timestamp fresco de volta. Isso congelava `ultima_tentativa_em` no instante do
+primeiro "resume" de um ciclo pra sempre — e como `TRAVADO_APOS_MS` (36h) é calculado a partir
+desse campo (decisão deliberada de 2026-11-19, pra não confundir "ciclo grande ainda rodando" com
+"travado" — ver "Catálogo grande não termina em 1 chamada" acima), o relógio de travamento passava
+a contar a partir desse instante CONGELADO, não da última atividade real. Achado ao vivo
+(2026-11-26, ~21h UTC): tanto o ciclo da TF (iniciado 2026-11-25 08:47) quanto o da Rampa
+(iniciado 2026-11-25 08:17) estavam com `ultima_tentativa_em` parado no exato minuto em que cada
+um tinha RETOMADO por volta daquele horário — ou seja, mesmo com o cron chamando a função todo
+dia sem parar, o relógio nunca avançava, e ~36h depois do primeiro resume o ciclo era descartado e
+reiniciado do zero sozinho (confirmado: meu teste manual da TF, ao reconsultar o status, disparou
+exatamente esse reset — "execução nova" em vez de "retomando" — porque já tinham passado as 36h
+desde aquele instante congelado). Pro volume da TF/Rampa, isso significava reiniciar catálogos
+grandes do zero a cada ~1,5 dia, descartando progresso real (CMV, que é a fase mais lenta) repetidas
+vezes — o mesmo tipo de bug que o fix de 2026-11-19 tentou resolver, só que reintroduzido de outro
+jeito.
+- **Corrigido**: as duas funções (`salvarStatusSync`/`salvarStatus`) agora excluem
+  `ultima_tentativa_em` do payload antes de mandar o PATCH (`const { ultima_tentativa_em, ...resto
+  } = status`) — esse campo é escrito exclusivamente por `marcarTentativaSync`/`marcarTentativa`,
+  nunca pelo objeto de status geral. `ultimo_erro` continua sendo enviado normalmente pelos dois
+  caminhos (é legítimo: a criação de um ciclo novo limpa esse campo de propósito).
+- **Testado ao vivo**: depois do fix, uma chamada que RETOMOU o ciclo da TF (`retomando: 0 receber
+  + 394 pagar + 290 cmv pendentes`) processou um checkpoint de pagar (541/1207) e
+  `financeiro_sync_status.ultima_tentativa_em` ficou com o horário exato dessa chamada
+  (`2026-11-26 21:21:24`), não revertido pro valor velho de 2026-11-25 — confirma que o
+  checkpoint já não clobbera mais o timestamp.
+- **Lição**: um PATCH que reenvia um objeto inteiro lido no início de uma execução sobrescreve
+  qualquer campo que uma função SEPARADA, DENTRO DA MESMA execução, já tenha atualizado via PATCH
+  parcial próprio — mesmo que a ordem das chamadas pareça "a de agora vem depois". Um campo com
+  dono único (aqui, `ultima_tentativa_em` pertence só a `marcarTentativaSync`) nunca deveria viajar
+  dentro do payload de outra função que lê-e-regrava o resto do estado.
+
 ---
 
 ## RLS (Row Level Security) nas 16 tabelas do projeto — ligado (2026-11-24)
@@ -1871,6 +1938,22 @@ era exposição teórica.
     (`financeiro_titulos_revisados`), que grava todo título avaliado, seja imposto ou não. Um
     checkpoint por frescor só é válido se TODO item processado — qualquer que seja o resultado —
     deixar um registro de "visto"; nunca reusar uma tabela de resultado específico pra esse sinal
+12. **Fila de contas a pagar de um ciclo longo só é refeita quando o ciclo é criado, nunca durante
+    um "resume"** → ver "Despesa paga lançada depois na Tiny nunca aparecia" no Módulo Financeiro.
+    Um título lançado na Tiny depois da fotografia inicial do ciclo (comum em títulos de
+    conciliação automática — cartão, Pix — que entram com atraso) nunca era avaliado até o ciclo
+    inteiro terminar. Corrigido com um catch-up: sempre que a fila de pagar já estiver vazia,
+    reconsulta só a listagem (barata) e enfileira de novo qualquer id que ainda não tinha sido
+    visto neste ciclo
+13. **PATCH que reenvia o objeto de status inteiro sobrescreve um campo que outra função, na MESMA
+    execução, já tinha atualizado via PATCH parcial próprio** → ver "ultima_tentativa_em
+    congelado" no Módulo Financeiro. `salvarStatusSync`/`salvarStatus` mandavam `JSON.stringify(status)`
+    inteiro a cada checkpoint; como `status` foi lido ANTES de `marcarTentativaSync` atualizar
+    `ultima_tentativa_em`, todo checkpoint reenviava o valor velho e desfazia a atualização —
+    congelando esse campo pra sempre a partir do primeiro "resume" de um ciclo, e quebrando (de
+    outro jeito) a mesma proteção contra reinício indevido que o fix de "Catálogo grande não
+    termina em 1 chamada" tinha implementado. Um campo com dono único nunca deve viajar dentro do
+    payload de uma função que lê-e-regrava o resto do estado
 
 ---
 

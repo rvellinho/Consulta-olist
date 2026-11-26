@@ -119,8 +119,17 @@ async function criarStatus(empresa) {
 }
 
 async function salvarStatus(empresa, status) {
+  // Mesmo corte feito em financeiro.js (salvarStatusSync), 2026-11-26: só
+  // marcarTentativa escreve `ultima_tentativa_em` (timestamp fresco, via
+  // PATCH parcial próprio) — reenviar o valor velho do objeto `status` em
+  // memória (lido no início da execução, antes de marcarTentativa rodar)
+  // sobrescrevia esse timestamp de volta a cada checkpoint, congelando-o no
+  // instante do primeiro "resume" do ciclo pra sempre e quebrando o relógio
+  // de TRAVADO_APOS_MS (passava a contar da última vez que o ciclo foi
+  // CRIADO, não da última atividade real).
   const supaHost = SUPABASE_URL.replace("https://", "");
-  const payload = JSON.stringify(status);
+  const { ultima_tentativa_em, ...resto } = status;
+  const payload = JSON.stringify(resto);
   await httpsRequest("PATCH", supaHost, `/rest/v1/estoque_sync_status?empresa=eq.${empresa}`, payload,
     { ...supaHeaders, "Content-Length": Buffer.byteLength(payload), Prefer: "return=minimal" });
 }

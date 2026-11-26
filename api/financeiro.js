@@ -680,7 +680,21 @@ async function criarStatusSync(empresa) {
     { ...supaHeaders, "Content-Length": Buffer.byteLength(payload), Prefer: "resolution=ignore-duplicates,return=minimal" });
 }
 async function salvarStatusSync(empresa, status) {
-  const payload = JSON.stringify(status);
+  // `ultima_tentativa_em` é escrito só por marcarTentativaSync (timestamp
+  // fresco a cada chamada, via PATCH parcial próprio) — nunca reenviar aqui
+  // o valor que está no objeto `status` em memória, porque esse valor foi
+  // lido no INÍCIO da execução (lerStatusSync), ANTES de marcarTentativaSync
+  // rodar. Sem esse corte, qualquer checkpoint (ou esse save final) durante
+  // uma execução que RETOMA um ciclo (não cria um novo) reenviava esse valor
+  // velho e sobrescrevia o timestamp fresco de volta. Achado ao vivo,
+  // 2026-11-26: isso congelava `ultima_tentativa_em` no instante do primeiro
+  // "resume" de um ciclo pra sempre — o relógio de TRAVADO_APOS_MS passava a
+  // contar a partir desse instante congelado, não da última atividade real,
+  // fazendo qualquer ciclo que precisasse de mais de uma chamada (ex: TF,
+  // ~1150 títulos) reiniciar do zero a cada ~36h sozinho, mesmo com o cron
+  // rodando todo dia sem parar — descartando todo o progresso já feito.
+  const { ultima_tentativa_em, ...resto } = status;
+  const payload = JSON.stringify(resto);
   await httpsRequest("PATCH", supaHost(), `/rest/v1/financeiro_sync_status?empresa=eq.${empresa}`, payload,
     { ...supaHeaders, "Content-Length": Buffer.byteLength(payload), Prefer: "return=minimal" });
 }
@@ -1056,7 +1070,17 @@ async function executarSyncDiario(req, res) {
 
       status = {
         em_andamento: true,
-        pendentes: { receita: filaReceita, pagar: filaPagarUnica, cmv: filaCmv },
+        pendentes: {
+          receita: filaReceita, pagar: filaPagarUnica, cmv: filaCmv,
+          // Persistidos (dentro de `pendentes`, que já é jsonb — evita
+          // migration) pro catch-up de pagar (abaixo) poder reconsultar
+          // exatamente a mesma janela mais tarde, mesmo num call que resume
+          // dias depois (recalcular "hoje" bateria num mês diferente se o
+          // ciclo atravessar virada de mês) — ver "Catch-up de contas a
+          // pagar num ciclo longo" no CLAUDE.md, 2026-11-26.
+          periodosPagar: periodos,
+          idsVistosPagar: filaPagarUnica.map(it => `${it.id}:${it.ano}:${it.mes}`),
+        },
         total: filaReceita.length + filaPagarUnica.length + filaCmv.length,
         processados: 0,
         iniciado_em: new Date().toISOString(),
@@ -1067,6 +1091,52 @@ async function executarSyncDiario(req, res) {
       console.log(`[financeiro-sync:${empresa}] execução nova: ${filaReceita.length} contas a receber + ${filaPagarUnica.length} contas a pagar + ${filaCmv.length} notas de venda (cmv) a classificar`);
     } else {
       console.log(`[financeiro-sync:${empresa}] retomando: ${status.pendentes.receita.length} receber + ${status.pendentes.pagar.length} pagar + ${(status.pendentes.cmv || []).length} cmv pendentes`);
+    }
+
+    // Catch-up: título de contas a pagar lançado na Tiny DEPOIS da foto
+    // inicial deste ciclo. Um ciclo grande (ex: TF, ~1150 títulos) pode levar
+    // vários dias só pra terminar o CMV — a fila de pagar fica travada na
+    // lista de ids que existia no momento em que o ciclo começou, então um
+    // título novo (mesmo com vencimento bem dentro da janela já coberta)
+    // nunca era nem avaliado até o ciclo inteiro terminar e um novo começar
+    // do zero. Achado ao vivo, 2026-11-26: 3 títulos da TF (OLIST - CONTA
+    // DIGITAL, STONE PAGAMENTOS x2, vencimento 31/10) ausentes de
+    // financeiro_mensal porque o ciclo da TF travou a lista de pagar em
+    // 2026-11-25, antes desses títulos existirem na Tiny.
+    // Reconsulta só a LISTAGEM (barata, paginada, sem detalhe por título) —
+    // sempre que a fila de pagar já estiver vazia (fase terminada ou nunca
+    // mais tocada) — comparando contra todo id já visto neste ciclo
+    // (status.pendentes.idsVistosPagar) pra achar só quem é genuinamente
+    // novo. `periodosPagar`/`idsVistosPagar` ausentes (ciclo em_andamento
+    // que já estava rodando ANTES desse fix existir) cai no fallback: usa os
+    // `periodos` recalculados agora (seguro — só muda se o ciclo atravessar
+    // virada de mês) e trata todo mundo como "não visto" — reprocessa a fila
+    // de pagar inteira uma vez (upsert idempotente, só custa chamadas extra
+    // à Tiny), e a partir daí passa a usar o checkpoint normalmente.
+    if (status.pendentes.pagar.length === 0) {
+      const periodosPagar = status.pendentes.periodosPagar || periodos;
+      const vistos = new Set(status.pendentes.idsVistosPagar || []);
+      const novosPagar = [];
+      for (const p of periodosPagar) {
+        const jIni = addMeses(p.ano, p.mes, -1);
+        const jFim = addMeses(p.ano, p.mes, 1);
+        const idsPagar = await listarIdsContasPagar(accessToken, formatarData(jIni.ano, jIni.mes, 1), formatarData(jFim.ano, jFim.mes, ultimoDiaDoMes(jFim.ano, jFim.mes)));
+        await sleep(PACE_MS);
+        for (const id of idsPagar) {
+          const chave = `${id}:${p.ano}:${p.mes}`;
+          if (vistos.has(chave)) continue;
+          vistos.add(chave);
+          novosPagar.push({ id, ano: p.ano, mes: p.mes });
+        }
+      }
+      if (novosPagar.length) {
+        console.log(`[financeiro-sync:${empresa}] catch-up: ${novosPagar.length} título(s) novo(s) de contas a pagar (entraram na Tiny depois do início deste ciclo, ou primeira vez rodando o catch-up)`);
+        status.pendentes.pagar = novosPagar;
+        status.total += novosPagar.length;
+      }
+      status.pendentes.periodosPagar = periodosPagar;
+      status.pendentes.idsVistosPagar = [...vistos];
+      await salvarStatusSync(empresa, status);
     }
 
     const filaReceita = [...status.pendentes.receita];
