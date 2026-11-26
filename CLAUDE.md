@@ -225,7 +225,7 @@ Single file containing all CSS and JS inline (~1000 lines). No framework, no mod
   projeto pausava 600ms entre chamadas (~100/min) — ou seja, rodava ~70% mais rápido do
   que a conta permite, **todo santo dia**, não só em picos. Isso explica o padrão crônico
   de erro 429 visto nos logs desde pelo menos 2026-11-18, não uma instabilidade pontual.
-  **Corrigido**: ritmo ajustado pra 1050ms entre chamadas (`PACE_MS`, em
+  **Corrigido** (1ª rodada): ritmo ajustado pra 1050ms entre chamadas (`PACE_MS`, em
   `api/financeiro.js`, `api/estoque-sync-diario.js`, `api/importar.js`, `api/relatorios.js`
   e `api/_lib/relatorio-coleta.js`) — commit 2026-11-26. Se o volume de chamadas crescer
   (catálogo maior, mais títulos), vale reconferir esse header de novo antes de assumir
@@ -236,6 +236,19 @@ Single file containing all CSS and JS inline (~1000 lines). No framework, no mod
   explicitamente "aguarde alguns minutos". **Corrigido** (commit anterior, mesma sessão):
   ao detectar esse padrão de erro, pausa 15s antes de continuar, em vez de voltar direto
   pro ritmo normal — ver `PADRAO_BLOQUEIO_OLIST`/`pausaSeBloqueio` nos mesmos arquivos.
+- **O limite de 60/min é da CONTA Olist, não do nosso app** — descoberto no mesmo dia
+  (2026-11-26, informação do Rafael): o sistema **Mercos** está conectado na conta Rampa, e o
+  **e-commerce Nuvemshop** está conectado nas duas contas (Rampa e TF). As duas integrações
+  fazem chamadas contra a mesma conta/token, consumindo do mesmo teto de 60/min — sem a gente
+  ter nenhuma visibilidade de quanto cada uma usa num dado minuto (a API não expõe um header
+  de "restante", só o teto fixo). Rodar a 1050ms (assumindo os 60/min inteiros pra nós) deixa
+  esse risco aberto. **Corrigido (2ª rodada, mesmo dia)**: a pedido explícito do Rafael ("ser
+  bem conservadores"), `PACE_MS` subiu pra 2000ms (~30/min pra nós, ~metade do limite),
+  deixando a outra metade de margem pra Mercos/Nuvemshop. **Trade-off aceito**: sincronizações
+  grandes (ex: catálogo da TF, ~644 produtos; janela de 2 meses do financeiro, ~1150 títulos)
+  ficam ~2x mais lentas pra completar — podem precisar de mais de um dia de retomada manual
+  antes de pegar todo o volume, em vez de terminar no mesmo dia. Se no futuro ficar claro que
+  Mercos/Nuvemshop usam bem menos do que isso na prática, vale revisitar esse valor.
 - O processamento em loop NUNCA deve rodar no serverless Vercel (timeout)
 - Sempre mover loops pesados para o frontend (browser)
 
