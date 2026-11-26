@@ -309,15 +309,25 @@ function montarDRE(planoContas, linhasMensal, linhasManuais, categoriasPorEmpres
     if (!grupo.entra_dre) {
       // "Parcelas de Empréstimos e Parcelamentos" não repete aqui — pedido do
       // Rafael, 2026-11-26: já aparece em destaque na tabela de Amortização
-      // logo acima, não precisa mostrar de novo na conferência. O total do
-      // grupo (6.02 Saídas) continua somando o valor real, incluindo essa
-      // parcela — só a LINHA da árvore de nível 3 fica escondida.
-      const leafs = montarLeafsOrdenados(grupo.codigo_grupo)
-        .filter(lf => !REGEX_LEAF_PARCELAS_EMPRESTIMO.test(lf.descricao));
+      // logo acima, não precisa mostrar de novo na conferência, nem duplicar
+      // no TOTAL do grupo (6.02 Saídas) — por isso tira o valor dessa leaf do
+      // total também, não só da lista de nível 3.
+      const leafsCompletos = montarLeafsOrdenados(grupo.codigo_grupo);
+      const leafs = leafsCompletos.filter(lf => !REGEX_LEAF_PARCELAS_EMPRESTIMO.test(lf.descricao));
+      const removido = leafsCompletos
+        .filter(lf => REGEX_LEAF_PARCELAS_EMPRESTIMO.test(lf.descricao))
+        .reduce((acc, lf) => ({
+          operacional: acc.operacional + lf.valorOperacional,
+          intercompany: acc.intercompany + lf.valorIntercompany,
+        }), { operacional: 0, intercompany: 0 });
+      const valoresSemAmortizacao = {
+        operacional: valores.operacional - removido.operacional,
+        intercompany: valores.intercompany - removido.intercompany,
+      };
       gruposForaDre.push({
         codigo_grupo: grupo.codigo_grupo, descricao_grupo: grupo.descricao_grupo,
-        valor: valores.operacional + valores.intercompany,
-        valorOperacional: valores.operacional, valorIntercompany: valores.intercompany,
+        valor: valoresSemAmortizacao.operacional + valoresSemAmortizacao.intercompany,
+        valorOperacional: valoresSemAmortizacao.operacional, valorIntercompany: valoresSemAmortizacao.intercompany,
         leafs,
       });
       continue;

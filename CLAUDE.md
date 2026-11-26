@@ -1718,10 +1718,16 @@ do DRE que filtrava por `entra_dre`) — não precisou de nenhuma chamada nova �
   categoria real do DRE.
   - **Ajuste (mesmo dia)**: a leaf "Parcelas de Empréstimos e Parcelamentos" foi tirada da árvore
     dessa tabela — pedido do Rafael: "já colocamos acima nas amortizações", redundante repetir a
-    mesma linha nas duas tabelas. O TOTAL do grupo "6.02 Saídas" continua somando o valor cheio
-    (sem mudar); só a linha de nível 3 some da lista (`montarDRE`, filtro por
-    `REGEX_LEAF_PARCELAS_EMPRESTIMO` só na construção de `gruposForaDre`, não no cálculo do grupo
-    nem no da tabela de Amortização).
+    mesma linha nas duas tabelas.
+  - **Segundo ajuste (mesmo dia, mesma conversa)**: "ele não deve constar no total também, pra não
+    ficar duplicado" — não bastava esconder a LINHA, o valor ainda somava no total do grupo "6.02
+    Saídas" (ficava visível ali mesmo sem a linha de detalhe que o explicasse). Corrigido: o total
+    de cada grupo fora do DRE agora é calculado já descontando o valor de qualquer leaf filtrada
+    (hoje só a de Parcelas de Empréstimos) — `montarDRE` soma `leafsCompletos` filtradas pela mesma
+    regex e subtrai do total antes de montar `gruposForaDre`; o cálculo da tabela de Amortização
+    (que lê direto de `porGrupoLeaf`, não do total já filtrado) não foi tocado. Testado ao vivo:
+    "6.02 Saídas" caiu de R$20.862,91 pra R$0,00 (outubro/2026 Rampa, mês sem mais nenhum outro
+    lançamento nesse grupo) — o valor continua inteiro, só na tabela de Amortização agora.
 - **Achado buscando os valores de 6.02.03/3.01.02**: a TF numera essas categorias na própria Tiny
   diferente da Rampa — o mesmo item "Parcelas de Empréstimos e Parcelamentos" (`grupo_raw` "6.02
   Saídas" nas duas empresas) tem `codigo_leaf`/prefixo "6.02.03" na Rampa mas "5.02.03" na TF
