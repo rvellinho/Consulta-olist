@@ -1510,6 +1510,52 @@ da Tiny não é boa referência pra imposto).
   os grupos 5.01/5.02 vão aparecer **zerados** no DRE até alguém abrir a tela de Impostos e
   confirmar cada título (o aviso de pendência mostra quantos e quanto estão esperando).
 
+#### Sync de Impostos derrubava tudo num único 429, e nunca terminava uma janela grande (achado e corrigido, 2026-11-26)
+Reportado pelo Rafael em uso real (botão "Sincronizar agora" na tela de Impostos, Rampa): "deu
+erro... são poucos dados, porque esse erro? vamos corrigir" — a tela mostrava
+`Erro ao sincronizar: contas-pagar (listagem offset=200): HTTP 429 -`, sem nenhum título na
+tabela. Três causas, as duas primeiras do mesmo tipo já visto várias vezes neste arquivo (uma
+chamada à Olist sem nenhuma tentativa de novo):
+- `listarIdsContasReceber`/`listarIdsContasPagar` lançavam erro na primeira página que respondesse
+  diferente de 200, sem nenhuma retentativa — e por listarem a **janela inteira** de contas a
+  pagar (não só imposto; o filtro por categoria/histórico só acontece depois, título por título),
+  paginam centenas de títulos, então mesmo uma listagem sozinha (sem nenhum outro sync rodando ao
+  mesmo tempo) tem chance real de esbarrar no limite compartilhado com Mercos/Nuvemshop (ver
+  "Integrações externas..." acima). Corrigido com `buscarPaginaComRetentativa` — mesmo padrão de
+  pausa/retentativa (`pausaSeBloqueio`, `MAX_TENTATIVAS_POR_TITULO`) já usado pro resto do projeto,
+  só que por página em vez de por título.
+- `sincronizarImpostosTitulos` buscava o detalhe de cada título num `for` simples sem `try/catch`
+  nenhum — um único título batendo em bloqueio no meio de centenas jogava fora **todo** o
+  progresso já classificado naquela chamada (o `upsertImpostos` só rodava no final, nunca no erro).
+  Corrigido convertendo pra fila com retentativa (mesmo padrão de `filaPagar`/`filaCmv` do sync
+  principal) — título que esgota as tentativas só conta como falha, nunca derruba o resto.
+- **A suposição original de desenho ("cabe numa chamada só", documentada acima em "Checkpoint por
+  FRESCOR") era falsa pra uma janela grande** — testado ao vivo: a janela da Rampa tem 290
+  títulos de contas a pagar pra revisar (não só imposto — todo mundo precisa do detalhe pra saber
+  a categoria), e só a pausa de 2s entre eles já passa de 9 minutos, bem mais que o orçamento de
+  260s por chamada. Sem nenhum checkpoint, uma chamada que estourava o orçamento devolvia
+  `concluido:false` mas a PRÓXIMA chamada reconstruía a fila com a lista inteira de ids e
+  recomeçava do título 1 — ou seja, ficava presa revisitando pra sempre os mesmos primeiros ~30-130
+  títulos, nunca alcançando o fim da lista (nem um backfill manual, nem o cron diário, jamais
+  terminariam uma janela desse tamanho). Corrigido sem precisar de tabela/coluna nova: título já
+  catalogado há menos de `FRESCOR_IMPOSTOS_MS` (3 dias) é pulado sem bater na Tiny, usando o
+  próprio `atualizado_em` que o upsert já grava — uma chamada minutos depois passa voando pelo que
+  já foi feito e gasta o orçamento no que falta; o cron do dia seguinte também pula o que foi feito
+  há poucos dias, avançando pela lista em vez de reiniciar (e ainda revisita cada título a cada ~3
+  dias, pra pegar categoria que mudou na Tiny depois).
+- **Testado ao vivo contra a Rampa** (`vercel dev`, mesmas 290 contas a pagar): 1ª chamada
+  processou 30/290 e parou no orçamento, 0 falhas permanentes; 2ª chamada pulou os 30 já feitos e
+  avançou pra 106/290 — confirma que o checkpoint por frescor funciona (chamada seguinte avança em
+  vez de reiniciar). Uma instabilidade de rede local real no meio do teste (várias
+  `ENOTFOUND`/`ECONNRESET`, mais um 429 de verdade) serviu de prova a mais pra retentativa: nenhuma
+  delas chegou a derrubar a chamada ou virar falha permanente.
+- **Lição**: o mesmo padrão "sem retentativa" já corrigido em várias outras partes deste arquivo
+  (listagem de estoque, listagem de contas a receber/pagar do sync principal) tinha sido repetido
+  de novo num código novo — toda chamada nova à Olist precisa nascer já com a mesma pausa/
+  retentativa, não só ganhar depois de alguém reportar o erro. E "cabe numa chamada só" é uma
+  suposição que só vale até o volume real crescer — qualquer sync sem checkpoint precisa de um
+  plano B (mesmo que simples, como o frescor aqui) pro dia em que não couber mais.
+
 ---
 
 ## RLS (Row Level Security) nas 16 tabelas do projeto — ligado (2026-11-24)
@@ -1615,6 +1661,14 @@ era exposição teórica.
    `financeiro_mensal` — quase foi publicado assim). Toda vez que uma fonte de dado é substituída,
    o caminho antigo tem que ser explicitamente desligado (e os dados órfãos que ele já gravou,
    limpos), não só deixado "existir em paralelo" com o novo
+10. **Uma chamada nova à Olist nascer sem retentativa/pausa, e um sync sem checkpoint assumir
+    "cabe numa chamada só"** → ver "Sync de Impostos derrubava tudo num único 429" no Módulo
+    Financeiro. Um único 429 no meio de uma listagem ou de um loop de detalhe-por-título jogava
+    fora todo o progresso já feito; e, numa janela grande o bastante pra não caber no orçamento de
+    uma chamada, a falta de checkpoint fazia a chamada seguinte recomeçar do título 1 pra sempre,
+    nunca alcançando o fim da lista. Toda chamada nova à Olist nasce com o mesmo padrão de pausa/
+    retentativa do resto do projeto, e todo sync sem garantia de caber numa chamada só precisa de
+    algum checkpoint (mesmo que simples, como pular título já catalogado há pouco tempo)
 
 ---
 
