@@ -219,8 +219,23 @@ Single file containing all CSS and JS inline (~1000 lines). No framework, no mod
   lugar só agora.
 
 ### Rate limit Olist
-- Limite: ~120 requisições/minuto
-- Aguardar **600ms entre chamadas** em loops (importação, estoque)
+- **Limite real: 60 requisições/minuto** (não 120 — esse número nunca foi confirmado, só
+  estimado; o real foi lido ao vivo em 2026-11-26 no header `x-limit-api` de uma resposta
+  da API v2, igual pras contas Rampa e TF — plano "Evoluir"). Até essa data todo loop do
+  projeto pausava 600ms entre chamadas (~100/min) — ou seja, rodava ~70% mais rápido do
+  que a conta permite, **todo santo dia**, não só em picos. Isso explica o padrão crônico
+  de erro 429 visto nos logs desde pelo menos 2026-11-18, não uma instabilidade pontual.
+  **Corrigido**: ritmo ajustado pra 1050ms entre chamadas (`PACE_MS`, em
+  `api/financeiro.js`, `api/estoque-sync-diario.js`, `api/importar.js`, `api/relatorios.js`
+  e `api/_lib/relatorio-coleta.js`) — commit 2026-11-26. Se o volume de chamadas crescer
+  (catálogo maior, mais títulos), vale reconferir esse header de novo antes de assumir
+  que ainda é 60 (pode mudar se o plano Olist mudar) — ver `x-limit-api` na resposta de
+  qualquer chamada v2.
+- Esse ritmo por si só não bastava: ao bater em bloqueio (429 na v3, ou "API Bloqueada"
+  no corpo da v2), o loop tentava de novo no mesmo ritmo de 600/1050ms — mas a Olist pede
+  explicitamente "aguarde alguns minutos". **Corrigido** (commit anterior, mesma sessão):
+  ao detectar esse padrão de erro, pausa 15s antes de continuar, em vez de voltar direto
+  pro ritmo normal — ver `PADRAO_BLOQUEIO_OLIST`/`pausaSeBloqueio` nos mesmos arquivos.
 - O processamento em loop NUNCA deve rodar no serverless Vercel (timeout)
 - Sempre mover loops pesados para o frontend (browser)
 
@@ -1490,6 +1505,13 @@ era exposição teórica.
    das páginas seguintes aparece com valor zerado, sem erro nenhum visível (ver "Página perdida
    por rate-limit" no Relatório de Estoque). Sempre checar `status !== 200` / `itens` não ser
    array e lançar erro, nunca tratar como lista vazia
+8. **Assumir o limite da Olist sem confirmar no header `x-limit-api`** → o projeto rodou meses
+   pausando 600ms entre chamadas (~100/min), calibrado pro número "~120/min" documentado mas
+   nunca verificado — o real é 60/min (plano "Evoluir", confirmado ao vivo 2026-11-26). Isso
+   gerava bloqueio todo santo dia, não só em picos de uso. E, ao bater o bloqueio, tentar de
+   novo no mesmo ritmo de sempre em vez de pausar — a Olist pede explicitamente "aguarde alguns
+   minutos" nesse erro. Ver "Rate limit Olist" acima pro que foi corrigido (`PACE_MS` e
+   `pausaSeBloqueio`/`PADRAO_BLOQUEIO_OLIST`)
 
 ---
 
