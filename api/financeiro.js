@@ -37,6 +37,20 @@ function httpsRequest(method, hostname, path, body, headers) {
   });
 }
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+// Olist diz "aguarde alguns minutos" nesse erro (429 na V3, ou "API Bloqueada"
+// no corpo da V2) — mas o loop tentava de novo em só 600ms, o que mantinha o
+// bloqueio ativo pelo resto do orçamento inteiro, em vez de dar o tempo que a
+// própria Olist pede. Qualquer catch que bata nesse padrão insere uma pausa
+// bem maior antes do próximo item, pras chamadas seguintes terem chance real
+// de passar (achado em produção, 2026-11-26 — centenas de 429 por dia desde
+// 2026-11-23, sempre no mesmo ritmo de 600ms).
+const PADRAO_BLOQUEIO_OLIST = /HTTP 429|API Bloqueada|Excedido o n.mero de acessos/i;
+async function pausaSeBloqueio(erro, contexto) {
+  if (PADRAO_BLOQUEIO_OLIST.test(erro?.message || "")) {
+    console.error(`[financeiro-sync] bloqueio da Olist detectado (${contexto}), pausando 15s`);
+    await sleep(15000);
+  }
+}
 function parseJSON(text) { try { return JSON.parse(text); } catch { return {}; } }
 function parseBody(reqBody) {
   if (!reqBody) return {};
@@ -1075,6 +1089,7 @@ async function executarSyncDiario(req, res) {
         console.error(`[financeiro-sync] erro no título contas-pagar ${item.id}: ${erroRede.message}`);
         item.tentativas = (item.tentativas || 0) + 1;
         if (item.tentativas <= MAX_TENTATIVAS_POR_TITULO) filaPagar.push(item);
+        await pausaSeBloqueio(erroRede, `contas-pagar ${item.id}`);
       }
       processadosDesdeCheckpoint++;
       if (processadosDesdeCheckpoint >= SALVAR_PROGRESSO_A_CADA) {
@@ -1107,6 +1122,7 @@ async function executarSyncDiario(req, res) {
         console.error(`[financeiro-sync] erro na nota de venda (cmv) ${item.id}: ${erroRede.message}`);
         item.tentativas = (item.tentativas || 0) + 1;
         if (item.tentativas <= MAX_TENTATIVAS_POR_TITULO) filaCmv.push(item);
+        await pausaSeBloqueio(erroRede, `cmv nota ${item.id}`);
       }
       processadosDesdeCheckpoint++;
       if (processadosDesdeCheckpoint >= SALVAR_PROGRESSO_A_CADA) {
@@ -1324,13 +1340,20 @@ async function buscarNotasComDetalhe(tokenV2, tipoNota, ano, mes) {
   const fimBR = formatarDataBR(ano, mes, ultimoDiaDoMes(ano, mes));
   const notas = await listarNotasFiscaisV2(tokenV2, tipoNota, iniBR, fimBR);
   const resultado = [];
-  for (const n of notas) {
+  // Fila com retentativa (antes: sem nenhuma — uma nota que batesse em
+  // bloqueio da Olist era descartada pra sempre, silenciosamente, nessa
+  // mesma execução) e pausa quando detecta bloqueio (ver PADRAO_BLOQUEIO_OLIST).
+  const fila = notas.map(n => ({ n, tentativas: 0 }));
+  while (fila.length > 0) {
+    const { n, tentativas } = fila.shift();
     await sleep(600);
     try {
       const detalhe = await buscarDetalheNotaVendaV2(tokenV2, n.id);
       resultado.push({ nota: n, detalhe });
     } catch (e) {
       console.error(`[estoque-movimentos-sync] erro ao buscar nota ${n.id}: ${e.message}`);
+      if (tentativas + 1 <= MAX_TENTATIVAS_POR_TITULO) fila.push({ n, tentativas: tentativas + 1 });
+      await pausaSeBloqueio(e, `nota ${n.id}`);
     }
   }
   return resultado;

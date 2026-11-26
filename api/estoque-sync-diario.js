@@ -54,6 +54,8 @@ function httpsRequest(method, hostname, path, body, headers) {
   });
 }
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+// Mesmo padrão usado em api/financeiro.js — ver comentário lá pro motivo.
+const PADRAO_BLOQUEIO_OLIST = /HTTP 429|API Bloqueada|Excedido o n.mero de acessos/i;
 function parseJSON(text) { try { return JSON.parse(text); } catch { return {}; } }
 
 // Busca produtos ativos (situacao=A) E inativos (situacao=I) — produto
@@ -219,12 +221,20 @@ module.exports = async (req, res) => {
       const prod = fila.shift();
       await sleep(600);
       let p = null;
+      let erroProduto = null;
       try {
         const body = new URLSearchParams({ token: tokenV2, id: String(prod.id), formato: "JSON" }).toString();
         const r = await httpsRequest("POST", "api.tiny.com.br", "/api2/produto.obter.php", body,
           { "Content-Type": "application/x-www-form-urlencoded" });
-        p = parseJSON(r.text).retorno?.produto;
+        const retorno = parseJSON(r.text).retorno;
+        // Checa o erro explicitamente em vez de confiar no campo ausente —
+        // antes, um bloqueio da Olist (200 OK com retorno.status="Erro")
+        // caía direto no "sem retorno" abaixo, indistinguível de qualquer
+        // outra falha, sem nunca disparar a pausa (ver PADRAO_BLOQUEIO_OLIST).
+        if (retorno?.status === "Erro") throw new Error(retorno.erros?.[0]?.erro || "produto.obter.php retornou erro");
+        p = retorno?.produto;
       } catch (erroRede) {
+        erroProduto = erroRede;
         console.error(`[estoque-sync] erro de rede no produto ${prod.id} (${prod.nome}): ${erroRede.message}`);
       }
 
@@ -235,6 +245,14 @@ module.exports = async (req, res) => {
           fila.push({ ...prod, tentativas });
         } else {
           console.error(`[estoque-sync] produto ${prod.id} (${prod.nome}) falhou ${tentativas}x — desiste por hoje, tenta de novo amanha`);
+        }
+        // Olist diz "aguarde alguns minutos" nesse erro, mas o loop só esperava
+        // 600ms — mantinha o bloqueio ativo o resto do orçamento inteiro, em
+        // vez de dar o tempo que ela mesma pede (achado em produção,
+        // 2026-11-26 — dezenas de produtos "sem retorno" por dia desde 11-18).
+        if (erroProduto && PADRAO_BLOQUEIO_OLIST.test(erroProduto.message)) {
+          console.error(`[estoque-sync] bloqueio da Olist detectado, pausando 15s`);
+          await sleep(15000);
         }
       } else {
         const { elegivel, motivoExclusao } = classificarProduto(p);
