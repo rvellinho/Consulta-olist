@@ -566,6 +566,11 @@
       <button class="btn-sec" onclick="sincronizarImpostos()">🔄 Sincronizar tudo (Rampa + TF)</button>
     </div>
     <div id="imp-status-sync" class="hidden" style="border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px;"></div>
+    <div id="imp-progresso-wrap" class="hidden" style="margin-bottom:12px;">
+      <div style="background:var(--s2);border-radius:99px;height:8px;overflow:hidden;">
+        <div id="imp-progresso-barra" style="height:100%;background:linear-gradient(90deg,var(--ac),#ff4d6d);border-radius:99px;width:0%;transition:width .4s ease;"></div>
+      </div>
+    </div>
     <div id="estado-impostos" class="hidden"><div class="state-center"><div class="spinner"></div><p>Carregando...</p></div></div>
     <div id="tabela-impostos-wrap" class="hidden">
       <div class="table-wrap">
@@ -2681,6 +2686,11 @@ function impStatus(msg, tipo){
   el2.textContent = msg;
 }
 
+function impProgresso(pct){
+  el("imp-progresso-wrap").classList.remove("hidden");
+  el("imp-progresso-barra").style.width = Math.min(100, Math.max(0, pct)) + "%";
+}
+
 // Sincroniza TODAS as empresas (Rampa e TF são contas separadas na Olist,
 // cada uma com sua própria janela de títulos) numa só ação, e continua
 // chamando o endpoint sozinho enquanto ele devolver concluido:false — nunca
@@ -2692,25 +2702,38 @@ function impStatus(msg, tipo){
 async function sincronizarImpostos(){
   const empresas = Object.keys(EMPRESAS);
   const resumos = [];
+  impProgresso(0);
   try{
-    for(const empresa of empresas){
+    for(let i = 0; i < empresas.length; i++){
+      const empresa = empresas[i];
+      // Cada empresa ocupa sua fatia igual do total (Rampa 0-50%, TF 50-100%
+      // pra 2 empresas) — dentro da fatia, o % é processados/totalIds da
+      // ÚLTIMA chamada (que já conta tudo revisto até aqui nessa empresa,
+      // skip por frescor incluído, ver "Checkpoint por FRESCOR" no CLAUDE.md).
+      const base = (i / empresas.length) * 100;
+      const faixa = 100 / empresas.length;
+      impStatus(`Sincronizando ${EMPRESAS[empresa].label} (${i+1}/${empresas.length})... iniciando — o app continua sozinho até terminar, pode levar vários minutos.`, "ok");
       let resp = null, chamadas = 0;
       do{
         chamadas++;
         if(chamadas > 30){
           throw new Error(`${EMPRESAS[empresa].label}: passou de 30 chamadas sem terminar — pare e peça pra alguém olhar antes de continuar.`);
         }
-        const progresso = resp ? ` (${resp.processados}/${resp.totalIds} na última passada)` : "";
-        impStatus(`Sincronizando ${EMPRESAS[empresa].label}...${progresso} — o app continua sozinho até terminar, pode levar vários minutos.`, "ok");
         const r = await fetch(`/api/financeiro?acao=impostos-sync&empresa=${empresa}`, { method:"POST" });
         resp = await r.json();
         if(!r.ok || !resp.ok) throw new Error(`${EMPRESAS[empresa].label}: ${resp.erro || `Erro ${r.status}`}`);
+        const fracaoEmpresa = resp.totalIds ? resp.processados / resp.totalIds : 1;
+        impProgresso(base + fracaoEmpresa * faixa);
+        if(!resp.concluido){
+          impStatus(`Sincronizando ${EMPRESAS[empresa].label} (${i+1}/${empresas.length}) — ${Math.round(fracaoEmpresa*100)}% (${resp.processados}/${resp.totalIds} títulos) — continuando sozinho...`, "ok");
+        }
       }while(!resp.concluido);
+      impProgresso(base + faixa);
       resumos.push(`${EMPRESAS[empresa].label}: ${resp.processados}/${resp.totalIds} título(s), ${resp.impostos ?? 0} de imposto${resp.falhas ? ` (${resp.falhas} falharam)` : ""}`);
     }
     const temFalha = resumos.some(s => s.includes("falharam"));
     const aviso = temFalha ? " Alguns títulos falharam por bloqueio momentâneo da Olist — sincronize de novo mais tarde pra tentar só esses." : "";
-    impStatus(`Sincronizado — ${resumos.join(" · ")}.${aviso}`, temFalha ? "erro" : "ok");
+    impStatus(`Sincronizado (100%) — ${resumos.join(" · ")}.${aviso}`, temFalha ? "erro" : "ok");
   }catch(err){
     impStatus("Erro ao sincronizar: " + err.message, "erro");
   }finally{
