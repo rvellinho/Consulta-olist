@@ -799,7 +799,7 @@
       <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:12px;align-items:flex-end;">
         <div class="fg-sm" style="width:110px;">
           <label>Empresa</label>
-          <select id="mf-empresa"><option value="rampa">Rampa</option><option value="tf">TF</option></select>
+          <select id="mf-empresa" onchange="trocarEmpresaModalFin()"><option value="rampa">Rampa</option><option value="tf">TF</option></select>
         </div>
         <div class="fg-sm" style="width:90px;">
           <label>Ano</label>
@@ -809,13 +809,9 @@
           <label>Mês</label>
           <select id="mf-mes"></select>
         </div>
-        <div class="fg-sm" style="min-width:220px;">
-          <label>Grupo (linha do DRE)</label>
-          <select id="mf-grupo"></select>
-        </div>
-        <div class="fg-sm" style="min-width:160px;">
-          <label>Subitem (opcional)</label>
-          <input type="text" id="mf-subitem" placeholder="ex: Provisão, Ajuste" />
+        <div class="fg-sm" style="min-width:260px;">
+          <label>Categoria (nível 3)</label>
+          <select id="mf-categoria"></select>
         </div>
         <div class="fg-sm" style="width:140px;">
           <label>Valor (R$)</label>
@@ -833,7 +829,7 @@
       <div class="table-wrap">
         <table style="width:100%;border-collapse:collapse;">
           <thead><tr>
-            <th>Empresa</th><th>Ano</th><th>Mês</th><th>Grupo</th><th>Subitem</th><th style="text-align:right;">Valor</th><th></th>
+            <th>Empresa</th><th>Ano</th><th>Mês</th><th>Grupo</th><th>Categoria</th><th style="text-align:right;">Valor</th><th></th>
           </tr></thead>
           <tbody id="mf-tbody"></tbody>
         </table>
@@ -2408,8 +2404,7 @@ async function excluirLancamentoCP(id){
 
 // FINANCEIRO (DRE)
 let planoContasFin = [];     // cache de /api/financeiro?acao=plano-contas (planoContas)
-let categoriasForcaManualFin = new Set(); // categoria_id com forca_manual=true, pra marcar ⚠ no form manual
-let categoriasPorEmpresaFin = {}; // cache de /api/financeiro?acao=plano-contas&empresa=X (categorias, nível 3) — por empresa, pro select do modal de intercompany (a categoria é da empresa de destino, que pode ser qualquer uma das duas, independente da empresa escolhida no cabeçalho)
+let categoriasPorEmpresaFin = {}; // cache de /api/financeiro?acao=plano-contas&empresa=X (categorias, nível 3) — por empresa, usado tanto pelo select do modal de intercompany (categoria da empresa de destino) quanto pelo de lançamento manual (categoria da empresa escolhida no próprio modal)
 let lancamentosFin = [];
 let finEditandoId = null;
 
@@ -3135,23 +3130,49 @@ async function removerAlocacao(){
 // --- modal de lançamento manual ---
 
 async function carregarPlanoContasFin(){
-  if(planoContasFin.length) return; // plano de contas é fixo, não precisa recarregar toda vez
   try{
-    const r = await fetch(`/api/financeiro?acao=plano-contas&empresa=${el("mf-empresa").value}`);
-    if(!r.ok) throw new Error(`Erro ${r.status}`);
-    const d = await r.json();
-    planoContasFin = d.planoContas || [];
-    categoriasForcaManualFin = new Set((d.categorias||[]).filter(c=>c.forca_manual).map(c=>c.categoria_id));
-    el("mf-grupo").innerHTML = planoContasFin.map(g=>{
-      const marca = (g.regime === "manual") ? "⚠ " : "";
-      return `<option value="${g.codigo_grupo}">${marca}${g.codigo_grupo} ${g.descricao_grupo}</option>`;
-    }).join("");
+    // planoContasFin (nível 2, compartilhado entre empresas) é fixo — só
+    // busca uma vez. categoriasPorEmpresaFin (nível 3, uma lista por
+    // empresa — números diferem entre Rampa/TF, ver CLAUDE.md) é cacheada
+    // por carregarCategoriasDestino, reaproveitada aqui (mesma fonte já
+    // usada pelo select de categoria do modal de intercompany).
+    await carregarCategoriasDestino(el("mf-empresa").value);
+    montarSelectCategoriaFin();
   }catch(e){
     // Não deixa uma falha aqui impedir o modal de abrir — só avisa e deixa
-    // o select de grupo vazio (o resto do modal continua usável).
-    el("mf-grupo").innerHTML = "";
+    // o select de categoria vazio (o resto do modal continua usável).
+    el("mf-categoria").innerHTML = "";
     mostrarMsgFin("Não foi possível carregar o plano de contas: " + e.message, false);
   }
+}
+
+// Escolha da categoria é sempre do nível 3 (subcategoria real da Tiny da
+// empresa escolhida no próprio modal), agrupada por nível 2 — nunca um
+// grupo sozinho (mesma decisão já aplicada no select de intercompany,
+// 2026-11-24: evita cair sem querer numa conta errada). Valor da option é
+// o categoria_id (a tabela financeiro_lancamentos_manuais já tem essa FK —
+// resolverLeaf já prioriza categoria_id sobre subitem no backend).
+function montarSelectCategoriaFin(){
+  const empresa = el("mf-empresa").value;
+  const categorias = categoriasPorEmpresaFin[empresa] || [];
+  const porGrupo = {};
+  categorias.forEach(c=>{ if(c.codigo_grupo && c.descricao_raw) (porGrupo[c.codigo_grupo] = porGrupo[c.codigo_grupo]||[]).push(c); });
+  const optGroups = planoContasFin.map(g=>{
+    const leaves = (porGrupo[g.codigo_grupo]||[]).slice().sort((a,b)=>a.descricao_raw.localeCompare(b.descricao_raw,undefined,{numeric:true}));
+    if(!leaves.length) return "";
+    const marca = (g.regime === "manual") ? "⚠ " : "";
+    const opts = leaves.map(c=>`<option value="${c.categoria_id}">${c.descricao_raw}</option>`).join("");
+    return `<optgroup label="${marca}${g.codigo_grupo} ${g.descricao_grupo}">${opts}</optgroup>`;
+  }).join("");
+  el("mf-categoria").innerHTML = `<option value="" disabled selected>Selecione uma categoria...</option>${optGroups}`;
+  // Se a empresa mudou com uma categoria já escolhida antes, não dá pra
+  // manter o id selecionado (categoria_id é específico de cada empresa) —
+  // volta pro placeholder, igual ao select de intercompany.
+}
+
+async function trocarEmpresaModalFin(){
+  await carregarCategoriasDestino(el("mf-empresa").value);
+  montarSelectCategoriaFin();
 }
 
 function inicializarFormFin(){
@@ -3189,6 +3210,11 @@ async function carregarLancamentosFin(){
     const r = await fetch("/api/financeiro");
     if(!r.ok) throw new Error("Falha ao carregar lançamentos");
     lancamentosFin = await r.json();
+    // Categoria (nível 3) é específica de cada empresa — carrega a lista de
+    // quem aparecer na tabela antes de renderizar, senão a coluna Categoria
+    // ficaria vazia pra linhas da empresa que ainda não tinha sido carregada.
+    const empresas = [...new Set(lancamentosFin.map(l=>l.empresa))];
+    await Promise.all(empresas.map(carregarCategoriasDestino));
     renderTabelaFin();
   }catch(e){
     el("mf-tbody").innerHTML = `<tr><td colspan="7" style="text-align:center;color:var(--red);padding:16px;">Erro: ${e.message}</td></tr>`;
@@ -3198,6 +3224,16 @@ async function carregarLancamentosFin(){
 function descricaoGrupoFin(codigo_grupo){
   const g = planoContasFin.find(x=>x.codigo_grupo===codigo_grupo);
   return g ? `${g.codigo_grupo} ${g.descricao_grupo}` : codigo_grupo;
+}
+
+// categoria_id tem prioridade (igual resolverLeaf no backend) — subitem só
+// aparece pra lançamento antigo, salvo antes dessa tela usar categoria real.
+function descricaoCategoriaFin(l){
+  if(l.categoria_id != null){
+    const cat = (categoriasPorEmpresaFin[l.empresa]||[]).find(c=>c.categoria_id===l.categoria_id);
+    if(cat) return cat.descricao_raw;
+  }
+  return l.subitem || "—";
 }
 
 function renderTabelaFin(){
@@ -3211,7 +3247,7 @@ function renderTabelaFin(){
       <td>${l.ano}</td>
       <td>${MESES_NOME[l.mes-1]}</td>
       <td>${descricaoGrupoFin(l.codigo_grupo)}</td>
-      <td>${l.subitem || "—"}</td>
+      <td>${descricaoCategoriaFin(l)}</td>
       <td style="text-align:right;">${formatarMoeda(Number(l.valor))}</td>
       <td style="text-align:right;white-space:nowrap;">
         <button class="btn-sec" style="padding:5px 10px;font-size:12px;" onclick="editarLancamentoFin(${l.id})">✏️</button>
@@ -3220,15 +3256,16 @@ function renderTabelaFin(){
     </tr>`).join("");
 }
 
-function editarLancamentoFin(id){
+async function editarLancamentoFin(id){
   const l = lancamentosFin.find(x=>x.id===id);
   if(!l) return;
   finEditandoId = id;
   el("mf-empresa").value = l.empresa;
   el("mf-ano").value = l.ano;
   el("mf-mes").value = l.mes;
-  el("mf-grupo").value = l.codigo_grupo;
-  el("mf-subitem").value = l.subitem || "";
+  await carregarCategoriasDestino(l.empresa);
+  montarSelectCategoriaFin();
+  if(l.categoria_id != null) el("mf-categoria").value = String(l.categoria_id);
   el("mf-valor").value = l.valor;
   el("mf-obs").value = l.observacao || "";
   el("mf-btn-salvar").textContent = "Atualizar";
@@ -3237,7 +3274,7 @@ function editarLancamentoFin(id){
 
 function cancelarEdicaoFin(){
   finEditandoId = null;
-  el("mf-subitem").value = "";
+  if(el("mf-categoria").options.length) el("mf-categoria").selectedIndex = 0;
   el("mf-valor").value = "";
   el("mf-obs").value = "";
   el("mf-btn-salvar").textContent = "Salvar";
@@ -3248,16 +3285,17 @@ async function salvarLancamentoFin(){
   const empresa = el("mf-empresa").value;
   const ano = parseInt(el("mf-ano").value, 10);
   const mes = parseInt(el("mf-mes").value, 10);
-  const codigo_grupo = el("mf-grupo").value;
-  const subitem = el("mf-subitem").value.trim();
+  const categoria_id = el("mf-categoria").value ? Number(el("mf-categoria").value) : null;
+  const cat = categoria_id != null ? (categoriasPorEmpresaFin[empresa]||[]).find(c=>c.categoria_id===categoria_id) : null;
+  const codigo_grupo = cat?.codigo_grupo;
   const valor = parseFloat(el("mf-valor").value);
   const observacao = el("mf-obs").value.trim();
-  if(!ano || !mes || !codigo_grupo || isNaN(valor)){ mostrarMsgFin("Preencha ano, mês, grupo e valor.", false); return; }
+  if(!ano || !mes || !categoria_id || !codigo_grupo || isNaN(valor)){ mostrarMsgFin("Preencha ano, mês, categoria e valor.", false); return; }
 
   const btn = el("mf-btn-salvar");
   btn.disabled = true;
   try{
-    const payload = { empresa, ano, mes, codigo_grupo, subitem: subitem || null, valor, observacao: observacao || null, usuario: usuarioAtual.login };
+    const payload = { empresa, ano, mes, codigo_grupo, categoria_id, subitem: null, valor, observacao: observacao || null, usuario: usuarioAtual.login };
     let r;
     if(finEditandoId){
       r = await fetch("/api/financeiro", { method:"PUT", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ id: finEditandoId, ...payload }) });

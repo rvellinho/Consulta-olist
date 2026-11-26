@@ -1093,29 +1093,43 @@ async function executarSyncDiario(req, res) {
       console.log(`[financeiro-sync:${empresa}] retomando: ${status.pendentes.receita.length} receber + ${status.pendentes.pagar.length} pagar + ${(status.pendentes.cmv || []).length} cmv pendentes`);
     }
 
-    // Catch-up: título de contas a pagar lançado na Tiny DEPOIS da foto
-    // inicial deste ciclo. Um ciclo grande (ex: TF, ~1150 títulos) pode levar
-    // vários dias só pra terminar o CMV — a fila de pagar fica travada na
-    // lista de ids que existia no momento em que o ciclo começou, então um
-    // título novo (mesmo com vencimento bem dentro da janela já coberta)
-    // nunca era nem avaliado até o ciclo inteiro terminar e um novo começar
-    // do zero. Achado ao vivo, 2026-11-26: 3 títulos da TF (OLIST - CONTA
-    // DIGITAL, STONE PAGAMENTOS x2, vencimento 31/10) ausentes de
-    // financeiro_mensal porque o ciclo da TF travou a lista de pagar em
-    // 2026-11-25, antes desses títulos existirem na Tiny.
+    // Catch-up: (1) título de contas a pagar lançado na Tiny DEPOIS da foto
+    // inicial deste ciclo, e (2) título já processado nesse ciclo cuja
+    // categoria foi trocada na Tiny DEPOIS de ter sido processado — nos dois
+    // casos, um ciclo grande (ex: TF, ~1150 títulos) pode levar vários dias
+    // só pra terminar o CMV, e a fila de pagar fica travada na lista/
+    // classificação que existia no momento em que cada título foi
+    // processado, sem nunca ser revisitada até o ciclo inteiro terminar e um
+    // novo começar do zero. Achados ao vivo, 2026-11-26: 3 títulos da TF
+    // (OLIST - CONTA DIGITAL, STONE PAGAMENTOS x2, vencimento 31/10)
+    // ausentes de financeiro_mensal (caso 1); e um título da Rampa
+    // (HENRIQUE DE OLIVEIRA MEDINA, R$846) preso na categoria antiga
+    // "2.05.02 Limpeza e conservação" depois do Rafael reclassificar pra
+    // "2.05.03 Manutenção predial" direto na Tiny (caso 2) — confirmado ao
+    // vivo comparando o `categoria.id` atual da Tiny com o que estava
+    // gravado em financeiro_mensal.
     // Reconsulta só a LISTAGEM (barata, paginada, sem detalhe por título) —
     // sempre que a fila de pagar já estiver vazia (fase terminada ou nunca
-    // mais tocada) — comparando contra todo id já visto neste ciclo
-    // (status.pendentes.idsVistosPagar) pra achar só quem é genuinamente
-    // novo. `periodosPagar`/`idsVistosPagar` ausentes (ciclo em_andamento
-    // que já estava rodando ANTES desse fix existir) cai no fallback: usa os
-    // `periodos` recalculados agora (seguro — só muda se o ciclo atravessar
-    // virada de mês) e trata todo mundo como "não visto" — reprocessa a fila
-    // de pagar inteira uma vez (upsert idempotente, só custa chamadas extra
-    // à Tiny), e a partir daí passa a usar o checkpoint normalmente.
+    // mais tocada) — e usa `idsVistosPagar` (mapa chave -> quando foi
+    // enfileirado pela última vez, não mais um Set) pra decidir: nunca visto
+    // → entra (caso 1); visto há mais de FRESCOR_PAGAR_MS → entra de novo,
+    // pra repegar qualquer reclassificação feita na Tiny nesse meio-tempo
+    // (caso 2); visto há pouco tempo → pula. `periodosPagar`/`idsVistosPagar`
+    // ausentes (ciclo em_andamento que já estava rodando ANTES desse fix
+    // existir) cai no fallback: usa os `periodos` recalculados agora (seguro
+    // — só muda se o ciclo atravessar virada de mês) e trata todo mundo como
+    // "nunca visto" — reprocessa a fila de pagar inteira uma vez (upsert
+    // idempotente, só custa chamadas extra à Tiny), e a partir daí passa a
+    // usar o checkpoint normalmente. Formato antigo de `idsVistosPagar`
+    // (array simples, do primeiro deploy deste catch-up) também cai nesse
+    // mesmo fallback — trata tudo como "nunca visto" uma vez, pra migrar sem
+    // precisar de um passo separado.
+    const FRESCOR_PAGAR_MS = 5 * 24 * 60 * 60 * 1000; // 5 dias
     if (status.pendentes.pagar.length === 0) {
       const periodosPagar = status.pendentes.periodosPagar || periodos;
-      const vistos = new Set(status.pendentes.idsVistosPagar || []);
+      const vistosBrutos = status.pendentes.idsVistosPagar;
+      const vistos = (vistosBrutos && !Array.isArray(vistosBrutos)) ? { ...vistosBrutos } : {};
+      const agora = Date.now();
       const novosPagar = [];
       for (const p of periodosPagar) {
         const jIni = addMeses(p.ano, p.mes, -1);
@@ -1124,18 +1138,19 @@ async function executarSyncDiario(req, res) {
         await sleep(PACE_MS);
         for (const id of idsPagar) {
           const chave = `${id}:${p.ano}:${p.mes}`;
-          if (vistos.has(chave)) continue;
-          vistos.add(chave);
+          const ultimoVisto = vistos[chave];
+          if (ultimoVisto && (agora - new Date(ultimoVisto).getTime()) < FRESCOR_PAGAR_MS) continue;
+          vistos[chave] = new Date(agora).toISOString();
           novosPagar.push({ id, ano: p.ano, mes: p.mes });
         }
       }
       if (novosPagar.length) {
-        console.log(`[financeiro-sync:${empresa}] catch-up: ${novosPagar.length} título(s) novo(s) de contas a pagar (entraram na Tiny depois do início deste ciclo, ou primeira vez rodando o catch-up)`);
+        console.log(`[financeiro-sync:${empresa}] catch-up: ${novosPagar.length} título(s) de contas a pagar novo(s) ou pra revisitar (categoria pode ter mudado na Tiny)`);
         status.pendentes.pagar = novosPagar;
         status.total += novosPagar.length;
       }
       status.pendentes.periodosPagar = periodosPagar;
-      status.pendentes.idsVistosPagar = [...vistos];
+      status.pendentes.idsVistosPagar = vistos;
       await salvarStatusSync(empresa, status);
     }
 

@@ -1813,6 +1813,58 @@ jeito.
   dono único (aqui, `ultima_tentativa_em` pertence só a `marcarTentativaSync`) nunca deveria viajar
   dentro do payload de outra função que lê-e-regrava o resto do estado.
 
+### Catch-up de pagar também revisita título já processado (categoria pode ter mudado na Tiny) — 2026-11-26
+Mesmo dia da correção acima, Rafael reportou outro caso real: um título da Rampa (HENRIQUE DE
+OLIVEIRA MEDINA, R$846,00, "TIMBERS - Infra e instalação dos ares obra Fabrique...") continuava
+preso na categoria antiga (`2.05.02 Limpeza e conservação`) no DRE, mesmo depois de ele ter
+reclassificado esse título na própria Tiny pra `2.05.03 Manutenção predial`. Confirmado ao vivo
+buscando o título direto na Tiny: `categoria: {id: 361455318, descricao: "2.05.03 Manutenção
+predial"}` — nosso `financeiro_mensal` ainda tinha `categoria_id=361455316` (a antiga).
+
+Causa: uma vez que um id sai da fila de pagar (processado), ele nunca é revisitado dentro do mesmo
+ciclo — só um ciclo novo (fresh, com listagem+reclassificação completa) pega uma mudança de
+categoria feita na Tiny depois. O catch-up de 2026-11-26 (acima) só resolvia "título novo", não
+"título já visto cuja categoria mudou".
+
+- **Corrigido**: `idsVistosPagar` deixou de ser um array simples (chave vista = nunca mais
+  revisitada) e virou um mapa `chave -> quando foi enfileirado pela última vez`. No catch-up
+  (roda sempre que a fila de pagar esvaziar), cada id da listagem fresca entra na fila de novo
+  se: nunca foi visto (título novo, caso de 2026-11-26 mais cedo) OU já foi visto, mas há mais de
+  `FRESCOR_PAGAR_MS` (5 dias). Isso faz qualquer título dentro da janela de 2 meses ser
+  reprocessado pelo menos 1x a cada ~5 dias, pegando reclassificação de categoria feita na Tiny
+  nesse meio-tempo — mesmo padrão de "frescor" já usado no sync de Impostos (lá, 3 dias).
+  `idsVistosPagar` no formato antigo (array, do primeiro deploy deste catch-up) ou ausente (ciclo
+  anterior a qualquer um dos dois fixes) cai no mesmo fallback: trata tudo como "nunca visto" uma
+  vez, migrando sem precisar de passo manual.
+- **Lição**: um catch-up pensado só pra "pegar o que é novo" é incompleto se o dado já visto
+  também pode MUDAR depois (aqui: a categoria de um título que a Tiny deixa editar livremente a
+  qualquer momento) — qualquer checkpoint "já vi isso, não preciso olhar de novo" precisa de uma
+  janela de frescor, não um "visto = nunca mais revisitado" permanente.
+
+### Modal de Lançamento Manual: categoria agora é do nível 3, não do nível 2 (pedido do Rafael, 2026-11-26)
+Até aqui, "+ Lançamento Manual" só deixava escolher o GRUPO (nível 2, ex: "2.05 Despesas de
+Infra-estrutura") e digitar um "Subitem" livre opcional — mesmo a tabela `financeiro_lancamentos_
+manuais` já tendo uma coluna `categoria_id` (FK pra uma categoria real da Tiny) que `resolverLeaf`
+já priorizava sobre `subitem` no backend, nunca exposta nessa tela. Rafael pediu: "aqui temos que
+ter a escolha da categoria no terceiro nivel, nao no segundo" — mesma régua já aplicada ao select
+de categoria de destino do intercompany (2026-11-24).
+
+- **Frontend only** — nenhuma mudança de backend precisou (o campo e a prioridade em
+  `resolverLeaf` já existiam). O select `mf-grupo` (nível 2) + input `mf-subitem` viraram um único
+  select `mf-categoria` (nível 3, agrupado por `<optgroup>` nível 2, mesma fonte —
+  `categoriasPorEmpresaFin`/`carregarCategoriasDestino`, já cacheada por empresa pro modal de
+  intercompany, reaproveitada aqui) — valor da option é o `categoria_id` direto (mais simples que
+  o texto usado no intercompany, já que aqui a tabela tem a FK pronta). Grupo com `regime='manual'`
+  continua marcado com ⚠ no `<optgroup>`, mesmo aviso de antes. Trocar a empresa do modal
+  (`mf-empresa`) recarrega a lista de categorias certa (números diferem entre Rampa/TF).
+- Tabela de lançamentos já salvos: coluna "Subitem" virou "Categoria" (`descricaoCategoriaFin`,
+  mesma prioridade categoria_id→subitem do `resolverLeaf` do backend, só que no cliente — cobre
+  lançamento antigo salvo só com subitem, que continua aparecendo igual antes).
+- **Testado ao vivo** (`vercel dev`, sessão simulada): criado um lançamento de teste em
+  "2.05.03 Manutenção predial" (categoria_id 361455318) — gravou `codigo_grupo="2.05"` e
+  `categoria_id=361455318` corretos, apareceu na tabela com o rótulo certo, reabriu pra edição com
+  a categoria pré-selecionada — removido depois (era só teste).
+
 ---
 
 ## RLS (Row Level Security) nas 16 tabelas do projeto — ligado (2026-11-24)
