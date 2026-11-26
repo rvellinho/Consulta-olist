@@ -290,6 +290,13 @@ function montarDRE(planoContas, linhasMensal, linhasManuais, categoriasPorEmpres
       });
   }
 
+  // Busca por TEXTO (não por codigo_leaf/prefixo numérico) — achado ao vivo
+  // que a TF numera essa mesma conta como "5.02.03" na própria Tiny (mesmo
+  // grupo_raw "6.02 Saídas", prefixo diferente do da Rampa). Compartilhado
+  // entre o filtro da tabela "fora do DRE" (abaixo) e o cálculo de
+  // amortização (mais abaixo, onde essa linha já aparece em destaque).
+  const REGEX_LEAF_PARCELAS_EMPRESTIMO = /Parcelas de Empr[eé]stimos e Parcelamentos/i;
+
   const porLinhaDre = {}; // { [linha_dre]: {operacional, intercompany} }
   const gruposPorLinhaDre = {};
   // "Fora do DRE" (grupos com entra_dre=false, hoje só 6.01/6.02) — pedido do
@@ -299,8 +306,14 @@ function montarDRE(planoContas, linhasMensal, linhasManuais, categoriasPorEmpres
   const gruposForaDre = [];
   for (const grupo of planoContas) {
     const valores = porGrupo[grupo.codigo_grupo] || { operacional: 0, intercompany: 0 };
-    const leafs = montarLeafsOrdenados(grupo.codigo_grupo);
     if (!grupo.entra_dre) {
+      // "Parcelas de Empréstimos e Parcelamentos" não repete aqui — pedido do
+      // Rafael, 2026-11-26: já aparece em destaque na tabela de Amortização
+      // logo acima, não precisa mostrar de novo na conferência. O total do
+      // grupo (6.02 Saídas) continua somando o valor real, incluindo essa
+      // parcela — só a LINHA da árvore de nível 3 fica escondida.
+      const leafs = montarLeafsOrdenados(grupo.codigo_grupo)
+        .filter(lf => !REGEX_LEAF_PARCELAS_EMPRESTIMO.test(lf.descricao));
       gruposForaDre.push({
         codigo_grupo: grupo.codigo_grupo, descricao_grupo: grupo.descricao_grupo,
         valor: valores.operacional + valores.intercompany,
@@ -309,6 +322,7 @@ function montarDRE(planoContas, linhasMensal, linhasManuais, categoriasPorEmpres
       });
       continue;
     }
+    const leafs = montarLeafsOrdenados(grupo.codigo_grupo);
     if (!porLinhaDre[grupo.linha_dre]) porLinhaDre[grupo.linha_dre] = { operacional: 0, intercompany: 0 };
     porLinhaDre[grupo.linha_dre].operacional += valores.operacional;
     porLinhaDre[grupo.linha_dre].intercompany += valores.intercompany;
@@ -345,13 +359,13 @@ function montarDRE(planoContas, linhasMensal, linhasManuais, categoriasPorEmpres
   // um resultado ajustado que também desconta esse principal do Resultado do
   // Período — ele é saída de caixa real (pagamento de dívida), mas não é uma
   // despesa do regime de competência do DRE normal.
-  // Busca por TEXTO (não por codigo_leaf/prefixo numérico): achado ao vivo
-  // que a TF numera essas mesmas contas na própria Tiny como "5.02.03"/
-  // "5.02.01"/"5.02.02" (mesmo grupo_raw "6.02 Saídas", prefixo diferente do
-  // da Rampa) — um prefixo fixo "6.02.03"/"3.01.02" bateria certo só pra
-  // Rampa e ficaria mudo pra TF (e pro consolidado, que soma as duas). Soma
-  // (em vez de achar só a 1ª ocorrência) porque o consolidado tem as duas
-  // variantes de texto como leafs DIFERENTES no mesmo grupo.
+  // Busca por TEXTO (REGEX_LEAF_PARCELAS_EMPRESTIMO, declarada acima — não
+  // por codigo_leaf/prefixo numérico): achado ao vivo que a TF numera essa
+  // conta na própria Tiny como "5.02.03" (mesmo grupo_raw "6.02 Saídas",
+  // prefixo diferente do da Rampa) — um prefixo fixo "6.02.03" bateria certo
+  // só pra Rampa e ficaria mudo pra TF (e pro consolidado, que soma as
+  // duas). Soma (em vez de achar só a 1ª ocorrência) porque o consolidado
+  // tem as duas variantes de texto como leafs DIFERENTES no mesmo grupo.
   function somarLeafsPorTexto(codigoGrupo, regex) {
     const leafsGrupo = porGrupoLeaf[codigoGrupo] || {};
     let operacional = 0, intercompany = 0;
@@ -360,7 +374,7 @@ function montarDRE(planoContas, linhasMensal, linhasManuais, categoriasPorEmpres
     }
     return { operacional, intercompany, valor: operacional + intercompany };
   }
-  const amortLinha6023 = somarLeafsPorTexto("6.02", /Parcelas de Empr[eé]stimos e Parcelamentos/i);
+  const amortLinha6023 = somarLeafsPorTexto("6.02", REGEX_LEAF_PARCELAS_EMPRESTIMO);
   const amortJuros = somarLeafsPorTexto("3.01", /Despesas de empr[eé]stimos e financiamentos/i);
   const amortValorAmortizado = {
     operacional: amortLinha6023.operacional - amortJuros.operacional,

@@ -1716,6 +1716,12 @@ do DRE que filtrava por `entra_dre`) — não precisou de nenhuma chamada nova �
   nenhuma mudança) — só pra conferência visual, nunca entra em nenhum total. Objetivo do Rafael:
   revisar se não tem lançamento de contas a pagar classificado aí por engano que devia estar numa
   categoria real do DRE.
+  - **Ajuste (mesmo dia)**: a leaf "Parcelas de Empréstimos e Parcelamentos" foi tirada da árvore
+    dessa tabela — pedido do Rafael: "já colocamos acima nas amortizações", redundante repetir a
+    mesma linha nas duas tabelas. O TOTAL do grupo "6.02 Saídas" continua somando o valor cheio
+    (sem mudar); só a linha de nível 3 some da lista (`montarDRE`, filtro por
+    `REGEX_LEAF_PARCELAS_EMPRESTIMO` só na construção de `gruposForaDre`, não no cálculo do grupo
+    nem no da tabela de Amortização).
 - **Achado buscando os valores de 6.02.03/3.01.02**: a TF numera essas categorias na própria Tiny
   diferente da Rampa — o mesmo item "Parcelas de Empréstimos e Parcelamentos" (`grupo_raw` "6.02
   Saídas" nas duas empresas) tem `codigo_leaf`/prefixo "6.02.03" na Rampa mas "5.02.03" na TF
