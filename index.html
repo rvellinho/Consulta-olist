@@ -2433,9 +2433,13 @@ function inicializarFiltrosFinanceiro(){
     el("fin-mes").innerHTML = MESES_NOME.map((nome,i)=>`<option value="${i+1}">${nome}</option>`).join("");
   }
   if(!el("fin-ano").value){
+    // Mês anterior ao atual (o último já encerrado), não o corrente — pedido
+    // do Rafael, 2026-11-27: ao abrir a tela, o mês em andamento ainda não
+    // fechou, então não é o que normalmente se quer conferir primeiro.
     const hoje = new Date();
-    el("fin-ano").value = hoje.getFullYear();
-    el("fin-mes").value = hoje.getMonth() + 1;
+    const mesAnterior = new Date(hoje.getFullYear(), hoje.getMonth() - 1, 1);
+    el("fin-ano").value = mesAnterior.getFullYear();
+    el("fin-mes").value = mesAnterior.getMonth() + 1;
   }
 }
 
