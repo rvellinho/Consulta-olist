@@ -1916,31 +1916,55 @@ mostrando R$20.862,91 no nosso sistema vs R$22.997,86 que ele viu na Tiny.
   (2.02.01, Rampa): outubro bateu **exatamente R$1.470,36** (2 títulos) — o mesmo valor que
   Rafael reportou como faltando. Era o mesmo bug já corrigido (fila de pagar só revisitada no
   "resume" antigo) — nenhuma correção nova precisou.
-- **6.02.03 — ainda não resolvido/explicado.** Mesmo depois do ciclo completo (fila de pagar
-  zerada), `financeiro_mensal` continua com os mesmos 5 títulos de outubro somando R$20.862,91 —
-  igual ao valor já documentado antes de qualquer fix. Não é o mesmo bug do 2.02.01 (esse já foi
-  descartado pela re-execução completa).
-- **Tentativa de achar os títulos faltantes esbarrou numa limitação real da API da Tiny,
-  descoberta nesta investigação**: o parâmetro `categoriaId` em `GET /public-api/v3/contas-pagar`
-  (listagem) **é ignorado silenciosamente** — testado ao vivo passando categorias diferentes
-  (inclusive uma inexistente pro contexto) e o `paginacao.total` nunca mudou, só o filtro de
-  `situacao`/datas de vencimento tem efeito real. A categoria de um título só existe no endpoint
-  de **detalhe** (`GET /public-api/v3/contas-pagar/{id}`), nunca na listagem — então não tem como
-  filtrar por categoria sem buscar detalhe título por título. Pra outubro, isso significa ~550
-  chamadas de detalhe (todo título pago com vencimento numa janela ampla o bastante pra não perder
-  nenhum fora do padrão ±1 mês que o sync usa) só pra achar os que batem 6.02.03 — caro demais pra
-  rodar como diagnóstico pontual, indo contra a política explícita de "~30/min, metade reservada
-  pra Mercos/Nuvemshop" (ver "Rate limit Olist" acima).
-- **Fica pendente**: confirmar com o Rafael qual tela/filtro da Tiny ele usou pra chegar em
-  R$22.997,86 (período por vencimento ou por pagamento? só essa categoria ou um relatório
-  agregado?) — sem saber o método exato dele, não dá pra reproduzir o número pra comparar título a
-  título. Os 5 títulos que o DRE já mostra (BMP, Secretaria da Fazenda do RS, Itaú — ver seção
-  "Duas tabelas novas abaixo do DRE" acima) foram conferidos e são reais/corretos; a pergunta é só
-  se falta algum título a mais, não se os 5 atuais estão errados.
-- **Lição**: nem todo parâmetro de filtro documentado (ou aparentemente aceito, já que não dá erro
-  400) numa listagem da API da Tiny realmente filtra — vale confirmar com um teste rápido (valor
-  absurdo/categoria trocada não muda o total) antes de depender dele, em vez de assumir que um
-  HTTP 200 sem erro significa que o filtro funcionou.
+- **6.02.03 — explicado, mas é um limite real da própria Tiny, não um bug nosso.** Rafael mandou
+  print da tela da Tiny mostrando 2 títulos a mais de outubro que o nosso DRE não tinha: `364706897`
+  (R$635,00, "TIMBERS - PARCELAMENTO PIS E CONFINS MESES ABRIL/JULHO Par. 24/49") e `364706764`
+  (R$1.499,95, "RAMPA - parcelamento das dívidas federais da RAMPA Par. 25/59"). Os dois existem de
+  verdade (confirmado buscando direto pelo ID: categoria 6.02.03, situação paga, vencimento e
+  liquidação 30/10/2026) — `20.862,91 + 635,00 + 1.499,95 = 22.997,86`, bate exatamente com o
+  número do Rafael.
+  - **Causa raiz: esses dois títulos (e, confirmado depois, toda a série de parcelas anteriores
+    da mesma "TIMBERS - PARCELAMENTO PIS E CONFINS MESES ABRIL/JULHO" — Par. 22/49, 23/49 etc.,
+    meses diferentes, IDs diferentes, não é o mesmo título reeditado) nunca aparecem em NENHUMA
+    listagem de `GET /public-api/v3/contas-pagar`, não importa o filtro.** Testado ao vivo: a
+    listagem por vencimento exato (só o dia 30/10, ou só o dia 30/09 pra achar a parcela de
+    setembro que o Rafael mostrou existir) devolve um conjunto completo de outros títulos daquele
+    mesmo dia, mas nunca inclui esses — mesmo order o `paginacao.total` batendo com a contagem real
+    dos outros. Também testado com o ano inteiro e sem filtro de data nenhum: mesmo resultado,
+    sempre ausentes. Só aparecem via `GET /contas-pagar/{id}` direto, sabendo o ID de antemão. Ou
+    seja, não é um problema de paginação perdida, retentativa ou catch-up — é a própria busca da
+    Tiny que não indexa esses registros pra consulta por critério nenhum, só por ID exato.
+  - **Suspeita (não confirmada) de causa**: os dois têm campo `data` (emissão) de 2024 — bem antes
+    do vencimento atual — e a tela da Tiny mostra "Stone Timbers" como banco/processador pra toda a
+    série (diferente de "Santander"/"Itaú" dos títulos que aparecem normal). Pode ser algum
+    escopo de conta/integração ("Stone Timbers" sendo um sub-contexto dentro da conta Rampa) que a
+    busca da Tiny exclui por engano — mas é só suspeita, sem acesso ao índice interno deles pra
+    confirmar.
+  - **Não tem solução do nosso lado.** Como o problema é a própria indexação de busca da Tiny (não
+    algo que paginação, retentativa ou catch-up resolvem), nenhum ajuste no nosso sync vai
+    encontrar esses títulos sozinho — nem hoje, nem nos meses seguintes, enquanto quem lança
+    continuar criando um título novo por parcela dessa mesma série (R$617,94 jul, R$624,08 ago,
+    R$629,56 set, R$635,00 out — confirmado pelo Rafael que são títulos distintos, não o mesmo
+    editado). **Esse gap de ~R$2.135/mês tende a se repetir todo mês**, só com valores mudando
+    (juros acumulando). Única saída viável: Rafael reportar o padrão pro suporte da Tiny (parece
+    bug deles), ou — enquanto isso — corrigir manualmente via lançamento em
+    `financeiro_lancamentos_manuais` quando notado, mês a mês.
+  - **Os 5 títulos que o DRE já mostrava (BMP, Secretaria da Fazenda do RS, Itaú, Leila Pasqualeto,
+    Ministério da Fazenda PIS/COFINS R$559,76) continuam corretos** — a pergunta nunca foi se eles
+    estavam errados, só que faltavam esses outros 2 que são estruturalmente invisíveis pra API.
+  - **Descoberta lateral útil**: o parâmetro `categoriaId` em `GET /public-api/v3/contas-pagar`
+    (listagem) **é ignorado silenciosamente** pela Tiny — testado passando categorias diferentes
+    (inclusive trocada) sem o `paginacao.total` nunca mudar. A categoria de um título só existe no
+    endpoint de **detalhe** (`GET /contas-pagar/{id}`), nunca na listagem — não dá pra filtrar por
+    categoria sem abrir detalhe título por título (caro, ver "Rate limit Olist" acima). Diferente
+    disso, o filtro por `dataVencimento`/`situacao` funciona normalmente (confirmado) — só não pega
+    esses casos específicos, por outro motivo (a indexação de busca, não o parâmetro em si).
+- **Lição**: existe pelo menos um conjunto de títulos reais, bem classificados, que a própria busca
+  da API da Tiny não indexa — nenhuma quantidade de retentativa/paginação/catch-up do nosso lado
+  resolve isso, porque o problema é anterior (a Tiny nunca devolve esses IDs numa listagem, só no
+  acesso direto). Se aparecer de novo um gap pequeno e recorrente num grupo específico, vale
+  suspeitar desse padrão (sobretudo se envolver "Stone Timbers" ou títulos com `data` de emissão
+  muito mais antiga que o vencimento) antes de assumir que é um bug no nosso código.
 
 ### Modal de Lançamento Manual: categoria agora é do nível 3, não do nível 2 (pedido do Rafael, 2026-11-26)
 Até aqui, "+ Lançamento Manual" só deixava escolher o GRUPO (nível 2, ex: "2.05 Despesas de
