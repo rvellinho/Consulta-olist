@@ -1993,6 +1993,41 @@ mostrando R$20.862,91 no nosso sistema vs R$22.997,86 que ele viu na Tiny.
   suspeitar desse padrão (sobretudo se envolver "Stone Timbers" ou títulos com `data` de emissão
   muito mais antiga que o vencimento) antes de assumir que é um bug no nosso código.
 
+#### Bug: lançamento manual com categoria real nunca passava por `resolverLeaf` — ficava preso como "Lançamento manual" genérico (achado e corrigido, 2026-11-27)
+Depois de lançar os dois títulos acima (R$635,00 e R$1.499,95, `codigo_grupo='6.02'`,
+`categoria_id=364700217` → "6.02.03 Parcelas de Empréstimos e Parcelamentos") em
+`financeiro_lancamentos_manuais`, Rafael reportou dois sintomas na tela: (1) os R$2.134,95 continuavam
+aparecendo na tabela "Lançamentos fora do DRE (conferência)" — exatamente a leaf que devia estar
+escondida de lá desde 2026-11-26 (ver "Duas tabelas novas abaixo do DRE" acima) — e (2) não apareciam
+na tabela "Resultado com Amortizações" (Valor Amortizado continuava R$20.862,91, sem os R$2.134,95).
+
+Causa: o loop que soma `linhasManuais` em `montarDRE` (`api/financeiro.js`) nunca chamava
+`resolverLeaf` — usava direto `l.subitem || "Lançamento manual"`, ignorando `categoria_id` por
+completo (diferente de todo outro loop da função, que sempre resolve via `resolverLeaf`, priorizando
+`categoria_id` sobre `subitem`). Como os dois lançamentos foram inseridos com `subitem=null` e só
+`categoria_id` preenchido, caíam sempre no rótulo genérico "Lançamento manual" — que não bate com o
+`REGEX_LEAF_PARCELAS_EMPRESTIMO` usado tanto pra tirar essa leaf de "Fora do DRE" (e do seu total)
+quanto pra somá-la em "Resultado com Amortizações" (`somarLeafsPorTexto`). Resultado: o lançamento
+manual aparecia exatamente onde não devia (fora do DRE) e ficava ausente de onde devia aparecer
+(Amortização) — o oposto do comportamento de um título real da mesma categoria.
+
+**Corrigido**: o loop agora chama `resolverLeaf(l, categoriasPorEmpresa)` como todo o resto da
+função — com um ajuste só pro fallback final: quando `resolverLeaf` devolve "Sem subcategoria"
+(nenhum `categoria_id` válido e nenhum `subitem`), usa "Lançamento manual" em vez disso, pra manter
+o rótulo que lançamento sem categoria real sempre teve (provisão/ajuste genérico).
+
+Testado ao vivo via `vercel dev` local contra o Supabase/Tiny de produção (`acao=dre&ano=2026&mes=10&
+empresa=rampa`, sem nenhuma escrita): `amortizacao.linha6023`/`valorAmortizado` passaram a
+**R$22.997,86** (exatamente o número do Olist que o Rafael reportou), e `gruposForaDre` pro grupo
+"6.02" não mostra mais nenhuma leaf "Parcelas de Empréstimos..." nem conta os R$2.134,95 no total
+(sobrou só `6.02.02 Saídas de Caixa Diversas`, R$3.000,00 — um lançamento manual não relacionado).
+
+**Lição**: qualquer novo caminho de soma dentro de `montarDRE` precisa passar pelo mesmo
+`resolverLeaf` que os outros — um caminho que resolve o leaf "na mão", mesmo que pareça inofensivo
+(era só um fallback de texto), fica invisível pros filtros/agregações baseados em texto de leaf
+(regex de "fora do DRE", soma de amortização) que dependem de todo mundo gerar o MESMO rótulo pra
+mesma categoria.
+
 ### Modal de Lançamento Manual: categoria agora é do nível 3, não do nível 2 (pedido do Rafael, 2026-11-26)
 Até aqui, "+ Lançamento Manual" só deixava escolher o GRUPO (nível 2, ex: "2.05 Despesas de
 Infra-estrutura") e digitar um "Subitem" livre opcional — mesmo a tabela `financeiro_lancamentos_

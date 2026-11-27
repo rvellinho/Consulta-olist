@@ -149,7 +149,13 @@ function resolverLeaf(l, categoriasPorEmpresa) {
     const descricao = categoriasPorEmpresa[l.empresa]?.[l.categoria_id];
     if (descricao) return descricao;
   }
-  if (l.titulo_tipo === "cmv") return "Custo calculado pela nota (sem categoria)";
+  // 4.01 virou "Custo da Mercadoria Vendida (CMV)" com 2 subgrupos sintéticos
+  // — Vendas (nota de venda × custo) e Devoluções (nota de devolução de
+  // venda × custo, negativo) — pedido do Rafael, 2026-11-27: antes só existia
+  // "Vendas" (rotulado "sem categoria"), devolução de venda nunca descontava
+  // o CMV (só a receita, 1.01.04) — ver CLAUDE.md.
+  if (l.titulo_tipo === "cmv") return "Vendas";
+  if (l.titulo_tipo === "cmv_devolucao") return "Devoluções";
   if (l.subitem) return l.subitem; // lançamento manual
   return "Sem subcategoria";
 }
@@ -180,6 +186,12 @@ function montarDRE(planoContas, linhasMensal, linhasManuais, categoriasPorEmpres
   // quando não teve movimento, em vez de aparecer como R$0,00).
   const leavesPorGrupo = categoriasPorEmpresa.__leavesPorGrupo || {};
   for (const [grupo, descricoes] of Object.entries(leavesPorGrupo)) {
+    // 4.01 (CMV) nunca usa categoria real da Tiny — só os 2 subgrupos
+    // sintéticos Vendas/Devoluções (ver resolverLeaf) — semear as categorias
+    // antigas ("Compras de mercadoria"/"(-) Devoluções de compras de
+    // mercadoria", nunca usadas desde que o CMV passou a vir de nota×custo em
+    // 2026-11-21) só poluiria a árvore com 2 linhas de R$0,00 permanentes.
+    if (grupo === "4.01") continue;
     porGrupoLeaf[grupo] = {};
     for (const descricao of descricoes) {
       porGrupoLeaf[grupo][descricao] = { operacional: 0, intercompany: 0 };
@@ -259,7 +271,15 @@ function montarDRE(planoContas, linhasMensal, linhasManuais, categoriasPorEmpres
     // Lançamentos manuais (provisões/ajustes) nunca são intercompany — esse
     // esquema só existe pra lançamentos que vêm da Olist (nota de venda da
     // Rampa pra TF, ou despesa marcada manualmente num título real).
-    somar(l.codigo_grupo, Number(l.valor) || 0, false, l.subitem || "Lançamento manual");
+    // Precisa passar por resolverLeaf (categoria_id tem prioridade sobre
+    // subitem) — sem isso, um manual lançado com categoria real (ex: pra
+    // cobrir um título que a Tiny não lista, categoria "6.02.03 Parcelas de
+    // Empréstimos e Parcelamentos") caía sempre no rótulo genérico
+    // "Lançamento manual", nunca batendo no REGEX_LEAF_PARCELAS_EMPRESTIMO
+    // usado tanto pra tirar essa leaf de "Fora do DRE" quanto pra somá-la em
+    // "Resultado com Amortizações" (achado ao vivo, 2026-11-27).
+    const leaf = resolverLeaf(l, categoriasPorEmpresa);
+    somar(l.codigo_grupo, Number(l.valor) || 0, false, leaf === "Sem subcategoria" ? "Lançamento manual" : leaf);
   }
 
   // Nível 3 (leafs) de um grupo, em ordem numérica da conta (1.01.01,
@@ -536,6 +556,19 @@ async function buscarAlocacoesParaDestino(empresa, ano, mes) {
 // emitida: quantidade vendida × custo do produto na Tiny. Só cobre 4.01
 // (Estoques) por enquanto — 4.02 (Insumos de Serviços) continua manual.
 //
+// 4.01 (renomeado "Custo da Mercadoria Vendida (CMV)", 2026-11-27) tem 2
+// subgrupos sintéticos (ver resolverLeaf): "Vendas" (nota de venda × custo,
+// titulo_tipo='cmv') e "Devoluções" (nota de devolução de venda × custo,
+// titulo_tipo='cmv_devolucao', valor NEGATIVO) — a soma dos dois é o CMV
+// final. Pedido do Rafael: o conjunto de notas de venda/devolução do CMV tem
+// que bater exatamente com o que já alimenta a receita — por isso a lista de
+// notas vem de `relatorio_cache` (listarRelatorioCache, tipo='produto' e
+// tipo='devolucao' — mesma fonte de sincronizarReceitaPorNotasFiscais), não
+// mais de uma listagem própria contra a Olist. Antes (até 2026-11-27) a fila
+// vinha de listarNotasFiscaisV2(tokenV2,"S",...), que trazia QUALQUER nota de
+// saída no período — incluindo devolução de COMPRA (também tipoNota=S) como
+// se fosse venda — e nunca incluía devolução de VENDA (tipoNota=E), que por
+// isso nunca descontava o CMV (só a receita, via 1.01.04).
 // Custo do produto: NUNCA busca na Olist aqui — vem de estoque_catalogo
 // (coluna custo_atual, já capturada de graça pelo sync diário de Estoque, ver
 // api/estoque-sync-diario.js) mais a tabela financeiro_custo_mensal, que
@@ -1053,11 +1086,32 @@ async function executarSyncDiario(req, res) {
         await sleep(PACE_MS);
 
         if (grupoCmv) {
-          const iniBR = formatarDataBR(p.ano, p.mes, 1);
-          const fimBR = formatarDataBR(p.ano, p.mes, ultimoDiaDoMes(p.ano, p.mes));
-          const notasVenda = await listarNotasFiscaisV2(tokenV2, "S", iniBR, fimBR);
-          notasVenda.forEach(n => filaCmv.push({ id: n.id, ano: p.ano, mes: p.mes, dataEmissaoBR: n.data_emissao }));
-          await sleep(PACE_MS);
+          // CMV agora nasce das MESMAS notas que já alimentam a receita (ver
+          // sincronizarReceitaPorNotasFiscais) — relatorio_cache, não mais uma
+          // listagem própria contra a Olist (que trazia qualquer tipoNota=S,
+          // inclusive devolução de COMPRA por engano, e nunca olhava devolução
+          // de VENDA, que é tipoNota=E). Pedido do Rafael, 2026-11-27: "as
+          // vendas/devoluções/produtos que constam no CMV deve bater com o que
+          // consta nas receitas". `tipo='produto'` = mesma fonte de 1.01.01;
+          // `tipo='devolucao'` = mesma fonte de 1.01.04 (negativo lá e aqui).
+          // Leitura no Supabase, não na Olist — sem PACE_MS aqui.
+          const dataIniCmv = formatarData(p.ano, p.mes, 1);
+          const dataFimCmv = formatarData(p.ano, p.mes, ultimoDiaDoMes(p.ano, p.mes));
+          const [vendasCmv, devolucoesCmv] = await Promise.all([
+            listarRelatorioCache(empresa, "produto", dataIniCmv, dataFimCmv),
+            listarRelatorioCache(empresa, "devolucao", dataIniCmv, dataFimCmv),
+          ]);
+          // Troca de fonte: limpa o que uma execução ANTERIOR (listagem direta
+          // da Olist, fonte antiga) tinha gravado pra este mês antes de
+          // regravar pela fonte nova — senão uma nota que só existia na
+          // listagem antiga (ex: devolução de compra, contada à toa como CMV)
+          // fica órfã pra sempre (mesmo "upsert nunca apaga" de sempre).
+          await httpsRequest("DELETE", supaHost(),
+            `/rest/v1/financeiro_mensal?empresa=eq.${empresa}&codigo_grupo=eq.${grupoCmv}` +
+            `&titulo_tipo=in.(cmv,cmv_devolucao)&ano=eq.${p.ano}&mes=eq.${p.mes}`,
+            null, { ...supaHeaders, Prefer: "return=minimal" });
+          vendasCmv.forEach(l => filaCmv.push({ id: Number(l.id_olist), ano: p.ano, mes: p.mes, dataEmissaoIso: l.data, tipoCmv: "venda" }));
+          devolucoesCmv.forEach(l => filaCmv.push({ id: Number(l.id_olist), ano: p.ano, mes: p.mes, dataEmissaoIso: l.data, tipoCmv: "devolucao" }));
         }
       }
       // Dedup simples por id+ano+mes (a janela de meses vizinhos pode repetir título em dois períodos-alvo)
@@ -1292,11 +1346,15 @@ async function executarSyncDiario(req, res) {
         const { valor, semCusto, totalItens, intercompanyTF, clienteNome } = await calcularCmvNota(tokenV2, item.id, obterCusto);
         semCustoNoLote += semCusto;
         itensNoLote += totalItens;
+        // Devolução de venda entra NEGATIVA, mesmo padrão da receita (1.01.04)
+        // — "Vendas" e "Devoluções" somadas dão o CMV final (ver resolverLeaf).
+        const ehDevolucao = item.tipoCmv === "devolucao";
         lote.push({
           ano: item.ano, mes: item.mes, codigo_grupo: grupoCmv, categoria_id: null,
           origem: "tiny_notas_itens", regime: "competencia",
-          titulo_tipo: "cmv", titulo_id: item.id, valor,
-          data_emissao: dataBRparaISO(item.dataEmissaoBR),
+          titulo_tipo: ehDevolucao ? "cmv_devolucao" : "cmv",
+          titulo_id: item.id, valor: ehDevolucao ? -valor : valor,
+          data_emissao: item.dataEmissaoIso || null,
           intercompany: empresa === "rampa" && intercompanyTF, descricao: clienteNome,
         });
       } catch (erroRede) {
