@@ -2017,6 +2017,19 @@ Parcelas de Empréstimos e Parcelamentos") e valor.
   já nasce "velha" pros padrões do plano atual) — então o mesmo processo (Rafael identifica o ID,
   manda, lançamos manual) precisa se repetir todo mês até as séries terminarem (faltam ~25 e ~34
   parcelas, respectivamente) ou o plano ser ampliado.
+- **Concluído (2026-11-27)**: Rafael exportou da própria Tiny (tela de Contas a Pagar, não a API —
+  essa tela não sofre a mesma restrição) a lista completa das duas séries, todas as 71 parcelas
+  (passado e futuro, até a 49ª e a 59ª), em `.xls`. Conferido contra `financeiro_mensal`: nenhuma
+  das 71 estava lá — como o módulo financeiro só existe desde 2026-11-20 e sempre reprocessou só
+  "mês atual + anterior" (hoje: out+nov/2026), nenhum mês anterior a outubro/2026 chegou a ser
+  processado por este sistema (não é regressão, é escopo de sempre). Das 71, 2 (out/2026,
+  R$635,00 e R$1.499,95) já tinham sido lançadas manualmente antes (ver "Sim, lança" acima); as
+  outras **59** (nov/2026 até ago/2029) foram lançadas em lote em `financeiro_lancamentos_manuais`
+  nesta mesma sessão — `categoria_id=364700217` (6.02.03), ID do título Tiny de cada uma gravado em
+  `observacao`. Testado ao vivo: `amortizacao.linha6023` de novembro/2026 passou a refletir os dois
+  novos valores daquele mês (R$640,38 + R$1.512,57) somados ao resto. **Com isso, o problema deixa
+  de ser recorrente mês a mês** — a tabela já tem a parcela certa pronta pra quando cada mês futuro
+  virar "mês atual" na janela de 2 meses do sync, sem precisar repetir o processo manualmente.
 - Isso substitui a hipótese anterior ("falha pontual de indexação em 2024") — mantida acima só como
   registro de como a investigação chegou até aqui, mas a explicação oficial da Tiny é a válida.
 
