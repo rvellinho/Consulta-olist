@@ -1370,13 +1370,21 @@ async function executarSyncDiario(req, res) {
 //     API) — ver acao=estoque-saldo-importar.
 //   - Compras do mês: ordens de compra com situacao=Atendido cuja `data` cai
 //     no mês (decisão do Rafael, 2026-11-25) — custo rateia o FRETE da
-//     própria OC entre os itens (proporcional ao valor de cada item); o
-//     DESCONTO da OC fica de fora do rateio por enquanto (vem como texto da
-//     Tiny, sem ficar claro se é valor ou percentual — rateá-lo errado seria
-//     pior que não ratear). Frete de CTe separada (quando a OC não embute
-//     frete) e devoluções de compra/venda ficam pra uma v2 — não tem exemplo
-//     vivo de devolução ainda (confirmado raro) e a CTe depende de um vínculo
-//     manual que ainda não foi construído.
+//     própria OC + o frete de qualquer CTe vinculada a ela (ver abaixo) e o
+//     DESCONTO da OC (confirmado ao vivo, 2026-11-26: é sempre valor fixo em
+//     R$, nunca percentual — bate exatamente com `totalPedidoCompra` em
+//     várias OCs reais) entre os itens, proporcional ao valor de cada um.
+//     Devoluções de compra/venda (ver buscarVendasDoMes) já entram no cálculo
+//     de quantidade desde a v1.
+//   - Frete de CTe separada (quando a transportadora emite nota própria, fora
+//     da OC): a CTe entra na Tiny como nota de entrada (tipo E) só de
+//     serviço (item único, sem produto) — o número do pedido costuma vir no
+//     campo `obs` ("ref ped 1080"), extraído por regex e resolvido contra
+//     `GET /ordem-compra?numero=`. Quando não acha (ou o texto não bate com
+//     nenhuma OC), fica pendente de vínculo manual na tela — ver
+//     `estoque_fretes_ctes`/sincronizarCtesDoMes. Como a CTe pode chegar bem
+//     depois da OC ter sido atendida (mês diferente), vincular uma CTe só
+//     entra no custo da OC na PRÓXIMA vez que o mês da OC for sincronizado.
 //   - Vendas do mês: mesma fonte de nota V2 que o CMV do DRE já usa (mas é um
 //     passe PRÓPRIO, independente do sync-diario acima — não reaproveita nem
 //     altera nada da fila de CMV, pra não arriscar o sync que já está em
@@ -1445,14 +1453,31 @@ async function upsertMovimentos(empresa, linhas) {
   }
 }
 
+// Soma, por ordem de compra, o frete de toda CTe já vinculada a ela (ver
+// sincronizarCtesDoMes) — independente do mês em que a CTe foi emitida, já
+// que ela costuma chegar depois da OC ter sido atendida.
+async function buscarFretesCtesPorOrdens(empresa, ordemIds) {
+  if (!ordemIds.length) return new Map();
+  const r = await httpsRequest("GET", supaHost(),
+    `/rest/v1/estoque_fretes_ctes?empresa=eq.${empresa}&ordem_id=in.(${ordemIds.join(",")})&select=ordem_id,valor_frete`,
+    null, supaHeaders);
+  const linhas = parseJSON(r.text) || [];
+  const mapa = new Map();
+  for (const l of linhas) {
+    const id = Number(l.ordem_id);
+    mapa.set(id, (mapa.get(id) || 0) + (Number(l.valor_frete) || 0));
+  }
+  return mapa;
+}
+
 // Ordens de compra Atendido (situacao=1) cuja `data` cai no mês pedido —
 // decisão do Rafael (2026-11-25). A listagem não filtra por data (só por
 // situacao), então pagina tudo e filtra aqui. Custo de cada item = preço do
-// item + rateio do FRETE da própria OC (proporcional ao valor do item); o
-// DESCONTO da OC fica de fora (ver comentário no topo desta seção).
-async function buscarOrdensCompraAtendidasDoMes(accessToken, ano, mes) {
+// item + rateio de (FRETE da própria OC + frete de CTe vinculada − DESCONTO
+// da OC), proporcional ao valor do item — ver comentário no topo desta seção.
+async function buscarOrdensCompraAtendidasDoMes(empresa, accessToken, ano, mes) {
   const alvo = formatarYYYYMM(ano, mes);
-  const linhas = [];
+  const ordensDoMes = [];
   const limit = 100;
   let offset = 0;
   while (true) {
@@ -1464,43 +1489,146 @@ async function buscarOrdensCompraAtendidasDoMes(accessToken, ano, mes) {
       throw new Error(`ordem-compra (listagem offset=${offset}): HTTP ${r.status} - ${r.text.slice(0, 200)}`);
     }
     for (const ordem of data.itens) {
-      if (String(ordem.data || "").slice(0, 7) !== alvo) continue;
-      const itensOrdem = ordem.itens || [];
-      const totalProdutos = Number(ordem.totalProdutos) || itensOrdem.reduce((s, it) => s + (Number(it.preco) || 0) * (Number(it.quantidade) || 0), 0);
-      const frete = Number(ordem.frete) || 0;
-      const divergenteData = !!ordem.dataPrevista && String(ordem.dataPrevista).slice(0, 7) !== alvo;
-      // Uma mesma OC pode listar o mesmo produto em mais de uma linha (lotes/preços
-      // diferentes) — agrega por produto ANTES de empilhar em `linhas`, porque o
-      // upsert é por (empresa,tipo,origem_id,produto_id) e duas linhas com a mesma
-      // chave no mesmo lote fazem o Postgres rejeitar o upsert inteiro (erro 21000,
-      // "ON CONFLICT DO UPDATE command cannot affect row a second time")
-      const porProduto = new Map();
-      for (const item of itensOrdem) {
-        const produtoId = item.produto?.id;
-        const quantidade = Number(item.quantidade) || 0;
-        if (!produtoId || !quantidade) continue;
-        const valorItem = (Number(item.preco) || 0) * quantidade;
-        const rateioFrete = totalProdutos > 0 ? frete * (valorItem / totalProdutos) : 0;
-        const custoTotalItem = valorItem + rateioFrete;
-        const acc = porProduto.get(produtoId) || { quantidade: 0, custoTotal: 0 };
-        acc.quantidade += quantidade;
-        acc.custoTotal += custoTotalItem;
-        porProduto.set(produtoId, acc);
-      }
-      for (const [produtoId, acc] of porProduto) {
-        linhas.push({
-          ano, mes, produto_id: produtoId, tipo: "compra", origem_id: ordem.id,
-          quantidade: acc.quantidade, custo_unitario: acc.custoTotal / acc.quantidade, custo_total: acc.custoTotal,
-          data: ordem.data || null, data_prevista: ordem.dataPrevista || null, divergente_data: divergenteData,
-        });
-      }
+      if (String(ordem.data || "").slice(0, 7) === alvo) ordensDoMes.push(ordem);
     }
     const total = data.paginacao?.total ?? data.itens.length;
     offset += limit;
     if (data.itens.length < limit || offset >= total) break;
     await sleep(PACE_MS);
   }
+
+  const fretesCteMap = await buscarFretesCtesPorOrdens(empresa, ordensDoMes.map(o => o.id));
+  const linhas = [];
+  for (const ordem of ordensDoMes) {
+    const itensOrdem = ordem.itens || [];
+    const totalProdutos = Number(ordem.totalProdutos) || itensOrdem.reduce((s, it) => s + (Number(it.preco) || 0) * (Number(it.quantidade) || 0), 0);
+    const frete = (Number(ordem.frete) || 0) + (fretesCteMap.get(ordem.id) || 0);
+    // `desconto` vem como texto em formato BR ("16,7", "0,01") — sempre valor
+    // fixo em R$, nunca percentual (confirmado ao vivo, 2026-11-26).
+    const desconto = Number(String(ordem.desconto || "0").replace(",", ".")) || 0;
+    const divergenteData = !!ordem.dataPrevista && String(ordem.dataPrevista).slice(0, 7) !== alvo;
+    // Uma mesma OC pode listar o mesmo produto em mais de uma linha (lotes/preços
+    // diferentes) — agrega por produto ANTES de empilhar em `linhas`, porque o
+    // upsert é por (empresa,tipo,origem_id,produto_id) e duas linhas com a mesma
+    // chave no mesmo lote fazem o Postgres rejeitar o upsert inteiro (erro 21000,
+    // "ON CONFLICT DO UPDATE command cannot affect row a second time")
+    const porProduto = new Map();
+    for (const item of itensOrdem) {
+      const produtoId = item.produto?.id;
+      const quantidade = Number(item.quantidade) || 0;
+      if (!produtoId || !quantidade) continue;
+      const valorItem = (Number(item.preco) || 0) * quantidade;
+      const proporcao = totalProdutos > 0 ? valorItem / totalProdutos : 0;
+      const custoTotalItem = valorItem + frete * proporcao - desconto * proporcao;
+      const acc = porProduto.get(produtoId) || { quantidade: 0, custoTotal: 0 };
+      acc.quantidade += quantidade;
+      acc.custoTotal += custoTotalItem;
+      porProduto.set(produtoId, acc);
+    }
+    for (const [produtoId, acc] of porProduto) {
+      linhas.push({
+        ano, mes, produto_id: produtoId, tipo: "compra", origem_id: ordem.id,
+        quantidade: acc.quantidade, custo_unitario: acc.custoTotal / acc.quantidade, custo_total: acc.custoTotal,
+        data: ordem.data || null, data_prevista: ordem.dataPrevista || null, divergente_data: divergenteData,
+      });
+    }
+  }
   return linhas;
+}
+
+// ----------------------------------------------------------------------------
+// Vínculo CTe (nota de frete separada) ↔ ordem de compra
+//
+// A CTe entra na Tiny como nota de entrada (tipo E) só de serviço — item
+// único, sem produto (valor_produtos=0, id_produto="0"), e não é devolução.
+// O número do pedido costuma vir no campo `obs` ("ref ped 1080" — confirmado
+// ao vivo em notas reais da Rampa, 2026-11-26); quando não acha ou o número
+// não bate com nenhuma OC, fica pendente de vínculo manual na tela (ver
+// endpoints estoque-ctes/estoque-cte-vincular/estoque-cte-desvincular).
+// ----------------------------------------------------------------------------
+const PADRAO_REF_PEDIDO_CTE = /ref\.?\s*ped\.?\s*(\d+)/i;
+
+function ehCandidataCte(nf) {
+  if (FINALIDADES_DEVOLUCAO.includes(String(nf?.finalidade))) return false;
+  return Number(nf?.valor_produtos) === 0 && Number(nf?.valor_servicos) > 0;
+}
+
+// Lança erro em falha (rate-limit/instabilidade) em vez de devolver null —
+// mesmo padrão de "nunca tratar falha de API como lista vazia" já corrigido
+// várias vezes no projeto (ver CLAUDE.md "Erros conhecidos" nº 7).
+async function buscarOrdemPorNumero(accessToken, numero) {
+  const r = await httpsRequest("GET", "api.tiny.com.br",
+    `/public-api/v3/ordem-compra?numero=${encodeURIComponent(numero)}&limit=5`,
+    null, { Authorization: "Bearer " + accessToken });
+  const data = parseJSON(r.text);
+  if (r.status !== 200 || !Array.isArray(data.itens)) {
+    throw new Error(`ordem-compra (numero=${numero}): HTTP ${r.status} - ${r.text.slice(0, 200)}`);
+  }
+  return data.itens.find(o => String(o.numero) === String(numero)) || null;
+}
+
+async function buscarCtesComVinculoManual(empresa) {
+  const r = await httpsRequest("GET", supaHost(),
+    `/rest/v1/estoque_fretes_ctes?empresa=eq.${empresa}&vinculo_manual=eq.true&select=nota_id`,
+    null, supaHeaders);
+  const linhas = parseJSON(r.text) || [];
+  return new Set(linhas.map(l => Number(l.nota_id)));
+}
+
+async function upsertFretesCtes(empresa, linhas) {
+  if (!linhas.length) return;
+  const payload = JSON.stringify(linhas.map(l => ({ ...l, empresa, atualizado_em: new Date().toISOString() })));
+  const r = await httpsRequest("POST", supaHost(), "/rest/v1/estoque_fretes_ctes?on_conflict=empresa,nota_id", payload,
+    { ...supaHeaders, "Content-Length": Buffer.byteLength(payload), Prefer: "resolution=merge-duplicates,return=minimal" });
+  if (r.status >= 300) {
+    throw new Error(`upsert estoque_fretes_ctes: HTTP ${r.status} - ${r.text.slice(0, 500)}`);
+  }
+}
+
+// Sincroniza as CTes do mês (por data de emissão): lista notas de entrada,
+// filtra candidatas (ehCandidataCte), tenta resolver automaticamente contra
+// o número citado no `obs`, e grava tudo — quem não resolver fica com
+// ordem_id=null, pendente na tela. NUNCA sobrescreve uma linha já vinculada
+// manualmente (mesmo cuidado de "não apagar decisão do operador" já usado no
+// catálogo de Impostos).
+async function sincronizarCtesDoMes(empresa, accessToken, tokenV2, ano, mes) {
+  const jaManuais = await buscarCtesComVinculoManual(empresa);
+  const notas = await buscarNotasComDetalhe(tokenV2, "E", ano, mes);
+  const linhas = [];
+  for (const { nota, detalhe } of notas) {
+    if (!detalhe || !ehCandidataCte(detalhe) || jaManuais.has(Number(nota.id))) continue;
+
+    const matchObs = PADRAO_REF_PEDIDO_CTE.exec(detalhe.obs || "");
+    const numeroPedidoDetectado = matchObs ? matchObs[1] : null;
+    let ordemId = null, ordemNumero = null, falhouResolucao = false;
+    if (numeroPedidoDetectado) {
+      for (let tentativas = 0; ; tentativas++) {
+        try {
+          const ordem = await buscarOrdemPorNumero(accessToken, numeroPedidoDetectado);
+          if (ordem) { ordemId = ordem.id; ordemNumero = ordem.numero; }
+          break;
+        } catch (e) {
+          console.error(`[estoque-movimentos-sync] erro ao buscar OC numero=${numeroPedidoDetectado} (CTe ${nota.id}): ${e.message}`);
+          await pausaSeBloqueio(e, `ordem-compra numero=${numeroPedidoDetectado}`);
+          if (tentativas + 1 > MAX_TENTATIVAS_POR_TITULO) { falhouResolucao = true; break; }
+        }
+      }
+      await sleep(PACE_MS);
+    }
+    // Falha persistente ao resolver (não "não achei") — pula esta CTe nesta
+    // execução, sem gravar nada, pra não fixar um ordem_id=null que na
+    // verdade era só uma falha de rede/rate-limit. Tenta de novo no próximo sync.
+    if (falhouResolucao) continue;
+    linhas.push({
+      nota_id: nota.id, nota_numero: nota.numero, fornecedor_nome: nota.nome || null,
+      valor_frete: Number(detalhe.valor_servicos) || Number(detalhe.valor_nota) || 0,
+      data_emissao: dataBRparaISO(nota.data_emissao),
+      numero_pedido_detectado: numeroPedidoDetectado, ordem_id: ordemId, ordem_numero: ordemNumero,
+      vinculo_manual: false,
+    });
+  }
+  await upsertFretesCtes(empresa, linhas);
+  return { total: linhas.length, vinculadas: linhas.filter(l => l.ordem_id).length, pendentes: linhas.filter(l => !l.ordem_id).length };
 }
 
 // Vendas do mês, por quantidade — mesma fonte V2 (nota.fiscal.*) que o CMV do
@@ -1584,11 +1712,18 @@ async function executarMovimentosSync(empresa, ano, mes) {
   const accessToken = await getAccessToken(empresa);
   const tokenV2 = getConfigEmpresa(empresa).tokenV2;
 
-  const compras = await buscarOrdensCompraAtendidasDoMes(accessToken, ano, mes);
+  // CTes primeiro — o rateio das compras já lê o vínculo resolvido aqui.
+  const ctes = await sincronizarCtesDoMes(empresa, accessToken, tokenV2, ano, mes);
+
+  if (Date.now() - inicio > ORCAMENTO_MOVIMENTOS_MS) {
+    return { ok: true, concluido: false, etapa: "ctes", ctes, compras: 0, vendas: 0 };
+  }
+
+  const compras = await buscarOrdensCompraAtendidasDoMes(empresa, accessToken, ano, mes);
   await upsertMovimentos(empresa, compras);
 
   if (Date.now() - inicio > ORCAMENTO_MOVIMENTOS_MS) {
-    return { ok: true, concluido: false, etapa: "compras", compras: compras.length, vendas: 0 };
+    return { ok: true, concluido: false, etapa: "compras", ctes, compras: compras.length, vendas: 0 };
   }
 
   // buscarVendasDoMes devolve vendas, devoluções de compra (notas "S") e
@@ -1599,7 +1734,7 @@ async function executarMovimentosSync(empresa, ano, mes) {
   const contarTipo = (tipo) => movimentosVenda.filter(l => l.tipo === tipo).length;
 
   return {
-    ok: true, concluido: true, compras: compras.length,
+    ok: true, concluido: true, ctes, compras: compras.length,
     vendas: contarTipo("venda"), devolucoesCompra: contarTipo("devolucao_compra"), devolucoesVenda: contarTipo("devolucao_venda"),
   };
 }
@@ -2184,6 +2319,22 @@ module.exports = async (req, res) => {
         return res.status(200).json(relatorio);
       }
 
+      if (acao === "estoque-ctes") {
+        // Tela de vínculo manual: lista as CTes já sincronizadas no mês,
+        // vinculadas (automático ou manual) ou pendentes.
+        const empresaCte = String(req.query.empresa || "rampa").toLowerCase();
+        const anoCte = parseInt(req.query.ano, 10);
+        const mesCte = parseInt(req.query.mes, 10);
+        if (!anoCte || !mesCte) return res.status(400).json({ erro: "ano e mes são obrigatórios" });
+        const inicioCte = formatarData(anoCte, mesCte, 1);
+        const fimCte = formatarData(anoCte, mesCte, ultimoDiaDoMes(anoCte, mesCte));
+        const r = await httpsRequest("GET", supaHost(),
+          `/rest/v1/estoque_fretes_ctes?empresa=eq.${empresaCte}&data_emissao=gte.${inicioCte}&data_emissao=lte.${fimCte}&select=*&order=data_emissao.asc`,
+          null, supaHeaders);
+        const linhas = parseJSON(r.text);
+        return res.status(200).json(Array.isArray(linhas) ? linhas : []);
+      }
+
       if (acao === "plano-contas") {
         const empresa = String(req.query.empresa || "rampa").toLowerCase();
         const [planoContas, rCategorias] = await Promise.all([
@@ -2213,6 +2364,39 @@ module.exports = async (req, res) => {
       }
       const resultado = await importarSaldoMensal(String(empresa).toLowerCase(), parseInt(ano, 10), parseInt(mes, 10), linhas);
       return res.status(200).json({ ok: true, ...resultado });
+    }
+
+    if (req.method === "POST" && req.query.acao === "estoque-cte-vincular") {
+      const { empresa, nota_id, ordem_numero } = parseBody(req.body);
+      if (!empresa || !nota_id || !ordem_numero) {
+        return res.status(400).json({ erro: "empresa, nota_id e ordem_numero são obrigatórios" });
+      }
+      const empresaNorm = String(empresa).toLowerCase();
+      const accessToken = await getAccessToken(empresaNorm);
+      const ordem = await buscarOrdemPorNumero(accessToken, String(ordem_numero).trim());
+      if (!ordem) return res.status(404).json({ erro: `Nenhum pedido de compra com número ${ordem_numero}` });
+      const payload = JSON.stringify({
+        empresa: empresaNorm, ordem_id: ordem.id, ordem_numero: ordem.numero,
+        vinculo_manual: true, atualizado_em: new Date().toISOString(),
+      });
+      const r = await httpsRequest("PATCH", supaHost(),
+        `/rest/v1/estoque_fretes_ctes?empresa=eq.${empresaNorm}&nota_id=eq.${nota_id}`,
+        payload, { ...supaHeaders, "Content-Length": Buffer.byteLength(payload), Prefer: "return=minimal" });
+      if (r.status >= 300) return res.status(400).json({ erro: `HTTP ${r.status} - ${r.text}` });
+      return res.status(200).json({ ok: true, ordem_id: ordem.id, ordem_numero: ordem.numero });
+    }
+
+    if (req.method === "POST" && req.query.acao === "estoque-cte-desvincular") {
+      const { empresa, nota_id } = parseBody(req.body);
+      if (!empresa || !nota_id) return res.status(400).json({ erro: "empresa e nota_id são obrigatórios" });
+      const payload = JSON.stringify({
+        ordem_id: null, ordem_numero: null, vinculo_manual: false, atualizado_em: new Date().toISOString(),
+      });
+      const r = await httpsRequest("PATCH", supaHost(),
+        `/rest/v1/estoque_fretes_ctes?empresa=eq.${String(empresa).toLowerCase()}&nota_id=eq.${nota_id}`,
+        payload, { ...supaHeaders, "Content-Length": Buffer.byteLength(payload), Prefer: "return=minimal" });
+      if (r.status >= 300) return res.status(400).json({ erro: `HTTP ${r.status} - ${r.text}` });
+      return res.status(200).json({ ok: true });
     }
 
     if (req.method === "POST" && req.query.acao === "estoque-movimentos-sync") {

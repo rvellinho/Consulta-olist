@@ -1343,10 +1343,10 @@ limite de 12 funções do Hobby):
   Catálogo Agora" da aba Estoque): recebe `{empresa, ano, mes}` e faz DOIS passes:
   - **Compras**: pagina `GET /ordem-compra?situacao=1` (Atendido) e filtra pela `data` caindo no
     mês pedido (decisão do Rafael, 2026-11-25) — custo de cada item = preço do item + rateio do
-    **frete da própria OC** (proporcional ao valor do item); **o desconto da OC fica de fora do
-    rateio** (vem como texto da Tiny, ambíguo se é valor ou percentual) e **frete de CTe separada
-    também fica de fora** (dependeria do vínculo manual CTe↔OC do pedido original, não construído
-    nesta v1). `divergente_data=true` quando o mês de `dataPrevista` diverge do mês de `data`.
+    **frete da própria OC + frete de CTe vinculada − desconto da OC** (proporcional ao valor do
+    item). `divergente_data=true` quando o mês de `dataPrevista` diverge do mês de `data`. Ver
+    "v2 do CMV Paralelo" abaixo pro desconto/CTe (rateados desde 2026-11-26 — na v1 original,
+    ficavam de fora).
   - **Vendas**: passe PRÓPRIO e independente do sync-diario do DRE (mesma fonte V2 de notas de
     venda, mas não reaproveita a fila `filaCmv` — decisão deliberada pra não arriscar o sync
     financeiro que já está em produção) — soma quantidade por produto a partir dos itens de cada
@@ -1372,10 +1372,13 @@ limite de 12 funções do Hobby):
   saldo de ago/set/out/2026 pra Rampa e TF (6 importações, 126 produtos Rampa / 797 TF cada),
   sincronizado compras+vendas de setembro e outubro pras duas empresas. Nenhum valor de custo foi
   escrito na Tiny (só leitura, confirma o que já estava documentado em "CMV real").
-- **Deferido pra uma v2** (não construído): vínculo manual CTe↔OC (frete separado da compra),
-  rateio do desconto da OC, devolução de compra/venda, e a ferramenta de "atualizar custo
-  cadastrado pelo app" (agora viável via `PUT /produtos/{id}/custos`, ver correção acima) — nenhum
-  desses bloqueia o uso da v1, que já funciona mostrando a divergência produto a produto.
+- **Deferido pra uma v2 — status 2026-11-26**: devolução de compra/venda já foi implementada
+  (commit `13be983`, sem nunca ter atualizado esta nota — colunas "Dev. Compra"/"Dev. Venda" na
+  tela, líquido entra no final calculado). Rateio do desconto da OC e vínculo manual CTe↔OC
+  também implementados nesta data — ver "v2 do CMV Paralelo" abaixo. Só a ferramenta de
+  "atualizar custo cadastrado pelo app" continua não construída (viável via
+  `PUT /produtos/{id}/custos`, ver correção acima, mas sem prioridade — não bloqueia nada do CMV
+  Paralelo, que já funciona mostrando a divergência produto a produto).
 
 #### Bug: upsert de movimentos nunca checava o status HTTP → lote com produto duplicado sumia inteiro, sem erro nenhum (corrigido, 2026-11-25)
 Achado na própria verificação pós-implementação (antes de reportar a v1 como validada): rodando
@@ -1501,6 +1504,67 @@ isso detalhado, justamente pra poder ver onde está a diferença — preciso ter
   (fora de escopo aqui). Por isso a comparação fica só do lado "calculado" — o Rafael usa a coluna
   "CMV calculado (produto)" pra achar visualmente produtos com custo zerado/inesperado ou volume
   fora do padrão, não pra bater produto a produto contra o DRE.
+
+### v2 do CMV Paralelo: rateio do desconto da OC + vínculo manual CTe↔OC (2026-11-26)
+
+Dois dos itens que ficavam pra "uma v2" (ver nota acima, que também corrige a descrição errada de
+que devolução ainda estava pendente — ela já tinha sido feita antes, commit `13be983`).
+
+- **Desconto da OC**: o campo `ordem.desconto` (texto em formato BR, ex: `"16,7"`, `"0,01"`)
+  estava de fora do rateio porque não era claro se era valor fixo em R$ ou percentual.
+  **Confirmado ao vivo** (consulta direta, só leitura, a várias OCs reais da Rampa): é sempre
+  valor fixo em R$ — `totalProdutos − desconto` bate exatamente com o campo `totalPedidoCompra`
+  da própria OC em todos os casos testados (ex: OC 1097, `desconto: "16,7"`, previsto
+  R$14.944,00 = `totalPedidoCompra`). Agora rateado proporcional ao valor de cada item, igual o
+  frete, só que subtraindo em vez de somando (`buscarOrdensCompraAtendidasDoMes` em
+  `api/financeiro.js`).
+- **Frete de CTe separada**: quando a transportadora emite nota própria (fora da OC), ela entra
+  na Tiny como nota de entrada (tipo E) só de serviço — **confirmado ao vivo** em notas reais da
+  Rampa: item único `"Serviço CTe"`, `id_produto="0"`, `cfop=6353`, `valor_produtos=0`,
+  `valor_servicos` = valor do frete. O campo `obs` costuma trazer o número do pedido
+  (`"ref ped 1080"`, `"REF PED 1083"` — maiúsculas variam) — e a API da Olist aceita busca
+  direta por número (`GET /ordem-compra?numero=1080`, confirmado ao vivo, devolve a OC exata).
+  - **Tabela nova `estoque_fretes_ctes`** (`empresa`+`nota_id` único): `nota_numero`,
+    `fornecedor_nome`, `valor_frete`, `data_emissao`, `numero_pedido_detectado` (extraído do
+    `obs` por regex `/ref\.?\s*ped\.?\s*(\d+)/i`), `ordem_id`/`ordem_numero` (resolvidos — `null`
+    quando não acha), `vinculo_manual` (bool).
+  - **`sincronizarCtesDoMes`** roda dentro do mesmo `estoque-movimentos-sync` (antes de buscar as
+    compras): lista notas de entrada do mês, filtra candidatas (`ehCandidataCte` —
+    `valor_produtos=0 && valor_servicos>0`, exclui devolução), tenta resolver automático pelo
+    `obs`, grava tudo. **Nunca sobrescreve uma linha com `vinculo_manual=true`** — mesmo cuidado
+    de "não apagar decisão do operador" já usado no catálogo de Impostos.
+  - **`buscarOrdensCompraAtendidasDoMes` soma o frete de toda CTe vinculada a cada OC** (de
+    qualquer mês — uma CTe pode chegar bem depois da OC ter sido atendida) ao frete que a própria
+    OC já embute, antes de ratear. **Consequência**: vincular/desvincular uma CTe só entra no
+    custo na PRÓXIMA vez que o mês da OC (não da CTe) for sincronizado — não é automático,
+    precisa clicar em "Sincronizar compras + vendas do mês" de novo pra aquele mês.
+  - **Tela**: seção "Fretes de CTe" na aba CMV Paralelo (acima da tabela de produtos, escondida
+    quando não há CTe no mês) — lista fornecedor/nota/data/valor, e pra cada uma vinculada
+    automaticamente mostra "Pedido N" com botão Desvincular, ou pendente mostra um campo de texto
+    pro número do pedido + botão Vincular (`acao=estoque-cte-vincular`/`estoque-cte-desvincular`
+    em `api/financeiro.js`, resolve o `ordem_id` pela API no momento de salvar).
+- **Bug achado e corrigido no próprio teste (2026-11-26)**: `buscarOrdemPorNumero` tratava
+  qualquer falha HTTP (rate-limit/instabilidade) como "pedido não encontrado" — mesmo padrão já
+  documentado várias vezes neste arquivo ("Erros conhecidos" nº 7). Achado ao vivo: numa 1ª
+  rodada de teste (Rampa, outubro/2026), a CTe "ref ped 1080" ficou sem vínculo mesmo com o
+  número detectado certo — uma consulta isolada confirmou que `numero=1080` resolvia normal,
+  então a falha só podia ter sido transitória (rate-limit) durante o sync. **Corrigido**:
+  `buscarOrdemPorNumero` agora lança erro em `status !== 200`, e `sincronizarCtesDoMes` tenta de
+  novo até `MAX_TENTATIVAS_POR_TITULO` vezes; se esgotar as tentativas, pula a CTe nesta execução
+  SEM gravar `ordem_id=null` (evita fixar como "não encontrado" algo que foi só uma falha de
+  rede) — tenta de novo no próximo sync. Testado ao vivo rodando a mesma rodada de novo: a CTe
+  1080 resolveu certo na 2ª vez (6 de 7 CTes vinculadas, só a que realmente não tinha "ref ped"
+  no `obs` ficou pendente, como esperado).
+- **Validado com dado real** (Rampa, outubro/2026, via `vercel dev` local rodando o sync de
+  verdade — escreve em produção, mesmo comportamento do botão "Sincronizar" de sempre): 7 CTes
+  achadas, 6 vinculadas automaticamente (R$19.070,73 de frete, somado ao que já vinha da OC,
+  menos o desconto rateado). Resumo em R$ do CMV Paralelo: Compras subiu de R$397.771,36 (só
+  frete da própria OC, sem desconto/CTe) pra R$416.837,29; a diferença contra o CMV real do DRE
+  caiu de R$32.013,16 pra **R$12.947,23** — bem mais perto, exatamente o esperado ao fechar essas
+  duas lacunas.
+- **Ainda não construído**: a ferramenta de "atualizar custo cadastrado pelo app" (único item
+  real que resta da lista original de v2) e qualquer vínculo automático por outro critério além
+  do texto do `obs` (ex: casar valor+data) — não pedido, não construído.
 
 ### Impostos (5.01/5.02) — catalogação manual (implementada 2026-11-25, publicada 2026-11-26)
 
@@ -1840,6 +1904,43 @@ categoria feita na Tiny depois. O catch-up de 2026-11-26 (acima) só resolvia "t
   também pode MUDAR depois (aqui: a categoria de um título que a Tiny deixa editar livremente a
   qualquer momento) — qualquer checkpoint "já vi isso, não preciso olhar de novo" precisa de uma
   janela de frescor, não um "visto = nunca mais revisitado" permanente.
+
+### Verificação dos dois achados restantes do Rafael (2.02.01 e 6.02.03) — 2026-11-26/27
+Depois dos fixes de catch-up/`ultima_tentativa_em` acima, Rafael reportou (mesma mensagem do caso
+Henrique Medina) mais dois números pra conferir, comparando com a tela da Tiny: **2.02.01
+Despesas de cobrança** zerado no DRE (devia ser R$1.470,36) e **6.02.03 Parcelas de Empréstimos**
+mostrando R$20.862,91 no nosso sistema vs R$22.997,86 que ele viu na Tiny.
+
+- **2.02.01 — confirmado corrigido.** Rodado o ciclo de Rampa até a fila de `pagar` zerar de
+  verdade (catch-up incluso) e reconferido `financeiro_mensal` pra `categoria_id=361455300`
+  (2.02.01, Rampa): outubro bateu **exatamente R$1.470,36** (2 títulos) — o mesmo valor que
+  Rafael reportou como faltando. Era o mesmo bug já corrigido (fila de pagar só revisitada no
+  "resume" antigo) — nenhuma correção nova precisou.
+- **6.02.03 — ainda não resolvido/explicado.** Mesmo depois do ciclo completo (fila de pagar
+  zerada), `financeiro_mensal` continua com os mesmos 5 títulos de outubro somando R$20.862,91 —
+  igual ao valor já documentado antes de qualquer fix. Não é o mesmo bug do 2.02.01 (esse já foi
+  descartado pela re-execução completa).
+- **Tentativa de achar os títulos faltantes esbarrou numa limitação real da API da Tiny,
+  descoberta nesta investigação**: o parâmetro `categoriaId` em `GET /public-api/v3/contas-pagar`
+  (listagem) **é ignorado silenciosamente** — testado ao vivo passando categorias diferentes
+  (inclusive uma inexistente pro contexto) e o `paginacao.total` nunca mudou, só o filtro de
+  `situacao`/datas de vencimento tem efeito real. A categoria de um título só existe no endpoint
+  de **detalhe** (`GET /public-api/v3/contas-pagar/{id}`), nunca na listagem — então não tem como
+  filtrar por categoria sem buscar detalhe título por título. Pra outubro, isso significa ~550
+  chamadas de detalhe (todo título pago com vencimento numa janela ampla o bastante pra não perder
+  nenhum fora do padrão ±1 mês que o sync usa) só pra achar os que batem 6.02.03 — caro demais pra
+  rodar como diagnóstico pontual, indo contra a política explícita de "~30/min, metade reservada
+  pra Mercos/Nuvemshop" (ver "Rate limit Olist" acima).
+- **Fica pendente**: confirmar com o Rafael qual tela/filtro da Tiny ele usou pra chegar em
+  R$22.997,86 (período por vencimento ou por pagamento? só essa categoria ou um relatório
+  agregado?) — sem saber o método exato dele, não dá pra reproduzir o número pra comparar título a
+  título. Os 5 títulos que o DRE já mostra (BMP, Secretaria da Fazenda do RS, Itaú — ver seção
+  "Duas tabelas novas abaixo do DRE" acima) foram conferidos e são reais/corretos; a pergunta é só
+  se falta algum título a mais, não se os 5 atuais estão errados.
+- **Lição**: nem todo parâmetro de filtro documentado (ou aparentemente aceito, já que não dá erro
+  400) numa listagem da API da Tiny realmente filtra — vale confirmar com um teste rápido (valor
+  absurdo/categoria trocada não muda o total) antes de depender dele, em vez de assumir que um
+  HTTP 200 sem erro significa que o filtro funcionou.
 
 ### Modal de Lançamento Manual: categoria agora é do nível 3, não do nível 2 (pedido do Rafael, 2026-11-26)
 Até aqui, "+ Lançamento Manual" só deixava escolher o GRUPO (nível 2, ex: "2.05 Despesas de
