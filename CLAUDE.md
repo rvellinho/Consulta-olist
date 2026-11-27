@@ -1993,6 +1993,33 @@ mostrando R$20.862,91 no nosso sistema vs R$22.997,86 que ele viu na Tiny.
   suspeitar desse padrão (sobretudo se envolver "Stone Timbers" ou títulos com `data` de emissão
   muito mais antiga que o vencimento) antes de assumir que é um bug no nosso código.
 
+#### Causa confirmada pelo suporte da Tiny: não é bug, é o limite de retenção do plano (2026-11-27)
+Rafael reportou o caso no suporte da Tiny (ver chamado acima) e a resposta deles confirma a
+suspeita, só que com uma causa mais simples do que "falha de indexação": **a API aplica um filtro
+por tempo vinculado ao plano contratado** — título mais antigo que a janela de retenção do plano
+simplesmente não aparece em NENHUMA listagem, só por busca direta por ID (que não sofre essa
+restrição). Não é falha pontual de 2024, é comportamento normal e permanente do plano atual — por
+isso afeta a série INTEIRA (todo título daquelas duas séries, de qualquer mês, pra sempre, enquanto
+o plano não mudar). Dois caminhos que a Tiny ofereceu: contratar adicional de meses de
+armazenamento / mudar de plano (decisão comercial do Rafael, não temos opinião técnica aqui), ou
+continuar pela via que já usamos — ID direto.
+
+**Processo acordado com o Rafael**: ele levanta manualmente, direto na Tiny, os títulos antigos
+dessa natureza (fora da janela de retenção — não só as duas séries já achadas, qualquer título
+velho pode ter o mesmo problema) e manda numa planilha com o ID de cada um; a partir disso, fazemos
+um lançamento em lote em `financeiro_lancamentos_manuais` pra cada um, com o ID gravado em
+`observacao` (mesmo padrão já usado nos dois lançamentos de outubro — ver "Sim, lança" acima), pra
+manter rastreável. **Pra cada linha da planilha, precisamos**: empresa, ID do título na Tiny, mês/
+ano (do vencimento — mesmo critério que o sync normal usaria), categoria de nível 3 (ex: "6.02.03
+Parcelas de Empréstimos e Parcelamentos") e valor.
+- **Enquanto o plano não mudar, isso não é um lançamento único** — toda parcela nova dessas duas
+  séries, mês a mês, vai continuar fora da janela de retenção assim que for criada (criada em 2024,
+  já nasce "velha" pros padrões do plano atual) — então o mesmo processo (Rafael identifica o ID,
+  manda, lançamos manual) precisa se repetir todo mês até as séries terminarem (faltam ~25 e ~34
+  parcelas, respectivamente) ou o plano ser ampliado.
+- Isso substitui a hipótese anterior ("falha pontual de indexação em 2024") — mantida acima só como
+  registro de como a investigação chegou até aqui, mas a explicação oficial da Tiny é a válida.
+
 #### Bug: lançamento manual com categoria real nunca passava por `resolverLeaf` — ficava preso como "Lançamento manual" genérico (achado e corrigido, 2026-11-27)
 Depois de lançar os dois títulos acima (R$635,00 e R$1.499,95, `codigo_grupo='6.02'`,
 `categoria_id=364700217` → "6.02.03 Parcelas de Empréstimos e Parcelamentos") em
