@@ -1934,12 +1934,39 @@ mostrando R$20.862,91 no nosso sistema vs R$22.997,86 que ele viu na Tiny.
     sempre ausentes. Só aparecem via `GET /contas-pagar/{id}` direto, sabendo o ID de antemão. Ou
     seja, não é um problema de paginação perdida, retentativa ou catch-up — é a própria busca da
     Tiny que não indexa esses registros pra consulta por critério nenhum, só por ID exato.
-  - **Suspeita (não confirmada) de causa**: os dois têm campo `data` (emissão) de 2024 — bem antes
-    do vencimento atual — e a tela da Tiny mostra "Stone Timbers" como banco/processador pra toda a
-    série (diferente de "Santander"/"Itaú" dos títulos que aparecem normal). Pode ser algum
-    escopo de conta/integração ("Stone Timbers" sendo um sub-contexto dentro da conta Rampa) que a
-    busca da Tiny exclui por engano — mas é só suspeita, sem acesso ao índice interno deles pra
-    confirmar.
+  - **Investigação a fundo (2026-11-27), pedida pelo Rafael**: tentei isolar o campo exato que causa
+    a invisibilidade, comparando byte a byte o retorno completo da API pros 2 títulos invisíveis
+    contra títulos visíveis da MESMA categoria/mesmo contato (MINISTERIO DA FAZENDA — a parcela de
+    R$559,76 que aparece normal é do mesmo contato). Todos os campos batem (mesma categoria, mesmo
+    `contato.id`, mesma `formaPagamento`, mesmo `ocorrencia:"U"`, mesmo `numeroDocumento:""`) —
+    **a única diferença visível é o campo `data` (emissão)**: 2024-10-04/2024-09-06 nos invisíveis
+    vs 2026-03-11 no visível.
+    - **Hipótese "data antiga = invisível" testada e DESCARTADA**: títulos de outras séries de
+      empréstimo de longo prazo (ITAU PRONAMPE Par. 27/48, id `364706665`, `data:"2024-12-31"`; BMP
+      Empréstimo Estímulo, id `364706982`, `data:"2025-12-09"`) têm `data` igualmente antiga e
+      **aparecem normalmente** na listagem. Não é simplesmente "título antigo = invisível".
+    - **Confirmado que o problema é a SÉRIE INTEIRA, não só a parcela de outubro**: testando os IDs
+      vizinhos (`364706895`/`364706897`/`364706899` pra "TIMBERS - PARCELAMENTO...", espaçados de 2
+      em 2 — os ids ímpares do meio dão 404, são outro tipo de registro da Tiny, não relacionado) e
+      (`364706761`/`364706764`/`364706766`/`364706768` pra "parcelamento das dívidas federais"),
+      **todas as parcelas de setembro, outubro, novembro e dezembro de AMBAS as séries são
+      igualmente invisíveis** em qualquer listagem — não é um problema pontual de outubro, é
+      estrutural pra essas duas séries inteiras, desde sempre. As duas séries foram criadas em lote
+      com `data` de 2024-10-04 e 2024-09-06 respectivamente (uma semana de diferença) — datas que
+      batem com quando a Rampa deve ter formalizado essas duas renegociações de dívida federal.
+    - **Conclusão**: não dá pra isolar com certeza, via API, qual campo/metadado interno da Tiny
+      causa isso — comparando os campos que a API expõe, não existe nenhum que diferencie
+      corretamente "visível" de "invisível" em todos os casos testados (a idade da `data` é a
+      única pista, mas tem contraexemplo). É consistente com uma falha pontual de indexação no
+      momento em que essas duas séries foram criadas em lote na Tiny (2024), que nunca foi
+      corrigida desde então — mas isso só o suporte da Tiny, com acesso ao índice de busca interno
+      deles, pode confirmar ou corrigir.
+    - **Escala do problema**: como afeta a série INTEIRA (não só outubro), **toda parcela futura
+      dessas duas séries (novembro, dezembro, e assim por diante até completar 49 e 59 parcelas)
+      vai continuar invisível pro nosso sync todo mês**, exigindo lançamento manual recorrente até
+      a Tiny corrigir (ou até as séries terminarem). Vale reportar formalmente ao suporte da Tiny
+      com os IDs específicos (`364706761/764/766/768` e `364706895/897/899`) — eles têm acesso ao
+      que nenhuma chamada de API nossa consegue ver.
   - **Não tem solução do nosso lado.** Como o problema é a própria indexação de busca da Tiny (não
     algo que paginação, retentativa ou catch-up resolvem), nenhum ajuste no nosso sync vai
     encontrar esses títulos sozinho — nem hoje, nem nos meses seguintes, enquanto quem lança
