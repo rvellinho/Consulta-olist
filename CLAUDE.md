@@ -2020,6 +2020,32 @@ Parcelas de Empréstimos e Parcelamentos") e valor.
 - Isso substitui a hipótese anterior ("falha pontual de indexação em 2024") — mantida acima só como
   registro de como a investigação chegou até aqui, mas a explicação oficial da Tiny é a válida.
 
+**Confirmado com o painel "Consulta de dados" da Tiny (2026-11-27)**: Rafael mandou print do painel
+de plano — `Período: 24 meses`, `Consulta disponível desde: 28/11/2024`. Bate EXATAMENTE com todo
+ponto de dado já levantado: os títulos invisíveis das duas séries (`data` 2024-09-06/2024-10-04,
+ambas ANTES de 28/11/2024) ficam de fora; os títulos visíveis usados como contraexemplo (ITAU
+PRONAMPE `data` 2024-12-31, BMP `data` 2025-12-09, ambas DEPOIS de 28/11/2024) ficam dentro. A regra
+real é simples: **título com `data` (emissão) anterior ao corte do plano nunca aparece em nenhuma
+listagem, só por ID direto** — não é a `dataVencimento` que importa pra essa restrição, é a `data`.
+- **É uma janela ROLANDO, não uma data fixa** — `28/11/2024` é quase exatamente "hoje (27/11/2026)
+  menos 24 meses", então o corte avança junto com o calendário. **Consequência**: títulos que hoje
+  ainda aparecem normalmente (como o ITAU PRONAMPE, `data` 2024-12-31) vão ficar invisíveis também,
+  assim que o corte passar dessa data — em poucas semanas, nesse caso. Isso significa que o
+  problema não fica restrito às duas séries já achadas: **qualquer título antigo de pagamento
+  longo (financiamento, parcelamento) vai eventualmente cair fora da janela conforme o tempo passa**,
+  não só esses dois casos pontuais.
+- **Processo final acordado com o Rafael (2026-11-27)**: como ele já tem TODAS as parcelas dessas
+  duas séries cadastradas como título na própria Tiny (passado e futuro, até a parcela final — 49ª e
+  59ª), ele vai levantar e mandar a lista INTEIRA (não só o histórico já vencido), com ID de cada
+  parcela. Lançamos tudo de uma vez em `financeiro_lancamentos_manuais` (mês/ano pelo vencimento,
+  categoria 6.02.03, ID na `observacao`) — isso cobre o mês corrente E os futuros automaticamente,
+  sem precisar repetir o processo todo mês (a linha já existe na tabela quando o mês chegar).
+  **Risco a lembrar se o plano da Tiny for ampliado no futuro**: se a janela de retenção crescer e
+  esses títulos voltarem a aparecer na listagem, o sync normal (`filaPagar`) vai tentar gravá-los de
+  novo em `financeiro_mensal` — duplicando com o lançamento manual que já existe. Nesse caso,
+  lembrar de apagar os lançamentos manuais equivalentes (mesmo padrão de "caminho novo não desliga o
+  antigo" já documentado no item 9 de "Erros conhecidos").
+
 #### Bug: lançamento manual com categoria real nunca passava por `resolverLeaf` — ficava preso como "Lançamento manual" genérico (achado e corrigido, 2026-11-27)
 Depois de lançar os dois títulos acima (R$635,00 e R$1.499,95, `codigo_grupo='6.02'`,
 `categoria_id=364700217` → "6.02.03 Parcelas de Empréstimos e Parcelamentos") em
